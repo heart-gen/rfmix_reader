@@ -16,7 +16,7 @@ from chunk import Chunk
 __all__ = ["read_rfmix"]
 
 ############ Testing ##############
-file_prefix = "/dcs05/lieber/hanlab/jbenjami/projects/localQTL_manuscript/local_ancestry_rfmix/_m"
+file_prefix = "/dcs05/lieber/hanlab/jbenjami/projects/localQTL_manuscript/local_ancestry_rfmix/_m/*"
 ###################################
 
 def read_rfmix(file_prefix, verbose=True):
@@ -59,8 +59,35 @@ def read_rfmix(file_prefix, verbose=True):
     for fp in file_prefixes:
         fn.append({s: f"{fp}.{s}" for s in ["fb.tsv", "rfmix.Q"]})
         
-    pbar = tqdm(desc="Mapping files", total=2*len(fn), disable=not verbose)
-    return None
+    ## Load loci information
+    pbar = tqdm(desc="Mapping loci files", total=1*len(fn), disable=not verbose)
+    loci = _read_file(fn, lambda fn: _read_loci(fn["fb.tsv"]), pbar)
+    pbar.close()
+    if len(file_prefixes) > 1:
+        if verbose:
+            msg = "Multiple files read in this order: {}"
+            print(msg.format([basename(f) for f in file_prefixes]))
+
+    nmarkers = dict()
+    index_offset = 0
+    for i, bi in enumerate(loci):
+        nmarkers[fn[i]["fb.tsv"]] = bi.shape[0]
+        bi["i"] += index_offset
+        index_offset += bi.shape[0]
+    loci = concat(loci, axis=0, ignore_index=True)
+    
+    ## Load global ancestry per chromosome
+    pbar = tqdm(desc="Mapping Q files", total=1*len(fn), disable=not verbose)
+    rf_q = _read_file(fn, lambda fn: _read_Q(fn["rfmix.Q"]), pbar)
+    pbar.close()
+    nsamples = rf_q[0].shape[0]
+    rf_q = concat(rf_q, axis=0, ignore_index=True)
+    
+    ## Loading local ancestry by loci
+    pbar = tqdm(desc="Mapping fb files", total=1*len(fn), disable=not verbose)
+    admix = None
+    pbar.close()
+    return (loci, rf_q, admix)
 
 
 def _read_file(fn, read_func, pbar):
@@ -87,9 +114,36 @@ def _read_csv(fn, header) -> DataFrame:
     return df
 
 
-def _read_Q(fn):
-    df = _read_Q_noi(fn)
+def _read_tsv(fn) -> DataFrame:
+    from numpy import int32
+    from pandas import StringDtype
+    header = {"chromosome": StringDtype(),
+              "physical_position": int32}
+    df = read_csv(
+        fn,
+        delim_whitespace=True,
+        header=0,
+        usecols=["chromosome", "physical_position"],
+        dtype=header,
+        comment="#",
+        compression=None,
+        engine="c",
+        iterator=False,
+    )
+    assert isinstance(df, DataFrame)
+    return df
+
+
+def _read_loci(fn):
+    df = _read_tsv(fn)
     df["i"] = range(df.shape[0])
+    return df
+
+
+def _read_Q(fn):
+    from re import search
+    df = _read_Q_noi(fn)
+    df["chrom"] = search(r'chr(\d+)', fn).group(0)
     return df
 
 
