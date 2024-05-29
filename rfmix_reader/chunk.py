@@ -1,5 +1,5 @@
 """
-Adapted from the `_chunk.py` script in the `pandas-plink` library.
+Adapted from the `_chunk.py` script in the `pandas-plink` package.
 Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_chunk.py
 """
 from typing import Optional
