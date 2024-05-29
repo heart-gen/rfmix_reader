@@ -41,7 +41,14 @@ void read_fb_chunk(uint8_t *buff, uint64_t nrows, uint64_t ncols,
 	  p1 <<= 1;
 	  p0 |= p1;
 	  ce = MIN(c + 4, col_end);
+	  for (; c < ce; ++c)
+	    {
+	      out[(r - row_start) * strides[0] +
+		  (c - col_start) * strides[1]] = p0 & 3;
+	      p0 >>= 2;
+	    }
 	}
+      ++r;
+      buff += row_size;
     }
-
 }
