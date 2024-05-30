@@ -16,10 +16,6 @@ from fb_read import read_fb
 
 __all__ = ["read_rfmix"]
 
-############ Testing ##############
-file_prefix = "/dcs05/lieber/hanlab/jbenjami/projects/localQTL_manuscript/local_ancestry_rfmix/_m/*"
-###################################
-
 def read_rfmix(file_prefix, verbose=True):
     """
     Read RFMix files into data frames.
@@ -43,9 +39,13 @@ def read_rfmix(file_prefix, verbose=True):
 
     Returns
     -------
-    xxx
-    xxx
-    xxx
+    loci : :class:`pandas.DataFrame`
+        Loci information for the FB data.
+    rf_q : :class:`pandas.DataFrame`
+        Global ancestry by chromosome from RFMix.
+    admix : :class:`dask.array.Array`
+        Local ancestry per population (columns pop1*nsamples ... popX*nsamples).
+        This is in order of the populations see `rf_q`.
     """
     from tqdm import tqdm
     from pandas import concat
