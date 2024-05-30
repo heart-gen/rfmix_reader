@@ -12,6 +12,7 @@ from xarray import DataArray
 from pandas import DataFrame, read_csv
 
 from chunk import Chunk
+from fb_read import read_fb
 
 __all__ = ["read_rfmix"]
 
@@ -81,12 +82,19 @@ def read_rfmix(file_prefix, verbose=True):
     rf_q = _read_file(fn, lambda fn: _read_Q(fn["rfmix.Q"]), pbar)
     pbar.close()
     nsamples = rf_q[0].shape[0]
+    pops = rf_q[0].drop(["sample_id", "chrom"], axis=1).columns.values
     rf_q = concat(rf_q, axis=0, ignore_index=True)
     
     ## Loading local ancestry by loci
     pbar = tqdm(desc="Mapping fb files", total=1*len(fn), disable=not verbose)
-    admix = None
+    admix = _read_file(
+        fn,
+        lambda f: _read_fb(f["fb.tsv"], nsamples,
+                           nmarkers[f["fb.tsv"]], pops, Chunk()),
+        pbar,
+    )
     pbar.close()
+    admix = concatenate(admix, axis=0)
     return (loci, rf_q, admix)
 
 
@@ -150,6 +158,18 @@ def _read_Q(fn):
 def _read_Q_noi(fn):
     header = odict(_types(fn))
     return _read_csv(fn, header)
+
+
+def _read_fb(fn, nsamples, nloci, pops, chunk: Chunk):
+    npops = len(pops)
+    nrows = nloci
+    ncols = nsamples * npops * 2
+    row_chunk = nrows if chunk.nloci is None else min(nrows, chunk.nloci)
+    col_chunk = ncols if chunk.nsamples is None else min(ncols, chunk.nsamples)
+    max_npartitions = 16_384
+    row_chunk = max(nrows // max_npartitions, row_chunk)
+    col_chunk = max(ncols // max_npartitions, col_chunk)
+    return read_fb(fn, nrows, ncols, npops, row_chunk, col_chunk)
 
 
 def _types(fn):
