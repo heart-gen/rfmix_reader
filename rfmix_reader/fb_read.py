@@ -139,7 +139,7 @@ def _read_fb_chunk(
 
 
 def _subset_populations(X, npops):
-        """
+    """
     Subset and process the input array X based on populations.
 
     Parameters:
@@ -150,6 +150,7 @@ def _subset_populations(X, npops):
     dask.array: Processed array with adjacent columns summed for each population subset.
     """
     from dask.array import concatenate
+    
     pop_subset = []
     pop_start = 0
     ncols = X.shape[1]
