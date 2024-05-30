@@ -4,11 +4,11 @@ Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_read.py
 """
 import warnings
 from glob import glob
-from typing import Optional
 from os.path import basename, dirname, join
 from collections import OrderedDict as odict
+from typing import Optional, Callable, List, Tuple
 
-from xarray import DataArray
+from dask.array import Array
 from pandas import DataFrame, read_csv
 
 from chunk import Chunk
@@ -16,9 +16,11 @@ from fb_read import read_fb
 
 __all__ = ["read_rfmix"]
 
-def read_rfmix(file_prefix, verbose=True):
+def read_rfmix(
+        file_prefix: str, verbose: bool = True
+) -> Tuple[DataFrame, DataFrame, Array]:
     """
-    Read RFMix files into data frames.
+    Read RFMix files into data frames and a Dask array.
 
     Notes
     -----
@@ -33,8 +35,8 @@ def read_rfmix(file_prefix, verbose=True):
     ----------
     file_prefix : str
         Path prefix to the set of RFMix files. It will load all of the chromosomes
-        at once.p
-    verbose : bool
+        at once.
+    verbose : bool, optional
         :const:`True` for progress information; :const:`False` otherwise.
 
     Returns
@@ -51,25 +53,24 @@ def read_rfmix(file_prefix, verbose=True):
     from pandas import concat
     from dask.array import concatenate
 
+    # Get file prefixes
     file_prefixes = sorted(glob(file_prefix))
     if len(file_prefixes) == 0:
         file_prefixes = [file_prefix.replace("*", "")]
 
     file_prefixes = sorted(_clean_prefixes(file_prefixes))
-    fn = []
-    for fp in file_prefixes:
-        fn.append({s: f"{fp}.{s}" for s in ["fb.tsv", "rfmix.Q"]})
+    fn = [{s: f"{fp}.{s}" for s in ["fb.tsv", "rfmix.Q"]} for fp in file_prefixes]
         
-    ## Load loci information
-    pbar = tqdm(desc="Mapping loci files", total=1*len(fn), disable=not verbose)
-    loci = _read_file(fn, lambda fn: _read_loci(fn["fb.tsv"]), pbar)
+    # Load loci information
+    pbar = tqdm(desc="Mapping loci files", total=len(fn), disable=not verbose)
+    loci = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
     pbar.close()
-    if len(file_prefixes) > 1:
-        if verbose:
-            msg = "Multiple files read in this order: {}"
-            print(msg.format([basename(f) for f in file_prefixes]))
+    if len(file_prefixes) > 1 and verbose:
+        msg = "Multiple files read in this order:"
+        print(f"{msg} {[basename(f) for f in file_prefixes]}")
 
-    nmarkers = dict()
+    # Adjust loci indices and concatenate
+    nmarkers = {}
     index_offset = 0
     for i, bi in enumerate(loci):
         nmarkers[fn[i]["fb.tsv"]] = bi.shape[0]
@@ -77,16 +78,17 @@ def read_rfmix(file_prefix, verbose=True):
         index_offset += bi.shape[0]
     loci = concat(loci, axis=0, ignore_index=True)
     
-    ## Load global ancestry per chromosome
-    pbar = tqdm(desc="Mapping Q files", total=1*len(fn), disable=not verbose)
-    rf_q = _read_file(fn, lambda fn: _read_Q(fn["rfmix.Q"]), pbar)
+    # Load global ancestry per chromosome
+    pbar = tqdm(desc="Mapping Q files", total=len(fn), disable=not verbose)
+    rf_q = _read_file(fn, lambda f: _read_Q(f["rfmix.Q"]), pbar)
     pbar.close()
+    
     nsamples = rf_q[0].shape[0]
     pops = rf_q[0].drop(["sample_id", "chrom"], axis=1).columns.values
     rf_q = concat(rf_q, axis=0, ignore_index=True)
     
-    ## Loading local ancestry by loci
-    pbar = tqdm(desc="Mapping fb files", total=1*len(fn), disable=not verbose)
+    # Loading local ancestry by loci
+    pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
     admix = _read_file(
         fn,
         lambda f: _read_fb(f["fb.tsv"], nsamples,
@@ -95,72 +97,179 @@ def read_rfmix(file_prefix, verbose=True):
     )
     pbar.close()
     admix = concatenate(admix, axis=0)
-    return (loci, rf_q, admix)
+    
+    return loci, rf_q, admix
 
 
-def _read_file(fn, read_func, pbar):
+def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:
+    """
+    Read data from multiple files using a provided read function.
+
+    Parameters:
+    ----------
+    fn (List[str]): A list of file paths to read.
+    read_func (Callable): A function to read data from each file.
+    pbar (Optional): A progress bar object to update during reading.
+
+    Returns:
+    -------
+    List: A list containing the data read from each file.
+    """
     data = [];
-    for f in fn:
-        data.append(read_func(f))
-        pbar.update(1)
+    for file_name in fn:
+        data.append(read_func(file_name))
+        if pbar:
+            pbar.update(1)
     return data
 
 
-def _read_csv(fn, header) -> DataFrame:
-    df = read_csv(
-        fn,
-        delim_whitespace=True,
-        header=None,
-        names=list(header.keys()),
-        dtype=header,
-        comment="#",
-        compression=None,
-        engine="c",
-        iterator=False,
-    )
+def _read_csv(fn: str, header: dict) -> DataFrame:
+    """
+    Read a CSV file into a pandas DataFrame with specified data types.
+
+    Parameters:
+    ----------
+    fn (str): The file path of the CSV file.
+    header (dict): A dictionary mapping column names to data types.
+
+    Returns:
+    -------
+    DataFrame: The data read from the CSV file as a pandas DataFrame.
+    """
+    try:
+        df = read_csv(
+            fn,
+            delim_whitespace=True,
+            header=None,
+            names=list(header.keys()),
+            dtype=header,
+            comment="#",
+            compression=None,
+            engine="c",
+            iterator=False,
+        )
+    except Exception as e:
+        raise IOError(f"Error reading file '{fn}': {e}")
+    
     assert isinstance(df, DataFrame)
     return df
 
 
-def _read_tsv(fn) -> DataFrame:
+def _read_tsv(fn: str) -> DataFrame:
+    """
+    Read a TSV file into a pandas DataFrame.
+
+    Parameters:
+    ----------
+    fn (str): File name of the TSV file.
+
+    Returns:
+    -------
+    DataFrame: DataFrame containing specified columns from the TSV file.
+    """
     from numpy import int32
     from pandas import StringDtype
+    
     header = {"chromosome": StringDtype(),
               "physical_position": int32}
-    df = read_csv(
-        fn,
-        delim_whitespace=True,
-        header=0,
-        usecols=["chromosome", "physical_position"],
-        dtype=header,
-        comment="#",
-        compression=None,
-        engine="c",
-        iterator=False,
-    )
+
+    try:
+        df = read_csv(
+            fn,
+            delim_whitespace=True,
+            header=0,
+            usecols=["chromosome", "physical_position"],
+            dtype=header,
+            comment="#",
+            compression=None,
+            engine="c",
+            iterator=False,
+        )
+    except FileNotFoundError:
+        raise FileNotFoundError(f"File {fn} not found.")
+    except Exception as e:
+        raise IOError(f"Error reading file {fn}: {e}")
+    
     assert isinstance(df, DataFrame)
     return df
 
 
-def _read_loci(fn):
+def _read_loci(fn: str) -> DataFrame:
+    """
+    Read loci information from a TSV file and add a sequential index column.
+
+    Parameters:
+    ----------
+    fn (str): The file path of the TSV file containing loci information.
+
+    Returns:
+    -------
+    DataFrame: A pandas DataFrame containing the loci information with an additional 'i' column for indexing.
+    """
     df = _read_tsv(fn)
     df["i"] = range(df.shape[0])
     return df
 
 
-def _read_Q(fn):
+def _read_Q(fn: str) -> DataFrame:
+    """
+    Read the Q matrix from a file and add the chromosome information.
+
+    Parameters:
+    ----------
+    fn (str): The file path of the Q matrix file.
+
+    Returns:
+    -------
+    DataFrame: The Q matrix with the chromosome information added.
+    """
     from re import search
+
     df = _read_Q_noi(fn)
-    df["chrom"] = search(r'chr(\d+)', fn).group(0)
+    match = search(r'chr(\d+)', fn)
+    if match:
+        chrom = match.group(0)
+        df["chrom"] = chrom
+    else:
+        print(f"Warning: Could not extract chromosome information from '{fn}'")
     return df
 
 
-def _read_Q_noi(fn):
-    header = odict(_types(fn))
-    return _read_csv(fn, header)
+def _read_Q_noi(fn: str) -> DataFrame:
+    """
+    Read the Q matrix from a file without adding chromosome information.
+
+    Parameters:
+    ----------
+    fn (str): The file path of the Q matrix file.
+
+    Returns:
+    -------
+    DataFrame: The Q matrix without chromosome information.
+    """
+    try:
+        header = odict(_types(fn))
+        return _read_csv(fn, header)
+    except Exception as e:
+        raise IOError(f"Error reading Q matrix from '{fn}': {e}")
 
 
-def _read_fb(fn, nsamples, nloci, pops, chunk: Chunk):
+def _read_fb(fn: str, nsamples: int, nloci: int, pops: list, chunk: Optional[Chunk] = None) -> Array:
+    """
+    Read the forward-backward matrix from a file as a Dask Array.
+
+    Parameters:
+    ----------
+    fn (str): The file path of the forward-backward matrix file.
+    nsamples (int): The number of samples in the dataset.
+    nloci (int): The number of loci in the dataset.
+    pops (list): A list of population labels.
+    chunk (Chunk, optional): A Chunk object specifying the chunk size for reading.
+
+    Returns:
+    -------
+    dask.array.Array: The forward-backward matrix as a Dask Array.
+    """
     npops = len(pops)
     nrows = nloci
     ncols = nsamples * npops * 2
@@ -172,26 +281,80 @@ def _read_fb(fn, nsamples, nloci, pops, chunk: Chunk):
     return read_fb(fn, nrows, ncols, npops, row_chunk, col_chunk)
 
 
-def _types(fn):
+def _types(fn: str) -> dict:
+    """
+    Infer the data types of columns in a TSV file.
+
+    Parameters:
+    ----------
+    fn (str) : File name of the TSV file.
+
+    Returns:
+    -------
+    dict : Dictionary mapping column names to their inferred data types.
+    """
     from pandas import StringDtype
-    df = read_csv(
-        fn,
-        delim_whitespace=True,
-        nrows=2,
-        skiprows=1,
-    )    
+
+    try:
+        # Read the first two rows of the file, skipping the first row
+        df = read_csv(
+            fn,
+            delim_whitespace=True,
+            nrows=2,
+            skiprows=1,
+        )
+    except FileNotFoundError:
+        raise FileNotFoundError(f"File '{fn}' not found.")
+    except Exception as e:
+        raise IOError(f"Error reading file '{fn}': {e}")
+
+    # Validate that the resulting DataFrame is of the correct type
+    if not isinstance(df, DataFrame):
+        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
+
+    # Ensure the DataFrame contains at least one column
+    if df.shape[1] < 1:
+        raise ValueError("The DataFrame does not contain any columns.")
+
+    # Initialize the header dictionary with the sample_id column
     header = {"sample_id": StringDtype()}
+
+    # Update the header dictionary with the data types of the remaining columns
     header.update(df.dtypes[1:].to_dict())
+
     return header
 
 
 def _clean_prefixes(prefixes):
-    paths = []
-    for p in prefixes:
-        dirn = dirname(p)
-        basen = basename(p)
-        base = basen.split(".")[0]
+    """
+    Clean and filter a list of file prefixes.
+
+    Parameters:
+    ----------
+    prefixes (list): A list of file prefixes (paths).
+
+    Returns:
+    -------
+    list: A list of unique, cleaned file prefixes without the file extensions.
+
+    Notes:
+    -----
+        - The function removes any prefixes that end with ".logs".
+        - It also removes any duplicate prefixes after cleaning.
+    """
+    cleaned_prefixes = []
+    for prefix in prefixes:
+        # Split the prefix into directory and base name
+        dir_path = dirname(prefix)
+        base_name = basename(prefix)
+
+        # Remove the file extensions from the base name
+        base = base_name.split(".")[0]
+        
+        # Skip prefixes that end with ".logs"
         if base != "logs":
-            path = join(dirn, base)
-            paths.append(path)
-    return list(set(paths))
+            cleaned_prefix = join(dir_path, base)
+            cleaned_prefixes.append(cleaned_prefix)
+
+    # Remove duplicate prefixes
+    return list(set(cleaned_prefixes))
