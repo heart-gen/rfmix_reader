@@ -10,10 +10,10 @@
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 
-import os
-import sys
+# import os
+# import sys
 
-sys.path.insert(0, os.path.abspath("../"))
+# sys.path.insert(0, os.path.abspath("../"))
 
 
 # -- Project information -----------------------------------------------------
@@ -29,11 +29,14 @@ author = "Kynon JM Benjamin"
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
 extensions = [
+    "sphinx.ext.duration",
+    "sphinx.ext.doctest",
     "sphinx.ext.autodoc",
     "sphinx_autodoc_typehints",
-    "sphinx_rtd_theme",
-    "numpydoc",
-    "sphinx_click",
+    "sphinx.ext.autosummary",
+    "sphinx.ext.intersphinx",
+    "sphinx.ext.viewcode",
+    "sphinx.ext.autosectionlabel",
 ]
 
 # Add any paths that contain templates here, relative to this directory.
@@ -46,7 +49,11 @@ exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
 # -- Extension configuration -------------------------------------------------
 autosummary_generate = True
-numpydoc_show_class_members = False
+autosectionlabel_prefix_document = True
+napoleon_numpy_docstring = True
+
+# -- Options for EPUB output
+epub_show_urls = "footnote"
 
 # -- Options for HTML output -------------------------------------------------
 
@@ -57,7 +64,7 @@ html_theme = "sphinx_rtd_theme"
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = []
+html_static_path = ["_static"]
 
 html_context = {
     "display_github": True,  # Integrate GitHub
