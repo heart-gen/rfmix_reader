@@ -18,7 +18,7 @@ tqdm = "^4.66"
 numpy = "^1.26"
 
 [tool.poetry.dev-dependencies]
-pytest = "^6.2"
+pytest = "^8.2"
 
 [tool.poetry.scripts]
 build_ext = "build:build"
