@@ -55,8 +55,8 @@ def read_rfmix(
 
     # Get file prefixes
     file_prefixes = sorted(glob(file_prefix))
-    if len(file_prefixes) == 0:
-        file_prefixes = [file_prefix.replace("*", "")]
+    if len(file_prefixes) == 1:
+        file_prefixes = sorted(glob(join(file_prefix, "*")))
 
     file_prefixes = sorted(_clean_prefixes(file_prefixes))
     fn = [{s: f"{fp}.{s}" for s in ["fb.tsv", "rfmix.Q"]} for fp in file_prefixes]
@@ -148,10 +148,13 @@ def _read_csv(fn: str, header: dict) -> DataFrame:
             engine="c",
             iterator=False,
         )
+        
     except Exception as e:
         raise IOError(f"Error reading file '{fn}': {e}")
+    # Validate that resulting DataFrame is correct type
+    if not isinstance(df, DataFrame):
+        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
     
-    assert isinstance(df, DataFrame)
     return df
 
 
@@ -168,29 +171,37 @@ def _read_tsv(fn: str) -> DataFrame:
     DataFrame: DataFrame containing specified columns from the TSV file.
     """
     from numpy import int32
-    from pandas import StringDtype
+    from pandas import StringDtype, concat
     
-    header = {"chromosome": StringDtype(),
-              "physical_position": int32}
-
+    header = {"chromosome": StringDtype(), "physical_position": int32}
+    columns = ["chromosome", "physical_position"]
+    
     try:
-        df = read_csv(
+        chunks = read_csv(
             fn,
             delim_whitespace=True,
             header=0,
-            usecols=["chromosome", "physical_position"],
+            usecols=columns,
             dtype=header,
             comment="#",
-            compression=None,
-            engine="c",
-            iterator=False,
+            chunksize=100000, # Low memory chunks
         )
+        
+        # Concatenate chunks into single DataFrame
+        df = concat(chunks, ignore_index=True)
     except FileNotFoundError:
-        raise FileNotFoundError(f"File {fn} not found.")
+        raise FileNotFoundError(f"File {fn} not found.")    
     except Exception as e:
         raise IOError(f"Error reading file {fn}: {e}")
     
-    assert isinstance(df, DataFrame)
+    # Validate that resulting DataFrame is correct type
+    if not isinstance(df, DataFrame):
+        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
+    
+    # Ensure DataFrame contains correct columns
+    if not all(column in df.columns for column in columns):
+        raise ValueError(f"DataFrame does not contain expected columns: {columns}")
+    
     return df
 
 
@@ -224,14 +235,14 @@ def _read_Q(fn: str) -> DataFrame:
     DataFrame: The Q matrix with the chromosome information added.
     """
     from re import search
-
+    
     df = _read_Q_noi(fn)
     match = search(r'chr(\d+)', fn)
     if match:
         chrom = match.group(0)
         df["chrom"] = chrom
     else:
-        print(f"Warning: Could not extract chromosome information from '{fn}'")
+        print(f"Warning: Could not extract chromosome information from '{fn}'")        
     return df
 
 
@@ -278,7 +289,8 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list, chunk: Optional[Chu
     max_npartitions = 16_384
     row_chunk = max(nrows // max_npartitions, row_chunk)
     col_chunk = max(ncols // max_npartitions, col_chunk)
-    X = read_fb(fn, nrows, ncols, npops, row_chunk, col_chunk)
+    X = read_fb(fn, nrows, ncols, row_chunk, col_chunk)
+    
     # Subset populations and sum adjacent columns
     return _subset_populations(X, npops)
 
@@ -299,7 +311,7 @@ def _subset_populations(X: Array, npops: int) -> Array:
     pop_subset = []
     pop_start = 0
     ncols = X.shape[1]
-
+    
     if ncols % npops != 0:
         raise ValueError("The number of columns in X must be divisible by npops.")
     
@@ -310,7 +322,7 @@ def _subset_populations(X: Array, npops: int) -> Array:
         X0_summed = X0[:, ::2] + X0[:, 1::2] # Sum adjacent columns
         pop_subset.append(X0_summed)
         pop_start += 1
-
+        
     return concatenate(pop_subset, 1, True)
 
 
@@ -327,7 +339,7 @@ def _types(fn: str) -> dict:
     dict : Dictionary mapping column names to their inferred data types.
     """
     from pandas import StringDtype
-
+    
     try:
         # Read the first two rows of the file, skipping the first row
         df = read_csv(
@@ -336,25 +348,25 @@ def _types(fn: str) -> dict:
             nrows=2,
             skiprows=1,
         )
+        
     except FileNotFoundError:
         raise FileNotFoundError(f"File '{fn}' not found.")
     except Exception as e:
         raise IOError(f"Error reading file '{fn}': {e}")
-
+    
     # Validate that the resulting DataFrame is of the correct type
     if not isinstance(df, DataFrame):
         raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
-
+    
     # Ensure the DataFrame contains at least one column
     if df.shape[1] < 1:
         raise ValueError("The DataFrame does not contain any columns.")
-
+    
     # Initialize the header dictionary with the sample_id column
     header = {"sample_id": StringDtype()}
-
     # Update the header dictionary with the data types of the remaining columns
     header.update(df.dtypes[1:].to_dict())
-
+    
     return header
 
 
