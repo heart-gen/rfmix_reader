@@ -278,7 +278,40 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list, chunk: Optional[Chu
     max_npartitions = 16_384
     row_chunk = max(nrows // max_npartitions, row_chunk)
     col_chunk = max(ncols // max_npartitions, col_chunk)
-    return read_fb(fn, nrows, ncols, npops, row_chunk, col_chunk)
+    X = read_fb(fn, nrows, ncols, npops, row_chunk, col_chunk)
+    # Subset populations and sum adjacent columns
+    return _subset_populations(X, npops)
+
+
+def _subset_populations(X: Array, npops: int) -> Array:
+    """
+    Subset and process the input array X based on populations.
+
+    Parameters:
+    X (dask.array): Input array where columns represent data for different populations.
+    npops (int): Number of populations for column processing.
+
+    Returns:
+    dask.array: Processed array with adjacent columns summed for each population subset.
+    """
+    from dask.array import concatenate
+    
+    pop_subset = []
+    pop_start = 0
+    ncols = X.shape[1]
+
+    if ncols % npops != 0:
+        raise ValueError("The number of columns in X must be divisible by npops.")
+    
+    while pop_start < npops:
+        X0 = X[:, pop_start::npops] # Subset based on populations
+        if X0.shape[1] % 2 != 0:
+            raise ValueError("Number of columns must be even.")
+        X0_summed = X0[:, ::2] + X0[:, 1::2] # Sum adjacent columns
+        pop_subset.append(X0_summed)
+        pop_start += 1
+
+    return concatenate(pop_subset, 1, True)
 
 
 def _types(fn: str) -> dict:

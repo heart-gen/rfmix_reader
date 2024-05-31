@@ -15,7 +15,7 @@ from numpy import (
 __all__ = ["read_fb"]
 
 
-def read_fb(filepath, nrows, ncols, npops, row_chunk, col_chunk):
+def read_fb(filepath, nrows, ncols, row_chunk, col_chunk):
     """
     Read and process data from a file in chunks, skipping the first
     2 rows (comments) and 4 columns (loci annotation).
@@ -24,7 +24,6 @@ def read_fb(filepath, nrows, ncols, npops, row_chunk, col_chunk):
     filepath (str): Path to the file.
     nrows (int): Total number of rows in the dataset.
     ncols (int): Total number of columns in the dataset.
-    npops (int): Number of populations for column processing.
     row_chunk (int): Number of rows to process in each chunk.
     col_chunk (int): Number of columns to process in each chunk.
 
@@ -63,13 +62,12 @@ def read_fb(filepath, nrows, ncols, npops, row_chunk, col_chunk):
                 buff,
                 nrows,
                 ncols,
-                npops,
                 row_start,
                 row_end,
                 col_start,
                 col_end,
             )
-            shape = (row_end - row_start, (col_end - col_start) // npops)
+            shape = (row_end - row_start, (col_end - col_start))
             row_chunks.append(from_delayed(x, shape, float32))
             col_start = col_end
 
@@ -80,7 +78,7 @@ def read_fb(filepath, nrows, ncols, npops, row_chunk, col_chunk):
 
 
 def _read_fb_chunk(
-        buff, nrows, ncols, npops, row_start, row_end, col_start, col_end
+        buff, nrows, ncols, row_start, row_end, col_start, col_end
 ):
     """
     Read a chunk of data from the buffer and process it based on populations.
@@ -88,8 +86,7 @@ def _read_fb_chunk(
     Parameters:
     buff (memmap): Memory-mapped buffer containing the data.
     nrows (int): Total number of rows in the dataset.
-    ncols (int): Total number of columns in the dataset.
-    npops (int): Number of populations for column processing.
+    ncols (int): Total number of columns in the dataset.    
     row_start (int): Starting row index for the chunk.
     row_end (int): Ending row index for the chunk.
     col_start (int): Starting column index for the chunk.
@@ -107,7 +104,7 @@ def _read_fb_chunk(
     # Ensure the number of columns to be processed is even
     num_cols = col_end - col_start
     if num_cols % 2 != 0:
-        raise ValueError("Number of columns to be summed must be even.")
+        raise ValueError("Number of columns must be even.")
     
     X = zeros((row_end - row_start, num_cols), base_type)
     assert X.flags.aligned
@@ -132,38 +129,5 @@ def _read_fb_chunk(
         raise IOError(f"Error reading data chunk: {e}")
 
     # Convert to contiguous array of type float32
-    X = ascontiguousarray(X, float32)
+    return ascontiguousarray(X, float32)
 
-    # Subset populations and sum adjacent columns
-    return _subset_populations(X, npops)
-
-
-def _subset_populations(X, npops):
-    """
-    Subset and process the input array X based on populations.
-
-    Parameters:
-    X (dask.array): Input array where columns represent data for different populations.
-    npops (int): Number of populations.
-
-    Returns:
-    dask.array: Processed array with adjacent columns summed for each population subset.
-    """
-    from dask.array import concatenate
-    
-    pop_subset = []
-    pop_start = 0
-    ncols = X.shape[1]
-
-    if ncols % npops != 0:
-        raise ValueError("The number of columns in X must be divisible by npops.")
-    
-    while pop_start < npops:
-        X0 = X[:, pop_start::npops] # Subset based on populations
-        if X0.shape[1] % 2 != 0:
-            raise ValueError("Number of columns must be even.")
-        X0_summed = X0[:, ::2] + X0[:, 1::2] # Sum adjacent columns
-        pop_subset.append(X0_summed)
-        pop_start += 1
-
-    return concatenate(pop_subset, 1, True)
