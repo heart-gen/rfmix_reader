@@ -5,6 +5,7 @@ description = "RFMix-reader is a Python package designed to efficiently read and
 authors = ["KrotosBenjamin <kj.benjamin90@gmail.com>"]
 license = "GPL-3.0"
 readme = "README.md"
+build = "build.py"
 
 [tool.poetry.dependencies]
 python = "^3.9"
@@ -15,5 +16,5 @@ numpy = "^1.26"
 
 
 [build-system]
-requires = ["poetry-core"]
+requires = ["poetry-core", "setuptools", "wheel"]
 build-backend = "poetry.core.masonry.api"
