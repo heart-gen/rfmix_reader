@@ -2,10 +2,13 @@
 #SBATCH --job-name=simu_genotypes
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=jbenja13@jh.edu
+#SBATCH --partition=shared,bluejay
 #SBATCH --nodes=1
+#SBATCH --array=11,21
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=20gb
-#SBATCH --output=summary.log
+#SBATCH --mem=30gb
+#SBATCH --output=output.%A_%a.log
+#SBATCH --time=18:00:00
 
 echo "**** Job starts ****"
 date
@@ -24,27 +27,20 @@ module load htslib
 module list
 
 ## Edit with your job command
-
-echo "**** Generate directories ****"
-mkdir afr_washington
-mkdir puertorico
-mkdir 5k_admixed
-mkdir 100_admixed
-
-echo "**** Generate admixture models ****"
-bash ../_h/step_0.sh
+ONE_K="/dcs05/lieber/hanlab/jbenjami/resources/databases/1KG"
+CHROM=${SLURM_ARRAY_TASK_ID}
 
 echo "**** Run simulation ****"
 haptools simgenotype \
 	 --model AFR_admixed.dat \
-	 --mapdir ../../inputs/genetic_maps/_m/ \
-	 --chroms 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22 \
+	 --mapdir ${ONE_K}/genetic_maps/_m/ \
+	 --chroms ${CHROM} \
 	 --seed 20240126 \
-	 --ref_vcf ../../inputs/vcf_ref/_m/1kGP_high_coverage_Illumina.chr21.filtered.SNV_INDEL_SV_phased_panel.vcf.gz \
+	 --ref_vcf ${ONE_K}/GRCh38_phased_vcf/raw/1kGP_high_coverage_Illumina.chr${CHROM}.filtered.SNV_INDEL_SV_phased_panel.vcf.gz \
 	 --sample_info 1k_sampleinfo.tsv \
-	 --out ./simulated_admixed.vcf.gz
+	 --out ./chr${CHROM}.vcf.gz
 
-tabix -f simulated_admixed.vcf.gz
+tabix -f chr${CHROM}.vcf.gz
 
 echo "**** Job ends ****"
 date
