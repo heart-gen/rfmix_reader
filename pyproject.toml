@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools", "wheel", "setuptools_scm"]
+build-backend = "setuptools.build_meta"
+
 [tool.poetry]
 name = "rfmix-reader"
 version = "0.1.0"
@@ -5,7 +9,6 @@ description = "RFMix-reader is a Python package designed to efficiently read and
 authors = ["KrotosBenjamin <kj.benjamin90@gmail.com>"]
 license = "GPL-3.0"
 readme = "README.md"
-build = "build.py"
 
 [tool.poetry.dependencies]
 python = "^3.9"
@@ -14,7 +17,8 @@ dask = "^2024.5"
 tqdm = "^4.66"
 numpy = "^1.26"
 
+[tool.poetry.dev-dependencies]
+pytest = "^6.2"
 
-[build-system]
-requires = ["poetry-core", "setuptools", "wheel"]
-build-backend = "poetry.core.masonry.api"
+[tool.poetry.scripts]
+build_ext = "build:build"
