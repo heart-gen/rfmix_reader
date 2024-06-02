@@ -1,24 +1,39 @@
-from typing import Any, Dict
-from setuptools import Extension, setup
-from setuptools.command.build_ext import build_ext
+"""
+Adapted from `build_ext.py` script in the `pandas-plink` package.
+Source: https://github.com/limix/pandas-plink/blob/main/build_ext.py
+"""
+from cffi import FFI
+from os.path import join, dirname, abspath
 
-ext_modules = [
-    Extension(
-        "rfmix_reader.fb_reader",
-        ["rfmix_reader/fb_reader.c"],
-        include_dirs=["rfmix_reader/include"]
-    ),
-]
+def read_file(file_path):
+    try:
+        with open(file_path, "r") as f:
+            return f.read()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"File not found: {file_path}")
+    except IOError as e:
+        raise IOError(f"Error reading file {file_path}: {e}")
 
-class CustomBuildExt(build_ext):
-    def build_extensions(self):
-        self.compiler.initialize()
-        self.compiler.compile_options.extend(['-O3'])
-        build_ext.build_extensions(self)
 
-def build(setup_kwargs: Dict[str, Any]) -> None:
-    setup_kwargs.update({
-        "ext_modules": ext_modules,
-        "cmdclass": {"build_ext": CustomBuildExt},
-        "zip_safe": False,
-    })
+def main():
+    # Determine directory for scripts
+    folder = dirname(abspath(__file__))
+    # Read C header and source files
+    header = read_file(join(folder, "rfmix_reader",
+                            "include", "fb_reader.h"))
+    source = read_file(join(folder, "rfmix_reader",
+                            "fb_reader.c"))
+    # Initialize the FFI builder
+    ffibuilder = FFI()
+    ffibuilder.set_unicode(False)
+    # Define C functions and types declared in header files
+    ffibuilder.cdef(header)
+    # Set source for FFI builder
+    ffibuilder.set_source("rfmix_reader.fb_reader",
+                          source, language="c")
+    return ffibuilder
+
+
+if __name__ == "__main__":
+    ffibuilder = main()
+    ffibuilder.compile(verbose=True)
