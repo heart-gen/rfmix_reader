@@ -11,8 +11,8 @@ from typing import Optional, Callable, List, Tuple
 from dask.array import Array
 from pandas import DataFrame, read_csv
 
-from chunk import Chunk
-from fb_read import read_fb
+from .chunk import Chunk
+from .fb_read import read_fb
 
 __all__ = ["read_rfmix"]
 

@@ -8,7 +8,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=50gb
 #SBATCH --output=rfmix.%A_%a.log
-#SBATCH --time=28:00:00
+#SBATCH --time=48:00:00
 
 echo "**** Job starts ****"
 date
@@ -37,7 +37,7 @@ rfmix \
     -r $REF/1kGP_high_coverage_Illumina.chr${CHROM}.filtered.SNV_INDEL_SV_phased_panel.snpsOnly.eur.afr.vcf.gz \
     -m $REF/samples_id2 \
     -g $REF/genetic_map38 \
-    -o chr${CRHOM} \
+    -o chr${CHROM} \
     --chromosome=chr${CHROM}
 
 echo "**** Job ends ****"

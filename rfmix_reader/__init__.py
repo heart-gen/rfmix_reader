@@ -1,6 +1,6 @@
-from chunk import Chunk
-from fb_read import read_fb
-from read_rfmix import read_rfmix
+from .chunk import Chunk
+from .fb_read import read_fb
+from .read_rfmix import read_rfmix
 
 __version__ = "0.1.0"
 
