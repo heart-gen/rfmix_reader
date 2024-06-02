@@ -38,7 +38,7 @@ This works similarly to [`pandas-plink`]():
 ```python
 from rfmix_reader import read_rfmix
 
-file_path = "test/two_popuations/"
+file_path = "examples/two_popuations/"
 loci, rf_q, admix = read_rfmix(file_path)
 ```
 
