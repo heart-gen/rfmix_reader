@@ -23,7 +23,7 @@ pytest = "^8.2"
 [tool.poetry.scripts]
 build_ext = "build:build"
 
-[tool.poetry.group.dev.dependencies]
+[tool.poetry.group.docs.dependencies]
 sphinx = "^7.3.7"
 sphinx-rtd-theme = "^2.0.0"
 sphinx-autodoc-typehints = "^2.1.0"
