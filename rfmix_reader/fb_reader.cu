@@ -3,10 +3,9 @@
  * Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_bed_reader.h
  */
 
-#include <math.h>
 #include <stdio.h>
 #include <stdint.h>
-#include <stdlib.h>
+#include <cuda_runtime.h>
 
 #define MIN(a,b) ((a > b) ? b : a)
 
