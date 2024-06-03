@@ -14,9 +14,11 @@ void read_fb_chunk_kernel(uint8_t *buff, uint64_t nrows, uint64_t ncols,
 		          uint64_t row_start, uint64_t col_start, uint64_t row_end,
 			  uint64_t col_end, uint8_t *out, uint64_t *strides,
 			  uint64_t row_size) {
+    // Thread indices within the block
     int r = blockIdx.y * blockDim.y + threadIdx.y + row_start;
     int c = blockIdx.x * blockDim.x + threadIdx.x + col_start;
 
+    // Check if within valid data range
     if (r < row_end && c < col_end) {
         uint64_t buff_index = r * row_size + c / 4;
 	char b = buff[buff_index];
@@ -38,29 +40,67 @@ void read_fb_chunk_kernel(uint8_t *buff, uint64_t nrows, uint64_t ncols,
 void read_fb_chunk(uint8_t *buff, uint64_t nrows, uint64_t ncols,
 		   uint64_t row_start, uint64_t col_start, uint64_t row_end,
 		   uint64_t col_end, uint8_t *out, uint64_t *strides) {
-    uint64_t row_size = (ncols + 3) / 4;		   
+    uint64_t row_size = (ncols + 3) / 4;
 
     // Allocate GPU memory
-    uint8_t *d_buff, *d_out;
-    uint64_t *d_strides;
-    cudaMalloc(&d_buff, nrows * row_size * sizeof(uint8_t));
-    cudaMalloc(&d_out, (row_end - row_start) * (col_end - col_start) * sizeof(uint8_t));
-    cudaMalloc(&d_strides, 2 * sizeof(uint64_t));
+    uint8_t* d_buff = nullptr;
+    uint8_t* d_out = nullptr;
+    uint64_t* d_strides = nullptr;
+    cudaError_t err = cudaSuccess;
+
+    err = cudaMalloc(&d_buff, nrows * row_size * sizeof(uint8_t));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Error allocating GPU memory for d_buff: %s\n", cudaGetErrorString(err));
+        return;
+    }
+
+    err = cudaMalloc(&d_out, (row_end - row_start) * (col_end - col_start) * sizeof(uint8_t));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Error allocating GPU memory for d_out: %s\n", cudaGetErrorString(err));
+        cudaFree(d_buff);
+        return;
+    }
+
+    err = cudaMalloc(&d_strides, 2 * sizeof(uint64_t));
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Error allocating GPU memory for d_strides: %s\n", cudaGetErrorString(err));
+        cudaFree(d_buff);
+        cudaFree(d_out);
+        return;
+    }
 
     // Copy data to GPU
-    cudaMemcpy(d_buff, buff, nrows * row_size * sizeof(uint8_t), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_strides, strides, 2 * sizeof(uint64_t), cudaMemcpyHostToDevice)
+    err = cudaMemcpy(d_buff, buff, nrows * row_size * sizeof(uint8_t), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Error copying data to GPU for d_buff: %s\n", cudaGetErrorString(err));
+        cudaFree(d_buff);
+        cudaFree(d_out);
+        cudaFree(d_strides);
+        return;
+    }
+
+    err = cudaMemcpy(d_strides, strides, 2 * sizeof(uint64_t), cudaMemcpyHostToDevice);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Error copying data to GPU for d_strides: %s\n", cudaGetErrorString(err));
+        cudaFree(d_buff);
+        cudaFree(d_out);
+        cudaFree(d_strides);
+        return;
+    }
 
     // Define block and grid sizes
-    dim3 threadsPerBlock(16, 16);
-    dim3 numBlocks((col_end - col_start + threadsPerBlock.x - 1) / threadsPerBlock.x,
-                   (row_end - row_start + threadsPerBlock.y - 1) / threadsPerBlock.y);
+    const dim3 threadsPerBlock(16, 16);
+    const dim3 numBlocks((col_end - col_start + threadsPerBlock.x - 1) / threadsPerBlock.x,
+                         (row_end - row_start + threadsPerBlock.y - 1) / threadsPerBlock.y);
 
     // Launch kernel
     read_fb_chunk_kernel<<<numBlocks, threadsPerBlock>>>(d_buff, nrows, ncols, row_start, col_start, row_end, col_end, d_out, d_strides, row_size);
 
     // Copy results back to host
-    cudaMemcpy(out, d_out, (row_end - row_start) * (col_end - col_start) * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+    err = cudaMemcpy(out, d_out, (row_end - row_start) * (col_end - col_start) * sizeof(uint8_t), cudaMemcpyDeviceToHost);
+    if (err != cudaSuccess) {
+        fprintf(stderr, "Error copying data from GPU for out: %s\n", cudaGetErrorString(err));
+    }
 
     // Free GPU memory
     cudaFree(d_buff);
