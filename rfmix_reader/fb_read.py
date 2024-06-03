@@ -95,7 +95,7 @@ def _read_fb_chunk(
     Returns:
     dask.array: Processed array with adjacent columns summed for each population subset.
     """
-    from fb_reader import ffi, lib
+    from .fb_reader import ffi, lib
 
     base_type = uint8
     base_size = base_type().nbytes

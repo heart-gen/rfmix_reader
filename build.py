@@ -22,7 +22,7 @@ def ffi_builder():
     folder = dirname(abspath(__file__))
     # Read C header and source files
     header = read_file(join(folder, "rfmix_reader",
-                            "include", "fb_reader.h"))
+                            "fb_reader.h"))
     source = read_file(join(folder, "rfmix_reader",
                             "fb_reader.c"))
     # Initialize the FFI builder
