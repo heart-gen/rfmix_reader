@@ -2,7 +2,7 @@ from .chunk import Chunk
 from .fb_read import read_fb
 from .read_rfmix import read_rfmix
 
-__version__ = "0.1.2"
+__version__ = "0.1.4"
 
 __all__ = [
     "Chunk",
