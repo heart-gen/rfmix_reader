@@ -1,11 +1,16 @@
 from setuptools import Extension, setup
+from os.path import dirname, abspath, join
 from setuptools.command.build_ext import build_ext
 
+# Path to the shared library
+lib_dir = join(dirname(abspath(__file__)), "rfmix_reader")
+
+# Define the extension module
 ext_modules = [
     Extension(
         "rfmix_reader.fb_reader",
         sources=["rfmix_reader/fb_reader.c"],
-        include_dirs=["rfmix_reader"]
+        include_dirs=[lib_dir],
     ),
 ]
 
