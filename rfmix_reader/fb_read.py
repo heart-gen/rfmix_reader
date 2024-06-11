@@ -70,7 +70,9 @@ def read_fb(filepath, nrows, ncols, row_chunk, col_chunk):
     return concatenate(column_chunks, 0, True)
 
 
-def _read_fb_chunk(buff, nrows, ncols, row_start, row_end, col_start, col_end):
+def _read_fb_chunk(
+        buff, nrows, ncols, row_start, row_end, col_start, col_end
+):
     """
     Read a chunk of data from the buffer and process it using CUDA.
 

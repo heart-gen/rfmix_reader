@@ -9,10 +9,16 @@ from collections import OrderedDict as odict
 from typing import Optional, Callable, List, Tuple
 
 from dask.array import Array
-from pandas import DataFrame, read_csv
+from torch.cuda import is_available
 
 from .chunk import Chunk
 from .fb_read import read_fb
+
+# Check for GPU available
+if is_available():
+    from cudf import DataFrame, read_csv, concat
+else:
+    from pandas import DataFrame, read_csv, concat
 
 __all__ = ["read_rfmix"]
 
@@ -50,7 +56,6 @@ def read_rfmix(
         This is in order of the populations see `rf_q`.
     """
     from tqdm import tqdm
-    from pandas import concat
     from dask.array import concatenate
     # Get file prefixes
     file_prefixes = sorted(glob(file_prefix))
