@@ -162,7 +162,7 @@ def _read_fb_chunk(
             c_uint64(row_end),
             c_uint64(col_end),
             X.ctypes.data_as(POINTER(c_uint8)),
-            strides.ctypes.data_as(POINTER(c_uint64)))
+            strides.ctypes.data_as(POINTER(c_uint64))
         )
     except Exception as e:
         raise IOError(f"Error reading data chunk: {e}")
