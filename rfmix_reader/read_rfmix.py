@@ -12,6 +12,7 @@ from dask.array import Array
 
 from .chunk import Chunk
 from .fb_read import read_fb
+from ._utils import set_gpu_environment
 
 try:
     from torch.cuda import is_available
@@ -20,6 +21,7 @@ except ModuleNotFoundError as e:
     def is_available():
         return False
 
+    
 if is_available():
     from cudf import DataFrame, read_csv, concat
     set_gpu_environment()
@@ -415,23 +417,3 @@ def _clean_prefixes(prefixes):
             cleaned_prefixes.append(cleaned_prefix)
     # Remove duplicate prefixes
     return list(set(cleaned_prefixes))
-
-
-def set_gpu_environment():
-    """
-    This function reviews GPU properties.
-    """
-    from torch.cuda import (
-        device_count,
-        get_device_properties,
-    )
-    num_gpus = device_count()
-    if num_gpus == 0:
-        print("No GPUs available.")
-    else:
-        for num in range(num_gpus):
-            gpu_properties = get_device_properties(num)
-            total_memory = gpu_properties.total_memory / (1024 ** 3)
-            print(f"GPU {num}: {gpu_properties.name}")
-            print(f"  Total memory: {total_memory:.2f} GB")
-            print(f"  CUDA capability: {gpu_properties.major}.{gpu_properties.minor}")
