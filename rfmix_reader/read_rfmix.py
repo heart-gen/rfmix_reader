@@ -21,9 +21,7 @@ except ModuleNotFoundError as e:
         return False
 
 if is_available():
-    from dask import config
     from cudf import DataFrame, read_csv, concat
-    config.set({"dataframe.backend": "cudf"})
     set_gpu_environment()
 else:
     from pandas import DataFrame, read_csv, concat
@@ -422,11 +420,15 @@ def _clean_prefixes(prefixes):
 def set_gpu_environment():
     from torch.cuda import (
         device_count,
-        get_device_properties
+        get_device_properties,
     )
     num_gpus = device_count()
-    for num in range(num_gpus):
-        gpu_properties = get_device_properties(num)
-        gpu_limit = gpu_properties.total_memory
-        print(f"GPU {num}: {gpu_properties.name}")
-        print(f"Total memory: {gpu_limit / (1024 ** 3):.2f} GB")
+    if num_gpus == 0:
+        print("No GPUs available.")
+    else:
+        for num in range(num_gpus):
+            gpu_properties = get_device_properties(num)
+            total_memory = gpu_properties.total_memory / (1024 ** 3)
+            print(f"GPU {num}: {gpu_properties.name}")
+            print(f"  Total memory: {total_memory:.2f} GB")
+            print(f"  CUDA capability: {gpu_properties.major}.{gpu_properties.minor}")
