@@ -131,11 +131,18 @@ def _read_fb_chunk(
     #     # Copy the results back to host memory
     #     results = cp.asnumpy(d_out)
     #     return results.astype(float32)
-    from .fb_reader import ffi, lib
+    # from .fb_reader import ffi, lib
+    from ctypes import c_uint8, c_int64, CDLL, POINTER
+    # Load the shared library
+    fb_reader = CDLL("./fb_reader.cpython-39-x86_64-linux-gnu.so")
+    # Define the function signature
+    fb_reader.read_fb_chunk.argtypes = [
+        POINTER(c_uint8), c_uint64, c_uint64, c_uint64, c_uint64,
+        c_uint64, c_uint64, POINTER(c_uint8), POINTER(c_uint64)
+    ]
+    fb_reader.read_fb_chunk.restype = None
     # Use C program
-    base_type = uint8
-    base_size = base_type().nbytes
-    base_repr = "uint8_t"
+    base_type = uint8; base_size = base_type().nbytes
     # Ensure the number of columns to be processed is even
     num_cols = col_end - col_start
     if num_cols % 2 != 0:
@@ -146,16 +153,16 @@ def _read_fb_chunk(
     strides[:] = X.strides
     strides //= base_size
     try:
-        lib.read_fb_chunk(
-            ffi.cast(f"{base_repr} *", buff.ctypes.data),
-            nrows,
-            ncols,
-            row_start,
-            col_start,
-            row_end,
-            col_end,
-            ffi.cast(f"{base_repr} *", X.ctypes.data),
-            ffi.cast("uint64_t *", strides.ctypes.data),
+        fb_reader.read_fb_chunk(
+            buff.ctypes.data_as(POINTER(c_uint8)),
+            c_uint64(nrows),
+            c_uint64(ncols),
+            c_uint64(row_start),
+            c_uint64(col_start),
+            c_uint64(row_end),
+            c_uint64(col_end),
+            X.ctypes.data_as(POINTER(c_uint8)),
+            strides.ctypes.data_as(POINTER(c_uint64)))
         )
     except Exception as e:
         raise IOError(f"Error reading data chunk: {e}")
