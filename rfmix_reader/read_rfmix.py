@@ -418,6 +418,9 @@ def _clean_prefixes(prefixes):
 
 
 def set_gpu_environment():
+    """
+    This function reviews GPU properties.
+    """
     from torch.cuda import (
         device_count,
         get_device_properties,
