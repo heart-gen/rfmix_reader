@@ -134,7 +134,7 @@ def _read_fb_chunk(
     # from .fb_reader import ffi, lib
     from ctypes import c_uint8, c_int64, CDLL, POINTER
     # Load the shared library
-    fb_reader = CDLL("./fb_reader.cpython-39-x86_64-linux-gnu.so")
+    fb_reader = CDLL("./fb_reader.so")
     # Define the function signature
     fb_reader.read_fb_chunk.argtypes = [
         POINTER(c_uint8), c_uint64, c_uint64, c_uint64, c_uint64,
@@ -146,7 +146,7 @@ def _read_fb_chunk(
     # Ensure the number of columns to be processed is even
     num_cols = col_end - col_start
     if num_cols % 2 != 0:
-        raise ValueError("Number of columns must be even.")    
+        raise ValueError("Number of columns must be even.")
     X = zeros((row_end - row_start, num_cols), base_type)
     assert X.flags.aligned        
     strides = empty(2, uint64)
