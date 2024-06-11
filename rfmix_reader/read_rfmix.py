@@ -9,10 +9,16 @@ from collections import OrderedDict as odict
 from typing import Optional, Callable, List, Tuple
 
 from dask.array import Array
-from torch.cuda import is_available
 
 from .chunk import Chunk
 from .fb_read import read_fb
+
+try:
+    from torch.cuda import is_available
+except ModuleNotFoundError as e:
+    print("Warning: PyTorch is not installed. Using CPU!")
+    def is_available():
+        return False
 
 if is_available():
     from dask import config

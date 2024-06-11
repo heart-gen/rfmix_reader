@@ -11,7 +11,13 @@ from numpy import (
     uint64,
     zeros,
 )
-from torch.cuda import is_available
+
+try:
+    from torch.cuda import is_available
+except ModuleNotFoundError:
+    print("Warning: PyTorch is not installed. Using CPU!")
+    def is_available():
+        return False
 
 if is_available():
     import cupy as cp
