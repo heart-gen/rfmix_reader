@@ -52,15 +52,12 @@ def read_rfmix(
     from tqdm import tqdm
     from pandas import concat
     from dask.array import concatenate
-
     # Get file prefixes
     file_prefixes = sorted(glob(file_prefix))
     if len(file_prefixes) == 1:
         file_prefixes = sorted(glob(join(file_prefix, "*")))
-
     file_prefixes = sorted(_clean_prefixes(file_prefixes))
     fn = [{s: f"{fp}.{s}" for s in ["fb.tsv", "rfmix.Q"]} for fp in file_prefixes]
-        
     # Load loci information
     pbar = tqdm(desc="Mapping loci files", total=len(fn), disable=not verbose)
     loci = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
@@ -68,7 +65,6 @@ def read_rfmix(
     if len(file_prefixes) > 1 and verbose:
         msg = "Multiple files read in this order:"
         print(f"{msg} {[basename(f) for f in file_prefixes]}")
-
     # Adjust loci indices and concatenate
     nmarkers = {}
     index_offset = 0
@@ -76,17 +72,14 @@ def read_rfmix(
         nmarkers[fn[i]["fb.tsv"]] = bi.shape[0]
         bi["i"] += index_offset
         index_offset += bi.shape[0]
-    loci = concat(loci, axis=0, ignore_index=True)
-    
+    loci = concat(loci, axis=0, ignore_index=True)    
     # Load global ancestry per chromosome
     pbar = tqdm(desc="Mapping Q files", total=len(fn), disable=not verbose)
     rf_q = _read_file(fn, lambda f: _read_Q(f["rfmix.Q"]), pbar)
-    pbar.close()
-    
+    pbar.close()    
     nsamples = rf_q[0].shape[0]
     pops = rf_q[0].drop(["sample_id", "chrom"], axis=1).columns.values
-    rf_q = concat(rf_q, axis=0, ignore_index=True)
-    
+    rf_q = concat(rf_q, axis=0, ignore_index=True)    
     # Loading local ancestry by loci
     pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
     admix = _read_file(
@@ -96,8 +89,7 @@ def read_rfmix(
         pbar,
     )
     pbar.close()
-    admix = concatenate(admix, axis=0)
-    
+    admix = concatenate(admix, axis=0)    
     return loci, rf_q, admix
 
 
@@ -148,13 +140,11 @@ def _read_csv(fn: str, header: dict) -> DataFrame:
             engine="c",
             iterator=False,
         )
-        
     except Exception as e:
         raise IOError(f"Error reading file '{fn}': {e}")
     # Validate that resulting DataFrame is correct type
     if not isinstance(df, DataFrame):
-        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
-    
+        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")    
     return df
 
 
@@ -171,11 +161,9 @@ def _read_tsv(fn: str) -> DataFrame:
     DataFrame: DataFrame containing specified columns from the TSV file.
     """
     from numpy import int32
-    from pandas import StringDtype, concat
-    
+    from pandas import StringDtype, concat    
     header = {"chromosome": StringDtype(), "physical_position": int32}
-    columns = ["chromosome", "physical_position"]
-    
+    columns = ["chromosome", "physical_position"]    
     try:
         chunks = read_csv(
             fn,
@@ -185,23 +173,19 @@ def _read_tsv(fn: str) -> DataFrame:
             dtype=header,
             comment="#",
             chunksize=100000, # Low memory chunks
-        )
-        
+        )        
         # Concatenate chunks into single DataFrame
         df = concat(chunks, ignore_index=True)
     except FileNotFoundError:
         raise FileNotFoundError(f"File {fn} not found.")    
     except Exception as e:
-        raise IOError(f"Error reading file {fn}: {e}")
-    
+        raise IOError(f"Error reading file {fn}: {e}")    
     # Validate that resulting DataFrame is correct type
     if not isinstance(df, DataFrame):
-        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
-    
+        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")    
     # Ensure DataFrame contains correct columns
     if not all(column in df.columns for column in columns):
-        raise ValueError(f"DataFrame does not contain expected columns: {columns}")
-    
+        raise ValueError(f"DataFrame does not contain expected columns: {columns}")    
     return df
 
 
@@ -289,8 +273,7 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list, chunk: Optional[Chu
     max_npartitions = 16_384
     row_chunk = max(nrows // max_npartitions, row_chunk)
     col_chunk = max(ncols // max_npartitions, col_chunk)
-    X = read_fb(fn, nrows, ncols, row_chunk, col_chunk)
-    
+    X = read_fb(fn, nrows, ncols, row_chunk, col_chunk)    
     # Subset populations and sum adjacent columns
     return _subset_populations(X, npops)
 
@@ -310,19 +293,16 @@ def _subset_populations(X: Array, npops: int) -> Array:
     
     pop_subset = []
     pop_start = 0
-    ncols = X.shape[1]
-    
+    ncols = X.shape[1]    
     if ncols % npops != 0:
-        raise ValueError("The number of columns in X must be divisible by npops.")
-    
+        raise ValueError("The number of columns in X must be divisible by npops.")    
     while pop_start < npops:
         X0 = X[:, pop_start::npops] # Subset based on populations
         if X0.shape[1] % 2 != 0:
             raise ValueError("Number of columns must be even.")
         X0_summed = X0[:, ::2] + X0[:, 1::2] # Sum adjacent columns
         pop_subset.append(X0_summed)
-        pop_start += 1
-        
+        pop_start += 1        
     return concatenate(pop_subset, 1, True)
 
 
@@ -347,26 +327,21 @@ def _types(fn: str) -> dict:
             delim_whitespace=True,
             nrows=2,
             skiprows=1,
-        )
-        
+        )        
     except FileNotFoundError:
         raise FileNotFoundError(f"File '{fn}' not found.")
     except Exception as e:
-        raise IOError(f"Error reading file '{fn}': {e}")
-    
+        raise IOError(f"Error reading file '{fn}': {e}")    
     # Validate that the resulting DataFrame is of the correct type
     if not isinstance(df, DataFrame):
-        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
-    
+        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")    
     # Ensure the DataFrame contains at least one column
     if df.shape[1] < 1:
         raise ValueError("The DataFrame does not contain any columns.")
-    
     # Initialize the header dictionary with the sample_id column
     header = {"sample_id": StringDtype()}
     # Update the header dictionary with the data types of the remaining columns
-    header.update(df.dtypes[1:].to_dict())
-    
+    header.update(df.dtypes[1:].to_dict())    
     return header
 
 
@@ -392,14 +367,11 @@ def _clean_prefixes(prefixes):
         # Split the prefix into directory and base name
         dir_path = dirname(prefix)
         base_name = basename(prefix)
-
         # Remove the file extensions from the base name
-        base = base_name.split(".")[0]
-        
+        base = base_name.split(".")[0]        
         # Skip prefixes that end with ".logs"
         if base != "logs":
             cleaned_prefix = join(dir_path, base)
             cleaned_prefixes.append(cleaned_prefix)
-
     # Remove duplicate prefixes
     return list(set(cleaned_prefixes))
