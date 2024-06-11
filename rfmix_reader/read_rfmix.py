@@ -14,9 +14,11 @@ from torch.cuda import is_available
 from .chunk import Chunk
 from .fb_read import read_fb
 
-# Check for GPU available
 if is_available():
+    from dask import config
     from cudf import DataFrame, read_csv, concat
+    config.set({"dataframe.backend": "cudf"})
+    set_gpu_environment()
 else:
     from pandas import DataFrame, read_csv, concat
 
@@ -77,14 +79,14 @@ def read_rfmix(
         nmarkers[fn[i]["fb.tsv"]] = bi.shape[0]
         bi["i"] += index_offset
         index_offset += bi.shape[0]
-    loci = concat(loci, axis=0, ignore_index=True)    
+    loci = concat(loci, axis=0, ignore_index=True)
     # Load global ancestry per chromosome
     pbar = tqdm(desc="Mapping Q files", total=len(fn), disable=not verbose)
     rf_q = _read_file(fn, lambda f: _read_Q(f["rfmix.Q"]), pbar)
     pbar.close()    
     nsamples = rf_q[0].shape[0]
     pops = rf_q[0].drop(["sample_id", "chrom"], axis=1).columns.values
-    rf_q = concat(rf_q, axis=0, ignore_index=True)    
+    rf_q = concat(rf_q, axis=0, ignore_index=True)
     # Loading local ancestry by loci
     pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
     admix = _read_file(
@@ -120,39 +122,6 @@ def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:
     return data
 
 
-def _read_csv(fn: str, header: dict) -> DataFrame:
-    """
-    Read a CSV file into a pandas DataFrame with specified data types.
-
-    Parameters:
-    ----------
-    fn (str): The file path of the CSV file.
-    header (dict): A dictionary mapping column names to data types.
-
-    Returns:
-    -------
-    DataFrame: The data read from the CSV file as a pandas DataFrame.
-    """
-    try:
-        df = read_csv(
-            fn,
-            delim_whitespace=True,
-            header=None,
-            names=list(header.keys()),
-            dtype=header,
-            comment="#",
-            compression=None,
-            engine="c",
-            iterator=False,
-        )
-    except Exception as e:
-        raise IOError(f"Error reading file '{fn}': {e}")
-    # Validate that resulting DataFrame is correct type
-    if not isinstance(df, DataFrame):
-        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")    
-    return df
-
-
 def _read_tsv(fn: str) -> DataFrame:
     """
     Read a TSV file into a pandas DataFrame.
@@ -166,21 +135,31 @@ def _read_tsv(fn: str) -> DataFrame:
     DataFrame: DataFrame containing specified columns from the TSV file.
     """
     from numpy import int32
-    from pandas import StringDtype, concat    
+    from pandas import StringDtype
     header = {"chromosome": StringDtype(), "physical_position": int32}
-    columns = ["chromosome", "physical_position"]    
+    columns = ["chromosome", "physical_position"]
     try:
-        chunks = read_csv(
-            fn,
-            delim_whitespace=True,
-            header=0,
-            usecols=columns,
-            dtype=header,
-            comment="#",
-            chunksize=100000, # Low memory chunks
-        )        
-        # Concatenate chunks into single DataFrame
-        df = concat(chunks, ignore_index=True)
+        if is_available():
+            df = read_csv(
+                fn,
+                sep="\t",
+                header=0,
+                usecols=columns,
+                dtype=header,
+                comment="#"
+            )
+        else:
+            chunks = read_csv(
+                fn,
+                delim_whitespace=True,
+                header=0,
+                usecols=columns,
+                dtype=header,
+                comment="#",
+                chunksize=100000, # Low memory chunks
+            )        
+            # Concatenate chunks into single DataFrame
+            df = concat(chunks, ignore_index=True)
     except FileNotFoundError:
         raise FileNotFoundError(f"File {fn} not found.")    
     except Exception as e:
@@ -208,6 +187,49 @@ def _read_loci(fn: str) -> DataFrame:
     """
     df = _read_tsv(fn)
     df["i"] = range(df.shape[0])
+    return df
+
+
+def _read_csv(fn: str, header: dict) -> DataFrame:
+    """
+    Read a CSV file into a pandas DataFrame with specified data types.
+
+    Parameters:
+    ----------
+    fn (str): The file path of the CSV file.
+    header (dict): A dictionary mapping column names to data types.
+
+    Returns:
+    -------
+    DataFrame: The data read from the CSV file as a pandas DataFrame.
+    """
+    try:
+        if is_available():
+            df = read_csv(
+                fn,
+                sep="\t",
+                header=None,
+                names=list(header.keys()),
+                dtype=header,
+                comment="#"
+            )
+        else:
+            df = read_csv(
+                fn,
+                delim_whitespace=True,
+                header=None,
+                names=list(header.keys()),
+                dtype=header,
+                comment="#",
+                compression=None,
+                engine="c",
+                iterator=False,
+            )
+    except Exception as e:
+        raise IOError(f"Error reading file '{fn}': {e}")
+    # Validate that resulting DataFrame is correct type
+    if not isinstance(df, DataFrame):
+        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")    
     return df
 
 
@@ -254,7 +276,8 @@ def _read_Q_noi(fn: str) -> DataFrame:
         raise IOError(f"Error reading Q matrix from '{fn}': {e}")
 
 
-def _read_fb(fn: str, nsamples: int, nloci: int, pops: list, chunk: Optional[Chunk] = None) -> Array:
+def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
+             chunk: Optional[Chunk] = None) -> Array:
     """
     Read the forward-backward matrix from a file as a Dask Array.
 
@@ -278,7 +301,7 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list, chunk: Optional[Chu
     max_npartitions = 16_384
     row_chunk = max(nrows // max_npartitions, row_chunk)
     col_chunk = max(ncols // max_npartitions, col_chunk)
-    X = read_fb(fn, nrows, ncols, row_chunk, col_chunk)    
+    X = read_fb(fn, nrows, ncols, row_chunk, col_chunk)
     # Subset populations and sum adjacent columns
     return _subset_populations(X, npops)
 
@@ -327,12 +350,20 @@ def _types(fn: str) -> dict:
     
     try:
         # Read the first two rows of the file, skipping the first row
-        df = read_csv(
-            fn,
-            delim_whitespace=True,
-            nrows=2,
-            skiprows=1,
-        )        
+        if is_available():
+            df = read_csv(
+                fn,
+                sep="\t",
+                nrows=2,
+                skiprows=1,
+            )
+        else:
+            df = read_csv(
+                fn,
+                delim_whitespace=True,
+                nrows=2,
+                skiprows=1,
+            )
     except FileNotFoundError:
         raise FileNotFoundError(f"File '{fn}' not found.")
     except Exception as e:
@@ -375,8 +406,21 @@ def _clean_prefixes(prefixes):
         # Remove the file extensions from the base name
         base = base_name.split(".")[0]        
         # Skip prefixes that end with ".logs"
-        if base != "logs":
+        if base.startswith("chr"):
             cleaned_prefix = join(dir_path, base)
             cleaned_prefixes.append(cleaned_prefix)
     # Remove duplicate prefixes
     return list(set(cleaned_prefixes))
+
+
+def set_gpu_environment():
+    from torch.cuda import (
+        device_count,
+        get_device_properties
+    )
+    num_gpus = device_count()
+    for num in range(num_gpus):
+        gpu_properties = get_device_properties(num)
+        gpu_limit = gpu_properties.total_memory
+        print(f"GPU {num}: {gpu_properties.name}")
+        print(f"Total memory: {gpu_limit / (1024 ** 3):.2f} GB")
