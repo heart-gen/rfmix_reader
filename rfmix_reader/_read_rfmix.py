@@ -10,8 +10,8 @@ from typing import Optional, Callable, List, Tuple
 
 from dask.array import Array
 
-from .chunk import Chunk
-from .fb_read import read_fb
+from ._chunk import Chunk
+from ._fb_read import read_fb
 from ._utils import set_gpu_environment
 
 try:

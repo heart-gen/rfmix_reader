@@ -1,6 +1,6 @@
-from .chunk import Chunk
-from .fb_read import read_fb
-from .read_rfmix import read_rfmix
+from ._chunk import Chunk
+from ._fb_read import read_fb
+from ._read_rfmix import read_rfmix
 from ._utils import set_gpu_environment
 
 __version__ = "0.1.5"
