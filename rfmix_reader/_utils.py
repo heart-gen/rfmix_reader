@@ -3,6 +3,8 @@ from torch.cuda import (
     get_device_properties,
 )
 
+__all__ = ["set_gpu_environment"]
+
 def set_gpu_environment():
     """
     This function reviews GPU properties.
