@@ -4,6 +4,7 @@ Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_read.py
 """
 import warnings
 from glob import glob
+from pathlib import Path
 from os.path import basename, dirname, join
 from collections import OrderedDict as odict
 from typing import Optional, Callable, List, Tuple
@@ -66,7 +67,7 @@ def read_rfmix(
     from tqdm import tqdm
     from dask.array import concatenate
     # Get file prefixes
-    file_prefixes = sorted(glob(file_prefix))
+    file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("chr*")])
     if len(file_prefixes) == 1:
         file_prefixes = sorted(glob(join(file_prefix, "*")))
     file_prefixes = sorted(_clean_prefixes(file_prefixes))
@@ -300,8 +301,8 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
     dask.array.Array: The forward-backward matrix as a Dask Array.
     """
     npops = len(pops)
-    nrows = nloci
-    ncols = nsamples * npops * 2
+    nrows = nloci + 2
+    ncols = (nsamples * npops * 2) + 4
     row_chunk = nrows if chunk.nloci is None else min(nrows, chunk.nloci)
     col_chunk = ncols if chunk.nsamples is None else min(ncols, chunk.nsamples)
     max_npartitions = 16_384
