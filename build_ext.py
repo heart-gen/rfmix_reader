@@ -20,21 +20,23 @@ ffibuilder.set_unicode(False)
 
 # Configure pyconfig.h
 python_include_path = get_paths()['include']
-pyconfig_64_path = join(python_include_path, 'pyconfig-64.h')
+custom_include_path = join(current_dir, 'include')
+include_dirs = [custom_include_path, python_include_path]
 
 # Read the header file
 h_file = join(current_dir, "rfmix_reader", "_fb_reader.h")
 h_content = read_lines(h_file)
 
 # Parse the header file
-ffibuilder.cdef(f"#include {pyconfig_64_path}\n{h_content}")
+ffibuilder.cdef(h_content)
 
 # Read the C source file
 c_file = join(current_dir, "rfmix_reader", "_fb_reader.c")
 c_content = read_lines(c_file)
 # Set the source code and language
 ffibuilder.set_source("rfmix_reader.fb_reader",
-                      c_content, language="c")
+                      c_content, language="c",
+                      include_dirs=include_dirs)
 
 
 if __name__ == "__main__":
