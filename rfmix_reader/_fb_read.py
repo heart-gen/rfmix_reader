@@ -20,9 +20,9 @@ except ModuleNotFoundError:
     def is_available():
         return False
 
+
 if is_available():
     import cupy as cp
-    from cupyx import jit
 
 __all__ = ["read_fb"]
 
@@ -107,6 +107,7 @@ def _read_fb_chunk(
     dask.array: Processed array with adjacent columns summed for each population subset.
     """
     if is_available():
+        # TypeError: Data type mismatch of variable: `d_out._slicing((((unsigned long long)((r - (unsigned int)(row_start))) * d_strides[0]) + ((unsigned long long)((c - (unsigned int)(col_start))) * d_strides[1])))`: CArray<unsigned char, 1, true, true> != int
         # Use GPU to read and process the chunk
         num_cols = col_end - col_start
         if num_cols % 2 != 0:
@@ -126,10 +127,11 @@ def _read_fb_chunk(
         )
         # Launch the kernel
         read_fb_chunk_kernel(
-            grid=blocks_per_grid, block=threads_per_block,
-            args=(d_buff, nrows, ncols, row_start, col_start, row_end,
-                  col_end, d_out, cp.asarray(strides), row_size)
-        )x
+            blocks_per_grid,
+            threads_per_block,
+            (d_buff, nrows, ncols, row_start, col_start, row_end,
+             col_end, d_out, cp.asarray(strides), row_size)
+        )
         # Copy the results back to host memory
         results = cp.asnumpy(d_out)
         return results.astype(float32)
@@ -166,40 +168,38 @@ def _read_fb_chunk(
 
 
 if is_available():
-    @jit.rawkernel()
-    def read_fb_chunk_kernel(d_buff, nrows, ncols, row_start, col_start,
-                             row_end, col_end, d_out, d_strides, row_size):
-        """
-        CUDA kernel function to read a chunk of data and process it.
-        
-        Parameters:
-        d_buff (cupy.ndarray): Device buffer containing the data.
-        nrows (int): Total number of rows in the dataset.
-        ncols (int): Total number of columns in the dataset.
-        row_start (int): Starting row index for the chunk.
-        row_end (int): Ending row index for the chunk.
-        col_start (int): Starting column index for the chunk.
-        col_end (int): Ending column index for the chunk.
-        d_out (cupy.ndarray): Output buffer to store the processed data.
-        d_strides (cupy.ndarray): Strides for the output buffer.
-        row_size (int): Row size in the buffer.
-        """
-        r = jit.blockIdx.y * jit.blockDim.y + jit.threadIdx.y + row_start
-        c = jit.blockIdx.x * jit.blockDim.x + jit.threadIdx.x + col_start
+    read_fb_chunk_kernel = cp.RawKernel(r'''
+    #define MIN(a,b) ((a > b) ? b : a)
+    extern "C" __global__    
+    void read_fb_chunk_kernel(const float *buff,
+                              const float* nrows,
+                              const float* ncols,
+		              const float* row_start,
+                              const float* col_start,
+                              const float* row_end,
+                              const float* col_end,
+                              float *out, const float *strides,
+                  	      const float* row_size) {
+    // Thread indices within the block
+    int r = blockIdx.y * blockDim.y + threadIdx.y + row_start;
+    int c = blockIdx.x * blockDim.x + threadIdx.x + col_start;
 
-        if r < row_end and c < col_end:
-            buff_index = r * row_size + c // 4
-            b = d_buff[buff_index]
-            b0 = b & 0x55
-            b1 = (b & 0xAA) >> 1
-            p0 = b0 ^ b1
-            p1 = (b0 | b1) & b0
-            p1 <<= 1
-            p0 |= p1
-            ce = min(c + 4, col_end)
+    // Check if within valid data range
+    if (r < row_end and c < col_end) {
+        float buff_index = r * row_size + c // 4;
+        char b = d_buff[buff_index];
+        char b0 = b & 0x55;
+        char b1 = (b & 0xAA) >> 1;
+        char p0 = b0 ^ b1; 
+        char p1 = (b0 | b1) & b0;
+        p1 <<= 1;
+        p0 |= p1;
+        float ce = MIN(c + 4, col_end);
 
-            while c < ce:
-                d_out[(r - row_start) * d_strides[0] +
-                      (c - col_start) * d_strides[1]] = p0 & 3
-                p0 >>= 2
-                c += 1
+        for (; c < ce; ++c) {
+            out[(r - row_start) * strides[0] +
+                (c - col_start) * strides[1]] = p0 & 3;
+            p0 >>= 2;
+        }
+    }
+    }''', 'read_fb_chunk_kernel')
