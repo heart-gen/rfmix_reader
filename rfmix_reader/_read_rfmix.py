@@ -5,11 +5,10 @@ Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_read.py
 import warnings
 from glob import glob
 from pathlib import Path
+from dask.array import Array
 from os.path import basename, dirname, join
 from collections import OrderedDict as odict
 from typing import Optional, Callable, List, Tuple
-
-from dask.array import Array
 
 from ._chunk import Chunk
 from ._fb_read import read_fb
@@ -22,7 +21,7 @@ except ModuleNotFoundError as e:
     def is_available():
         return False
 
-    
+
 if is_available():
     from cudf import DataFrame, read_csv, concat
     set_gpu_environment()
