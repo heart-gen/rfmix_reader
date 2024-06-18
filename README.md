@@ -48,12 +48,15 @@ and bioinformaticians working with admixed population data.
 ## Usage
 This works similarly to [`pandas-plink`]():
 
+### Two population admixture example
 ```python
 from rfmix_reader import read_rfmix
 
-file_path = "examples/two_popuations/"
+file_path = "examples/two_popuations/out/"
 loci, rf_q, admix = read_rfmix(file_path)
 ```
+
+### Three population admixture example
 
 ## Authors
 * [Kynon JM Benjamin](https://github.com/Krotosbenjamin)
