@@ -10,9 +10,9 @@
 #include <string.h>
 
 // Function to read a chunk of the fb matrix
-void read_fb_chunk(uint8_t *matrix, uint64_t nrows, uint64_t ncols,
+void read_fb_chunk(double *matrix, uint64_t nrows, uint64_t ncols,
 		   uint64_t row_start, uint64_t col_start, uint64_t row_end,
-		   uint64_t col_end, uint8_t *out, uint64_t *strides) {
+		   uint64_t col_end, double *out, uint64_t *strides) {
   uint64_t r, c;
   uint64_t row_size = ncols;
 
