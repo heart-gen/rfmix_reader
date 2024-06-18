@@ -26,3 +26,9 @@ def get_sample_names(rf_q: DataFrame):
     sample_ids = rf_q.sample_id.unique().to_arrow()
     pops = rf_q.drop(["sample_id", "chrom"], axis=1).columns.values
     return  [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
+
+
+def _testing():
+    from rfmix_reader import read_rfmix
+    prefix_path = "../examples/two_populations/out/"
+    loci, rf_q, X = read_rfmix(prefix_path, verbose=True)
