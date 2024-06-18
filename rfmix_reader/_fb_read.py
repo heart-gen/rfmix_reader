@@ -13,17 +13,6 @@ from numpy import (
     array,
 )
 
-try:
-    from torch.cuda import is_available
-except ModuleNotFoundError:
-    print("Warning: PyTorch is not installed. Using CPU!")
-    def is_available():
-        return False
-
-
-if is_available():
-    import cupy as cp
-
 __all__ = ["read_fb"]
 
 def read_fb(filepath, nrows, ncols, row_chunk, col_chunk):
@@ -106,100 +95,32 @@ def _read_fb_chunk(
     Returns:
     dask.array: Processed array with adjacent columns summed for each population subset.
     """
-    if is_available():
-        # TypeError: Data type mismatch of variable: `d_out._slicing((((unsigned long long)((r - (unsigned int)(row_start))) * d_strides[0]) + ((unsigned long long)((c - (unsigned int)(col_start))) * d_strides[1])))`: CArray<unsigned char, 1, true, true> != int
-        # Use GPU to read and process the chunk
-        num_cols = col_end - col_start
-        if num_cols % 2 != 0:
-            raise ValueError("Number of columns must be even.")    
-        X = cp.zeros((row_end - row_start, num_cols), dtype=cp.uint8)
-        strides = array([X.strides[0] // X.itemsize, X.strides[1] // X.itemsize],
-                        dtype=uint64)
-        row_size = (ncols + 3) // 4    
-        # Copy data to GPU
-        d_buff = cp.asarray(buff)
-        d_out = cp.zeros_like(X)
-        # Define block and grid sizes
-        threads_per_block = (16, 16)
-        blocks_per_grid = (
-            (col_end - col_start + threads_per_block[0] - 1) // threads_per_block[0],
-            (row_end - row_start + threads_per_block[1] - 1) // threads_per_block[1]
+    from .fb_reader import ffi, lib
+    # Use C program
+    base_type = uint8; base_repr = "uint8_t";
+    base_size = base_type().nbytes
+    # Ensure the number of columns to be processed is even
+    num_cols = col_end - col_start
+    if num_cols % 2 != 0:
+        raise ValueError("Number of columns must be even.")
+    X = zeros((row_end - row_start, num_cols), base_type)
+    assert X.flags.aligned
+    strides = empty(2, uint64)
+    strides[:] = X.strides
+    strides //= base_size
+    try:
+        lib.read_fb_chunk(
+            ffi.cast(f"{base_repr} *", buff.ctypes.data),
+            nrows,
+            ncols,
+            row_start,
+            col_start,
+            row_end,
+            col_end,
+            ffi.cast(f"{base_repr} *", X.ctypes.data),
+            ffi.cast("uint64_t *", strides.ctypes.data),
         )
-        # Launch the kernel
-        read_fb_chunk_kernel(
-            blocks_per_grid,
-            threads_per_block,
-            (d_buff, nrows, ncols, row_start, col_start, row_end,
-             col_end, d_out, cp.asarray(strides), row_size)
-        )
-        # Copy the results back to host memory
-        results = cp.asnumpy(d_out)
-        return results.astype(float32)
-    else:
-        from .fb_reader import ffi, lib
-        # Use C program
-        base_type = uint8; base_repr = "uint8_t";
-        base_size = base_type().nbytes
-        # Ensure the number of columns to be processed is even
-        num_cols = col_end - col_start
-        if num_cols % 2 != 0:
-            raise ValueError("Number of columns must be even.")
-        X = zeros((row_end - row_start, num_cols), base_type)
-        assert X.flags.aligned
-        strides = empty(2, uint64)
-        strides[:] = X.strides
-        strides //= base_size
-        try:
-            lib.read_fb_chunk(
-                ffi.cast(f"{base_repr} *", buff.ctypes.data),
-                nrows,
-                ncols,
-                row_start,
-                col_start,
-                row_end,
-                col_end,
-                ffi.cast(f"{base_repr} *", X.ctypes.data),
-                ffi.cast("uint64_t *", strides.ctypes.data),
-            )
-        except Exception as e:
-            raise IOError(f"Error reading data chunk: {e}")
-        # Convert to contiguous array of type float32
-        return ascontiguousarray(X, float32)
-
-
-if is_available():
-    read_fb_chunk_kernel = cp.RawKernel(r'''
-    #define MIN(a,b) ((a > b) ? b : a)
-    extern "C" __global__    
-    void read_fb_chunk_kernel(const float *buff,
-                              const float* nrows,
-                              const float* ncols,
-		              const float* row_start,
-                              const float* col_start,
-                              const float* row_end,
-                              const float* col_end,
-                              float *out, const float *strides,
-                  	      const float* row_size) {
-    // Thread indices within the block
-    int r = blockIdx.y * blockDim.y + threadIdx.y + row_start;
-    int c = blockIdx.x * blockDim.x + threadIdx.x + col_start;
-
-    // Check if within valid data range
-    if (r < row_end and c < col_end) {
-        float buff_index = r * row_size + c // 4;
-        char b = d_buff[buff_index];
-        char b0 = b & 0x55;
-        char b1 = (b & 0xAA) >> 1;
-        char p0 = b0 ^ b1; 
-        char p1 = (b0 | b1) & b0;
-        p1 <<= 1;
-        p0 |= p1;
-        float ce = MIN(c + 4, col_end);
-
-        for (; c < ce; ++c) {
-            out[(r - row_start) * strides[0] +
-                (c - col_start) * strides[1]] = p0 & 3;
-            p0 >>= 2;
-        }
-    }
-    }''', 'read_fb_chunk_kernel')
+    except Exception as e:
+        raise IOError(f"Error reading data chunk: {e}")
+    # Convert to contiguous array of type float32
+    return ascontiguousarray(X, float32)
