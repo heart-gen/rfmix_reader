@@ -309,7 +309,8 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
     col_chunk = max(ncols // max_npartitions, col_chunk)
     X = read_fb(fn, nrows, ncols, row_chunk, col_chunk)
     # Subset populations and sum adjacent columns
-    return _subset_populations(X, npops)
+    # return _subset_populations(X, npops)
+    return X
 
 
 def _subset_populations(X: Array, npops: int) -> Array:
