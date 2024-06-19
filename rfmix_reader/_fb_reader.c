@@ -13,7 +13,7 @@
 // Function to read a chunk of the fb matrix
 void read_fb_chunk(float *buff, uint64_t nrows, uint64_t ncols,
                    uint64_t row_start, uint64_t col_start, uint64_t row_end,
-                   uint64_t col_end, float *out, uint64_t *strides) {
+                   uint64_t col_end, uint8_t *out, uint64_t *strides) {
   uint64_t r, c;
 
   // Start at the specific row and column
@@ -24,7 +24,8 @@ void read_fb_chunk(float *buff, uint64_t nrows, uint64_t ncols,
     // Process each column in the specific range
     for (c = 0; c < (col_end - col_start); ++c) {
       float value = buff[r * ncols + c];
-      out[r * strides[0] + c * strides[1]] = value;
+      uint8_t int_value = (value == 1.00000f) ? 1 : 0;
+      out[r * strides[0] + c * strides[1]] = int_value;
     }
   }
 }
