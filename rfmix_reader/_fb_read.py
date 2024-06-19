@@ -4,13 +4,14 @@ Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_bed_read.p
 """
 from numpy import (
     ascontiguousarray,
-    empty,
     float32,
     memmap,
-    uint8,
     uint64,
-    zeros,
+    uint8,
     array,
+    dtype,
+    empty,
+    zeros,
 )
 
 __all__ = ["read_fb"]
@@ -40,11 +41,12 @@ def read_fb(filepath, nrows, ncols, row_chunk, col_chunk):
         raise ValueError("row_chunk and col_chunk must be positive integers.")
 
     # Calculate row size and total size for memory mapping
-    row_size = (ncols + 3) // 4
+    row_size = ncols * dtype(float32).itemsize
     size = nrows * row_size
 
     try:
-        buff = memmap(filepath, uint8, "r", 0, shape=(size,))
+        buff = memmap(filepath, dtype=float32, mode="r",
+                      shape=(nrows, ncols))
     except Exception as e:
         raise IOError(f"Error reading file: {e}")
     
@@ -58,7 +60,7 @@ def read_fb(filepath, nrows, ncols, row_chunk, col_chunk):
         
         while col_start < ncols:
             col_end = min(col_start + col_chunk, ncols)
-            x = delayed(_read_fb_chunk, None, True, None, False)(
+            x = delayed(_read_fb_chunk)(
                 buff,
                 nrows,
                 ncols,
@@ -68,13 +70,13 @@ def read_fb(filepath, nrows, ncols, row_chunk, col_chunk):
                 col_end,
             )
             shape = (row_end - row_start, (col_end - col_start))
-            row_chunks.append(from_delayed(x, shape, float32))
+            row_chunks.append(from_delayed(x, shape, uint8))
             col_start = col_end
 
-        column_chunks.append(concatenate(row_chunks, 1, True))
+        column_chunks.append(concatenate(row_chunks, axis=1))
         row_start = row_end
         
-    return concatenate(column_chunks, 0, True)
+    return concatenate(column_chunks, axis=0)
 
 
 def _read_fb_chunk(
@@ -96,30 +98,27 @@ def _read_fb_chunk(
     dask.array: Processed array with adjacent columns summed for each population subset.
     """
     from .fb_reader import ffi, lib
-    # Use C program
-    base_type = uint8; base_repr = "uint8_t";
-    base_size = base_type().nbytes
     # Ensure the number of columns to be processed is even
     num_cols = col_end - col_start
     if num_cols % 2 != 0:
         raise ValueError("Number of columns must be even.")
-    X = zeros((row_end - row_start, num_cols), base_type)
+    X = zeros((row_end - row_start, num_cols), uint8)
     assert X.flags.aligned
     strides = empty(2, uint64)
     strides[:] = X.strides
-    strides //= base_size
+    strides //= X.itemsize
     try:
         lib.read_fb_chunk(
-            ffi.cast(f"{base_repr} *", buff.ctypes.data),
+            ffi.cast("float *", buff.ctypes.data),
             nrows,
             ncols,
             row_start,
             col_start,
             row_end,
             col_end,
-            ffi.cast(f"{base_repr} *", X.ctypes.data),
+            ffi.cast("uint8_t *", X.ctypes.data),
             ffi.cast("uint64_t *", strides.ctypes.data),
         )
     except Exception as e:
         raise IOError(f"Error reading data chunk: {e}")
-    return X
+    return ascontiguousarray(X, uint8)

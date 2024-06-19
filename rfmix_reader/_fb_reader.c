@@ -14,40 +14,26 @@
 
 // Function to read a chunk of the fb matrix
 void read_fb_chunk(uint8_t *buff, uint64_t nrows, uint64_t ncols,
-		   uint64_t row_start, uint64_t col_start, uint64_t row_end,
-		   uint64_t col_end, uint8_t *out, uint64_t *strides) {
-  uint8_t b;
+                   uint64_t row_start, uint64_t col_start, uint64_t row_end,
+                   uint64_t col_end, uint8_t *out, uint64_t *strides) {
   uint64_t r, c, ce;
-  uint64_t row_size;
-  
-  // in bytes
-  row_size = (ncols + 3) / 4 * sizeof(int); 
+  uint64_t row_size = ncols * sizeof(float); 
 
-  r = row_start;
-  buff += r * row_size + col_start / 4;
+  // Start at the specific row and column
+  float *float_buff = (float *)buff;
+  float_buff += row_start * ncols + col_start;
 
-  while (r < row_end) {
+  // Process each row in the specific range
+  for (r = row_start; r < row_end; ++r) {
+    // Process each column in the specific range
     for (c = col_start; c < col_end;) {
-      // Assuming buff is stored in little-endian format
-      // (needs adjustment for big-endian)
-      b = buff[(c - col_start) / 4];
-
-      // Extract bits using bitwise operations
-      uint8_t b0 = b & 0xFF;
-      uint8_t b1 = (b >> 8) & 0xFF; // Get second least significant byte
-      uint8_t p0 = b0 ^ b1;
-      uint8_t p1 = (b0 | b1) & b0;
-      p1 <<= 1;
-      p0 |= p1;
-
-      ce = MIN(c + 4, col_end);
+      float value = float_buff[(r - row_start) * ncols + (c - col_start)];
+      uint8_t int_value = (uint8_t)roundf(value);
+      ce = MIN(c + 1, col_end);
       for (; c < ce; ++c) {
-        out[(r - row_start) * strides[0] +
-	    (c - col_start) * strides[1]] = p0 & 3;
-        p0 >>= 2;
+	out[(r - row_start) * strides[0] +
+	    (c - col_start) * strides[1]] = int_value;
       }
     }
-    ++r;
-    buff += row_size;
   }
 }
