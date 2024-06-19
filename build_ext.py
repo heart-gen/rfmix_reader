@@ -36,8 +36,7 @@ c_content = read_lines(c_file)
 # Set the source code and language
 ffibuilder.set_source("rfmix_reader.fb_reader",
                       c_content, language="c",
-                      include_dirs=include_dirs,
-                      extra_compile_args=["-fopenmp", "-mavx"])
+                      include_dirs=include_dirs)
 
 
 if __name__ == "__main__":
