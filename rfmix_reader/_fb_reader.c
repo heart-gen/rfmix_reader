@@ -10,30 +10,23 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-#define MIN(a, b) ((a > b) ? b : a)
-
 // Function to read a chunk of the fb matrix
-void read_fb_chunk(uint8_t *buff, uint64_t nrows, uint64_t ncols,
+void read_fb_chunk(float *buff, uint64_t nrows, uint64_t ncols,
                    uint64_t row_start, uint64_t col_start, uint64_t row_end,
                    uint64_t col_end, uint8_t *out, uint64_t *strides) {
-  uint64_t r, c, ce;
+  uint64_t r, c;
   uint64_t row_size = ncols * sizeof(float); 
 
   // Start at the specific row and column
-  float *float_buff = (float *)buff;
-  float_buff += row_start * ncols + col_start;
+  buff += row_start * ncols + col_start;
 
   // Process each row in the specific range
-  for (r = row_start; r < row_end; ++r) {
+  for (r = 0; r < (row_end - row_start); ++r) {
     // Process each column in the specific range
-    for (c = col_start; c < col_end;) {
-      float value = float_buff[(r - row_start) * ncols + (c - col_start)];
+    for (c = 0; c < (col_end - col_start); ++c) {
+      float value = buff[r * ncols + c];
       uint8_t int_value = (uint8_t)roundf(value);
-      ce = MIN(c + 1, col_end);
-      for (; c < ce; ++c) {
-	out[(r - row_start) * strides[0] +
-	    (c - col_start) * strides[1]] = int_value;
-      }
+      out[r * strides[0] + c * strides[1]] = int_value;
     }
   }
 }
