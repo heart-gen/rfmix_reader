@@ -7,7 +7,7 @@ from numpy import (
     float32,
     memmap,
     uint64,
-    array,
+    int32,
     empty,
     zeros,
 )
@@ -40,25 +40,17 @@ def read_fb(
     if row_chunk <= 0 or col_chunk <= 0:
         raise ValueError("row_chunk and col_chunk must be positive integers.")
 
-    # Calculate row size and total size for memory mapping
-    try:
-        buff = memmap(filepath, float32, "r",
-                      0, shape=(nrows, ncols))
-    except Exception as e:
-        raise IOError(f"Error reading file: {e}")
-    
     row_start = 2 # Skip the first 2 rows
     column_chunks: list[Array] = []
-    
     while row_start < nrows:
         row_end = min(row_start + row_chunk, nrows)
         col_start = 4 # Skip the first 4 columns
         row_chunks: list[Array] = []
-        
         while col_start < ncols:
             col_end = min(col_start + col_chunk, ncols)
+            
             x = delayed(_read_fb_chunk, None, True, None, False)(
-                buff,
+                filepath,
                 nrows,
                 ncols,
                 row_start,
@@ -66,6 +58,7 @@ def read_fb(
                 col_start,
                 col_end,
             )
+            
             shape = (row_end - row_start, col_end - col_start)
             row_chunks.append(from_delayed(x, shape, float32))
             col_start = col_end
@@ -78,7 +71,7 @@ def read_fb(
 
 
 def _read_fb_chunk(
-        buff, nrows, ncols, row_start, row_end, col_start, col_end
+        filepath, nrows, ncols, row_start, row_end, col_start, col_end
 ):
     """
     Read a chunk of data from the buffer and process it based on populations.
@@ -98,34 +91,40 @@ def _read_fb_chunk(
     from .fb_reader import ffi, lib
     
     # Formatting for C
-    base_type = float32
-    base_size = base_type().nbytes
-    base_repr = "float"
+    base_size = float32().nbytes
     
     # Ensure the number of columns to be processed is even
     num_cols = col_end - col_start
     if num_cols % 2 != 0:
         raise ValueError("Number of columns must be even.")
     
-    X = empty((row_end - row_start, num_cols), base_type)
+    X = zeros((row_end - row_start, num_cols), int32)
     assert X.flags.aligned
     
     strides = empty(2, uint64)
     strides[:] = X.strides
     strides //= base_size
     
+    # Calculate row size and total size for memory mapping
+    try:
+        size = nrows * ncols
+        buff = memmap(filepath, dtype=float32,
+                      mode="r", shape=(size,))
+    except Exception as e:
+        raise IOError(f"Error reading file: {e}")
+    
     try:
         lib.read_fb_chunk(
-            ffi.cast(f"{base_repr} *", buff.ctypes.data),
+            ffi.cast(f"float *", buff.ctypes.data),
             nrows,
             ncols,
             row_start,
             col_start,
             row_end,
             col_end,
-            ffi.cast(f"{base_repr} *", X.ctypes.data),
+            ffi.cast("int32_t *", X.ctypes.data),
             ffi.cast("uint64_t *", strides.ctypes.data),
         )
     except Exception as e:
         raise IOError(f"Error reading data chunk: {e}")
-    return ascontiguousarray(X, float32)
+    return ascontiguousarray(X, int32)
