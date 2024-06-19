@@ -31,4 +31,4 @@ def get_sample_names(rf_q: DataFrame):
 def _testing():
     from rfmix_reader import read_rfmix
     prefix_path = "../examples/two_populations/out/"
-    loci, rf_q, X = read_rfmix(prefix_path, verbose=True)
+    loci, rf_q, admix = read_rfmix(prefix_path, verbose=True)

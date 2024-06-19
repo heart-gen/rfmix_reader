@@ -7,7 +7,6 @@ from numpy import (
     empty,
     float32,
     memmap,
-    uint8,
     uint64,
     zeros,
     array,
@@ -97,7 +96,7 @@ def _read_fb_chunk(
     """
     from .fb_reader import ffi, lib
     # Use C program
-    base_type = float32; base_repr = "double";
+    base_type = float32; base_repr = "float";
     base_size = base_type().nbytes
     # Ensure the number of columns to be processed is even
     num_cols = col_end - col_start
@@ -122,5 +121,4 @@ def _read_fb_chunk(
         )
     except Exception as e:
         raise IOError(f"Error reading data chunk: {e}")
-    # Convert to contiguous array of type float32
-    return ascontiguousarray(X, float32)
+    return X
