@@ -70,7 +70,7 @@ def read_fb(filepath, nrows, ncols, row_chunk, col_chunk):
                 col_end,
             )
             shape = (row_end - row_start, (col_end - col_start))
-            row_chunks.append(from_delayed(x, shape, uint8))
+            row_chunks.append(from_delayed(x, shape, float32))
             col_start = col_end
 
         column_chunks.append(concatenate(row_chunks, axis=1))
@@ -102,7 +102,7 @@ def _read_fb_chunk(
     num_cols = col_end - col_start
     if num_cols % 2 != 0:
         raise ValueError("Number of columns must be even.")
-    X = zeros((row_end - row_start, num_cols), uint8)
+    X = zeros((row_end - row_start, num_cols), float32)
     assert X.flags.aligned
     strides = empty(2, uint64)
     strides[:] = X.strides
@@ -116,9 +116,9 @@ def _read_fb_chunk(
             col_start,
             row_end,
             col_end,
-            ffi.cast("uint8_t *", X.ctypes.data),
+            ffi.cast("float *", X.ctypes.data),
             ffi.cast("uint64_t *", strides.ctypes.data),
         )
     except Exception as e:
         raise IOError(f"Error reading data chunk: {e}")
-    return ascontiguousarray(X, uint8)
+    return ascontiguousarray(X, float32)
