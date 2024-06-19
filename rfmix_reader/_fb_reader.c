@@ -27,13 +27,12 @@ void read_fb_chunk(float *matrix, uint64_t nrows, uint64_t ncols,
     for (c = col_start; c < col_end; c += 8) {
       // Load 8 values from the matrix using AVX instructions
       __m256 values = _mm256_loadu_ps(matrix + (r - row_start) * row_size + (c - col_start));
-      
+
       // Store the 8 values to the output buffer
       _mm256_storeu_ps(out + (r - row_start) * strides[0] + (c - col_start) * strides[1], values);
     }
 
     // Handle the remaining columns
-    #pragma omp simd
     for (; c < col_end; ++c) {
       // Read the value from the matrix
       float value = matrix[(r - row_start) * row_size + (c - col_start)];
