@@ -4,6 +4,6 @@
  * This is modified to handle a matrix of floating-point numbers.
  */
 
-void read_fb_chunk(double *matrix, uint64_t nrows, uint64_t ncols,
+void read_fb_chunk(float *matrix, uint64_t nrows, uint64_t ncols,
 		   uint64_t row_start, uint64_t col_start, uint64_t row_end,
-		   uint64_t col_end, double *out, uint64_t *strides);
+		   uint64_t col_end, float *out, uint64_t *strides);
