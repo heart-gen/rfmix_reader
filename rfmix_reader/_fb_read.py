@@ -7,6 +7,7 @@ from numpy import (
     empty,
     float32,
     memmap,
+    uint8,
     uint64,
     zeros,
     array,
@@ -43,7 +44,7 @@ def read_fb(filepath, nrows, ncols, row_chunk, col_chunk):
     size = nrows * row_size
 
     try:
-        buff = memmap(filepath, float32, "r", 0, shape=(size,))
+        buff = memmap(filepath, uint8, "r", 0, shape=(size,))
     except Exception as e:
         raise IOError(f"Error reading file: {e}")
     
@@ -96,7 +97,7 @@ def _read_fb_chunk(
     """
     from .fb_reader import ffi, lib
     # Use C program
-    base_type = float32; base_repr = "float";
+    base_type = uint8; base_repr = "uint8_t";
     base_size = base_type().nbytes
     # Ensure the number of columns to be processed is even
     num_cols = col_end - col_start
