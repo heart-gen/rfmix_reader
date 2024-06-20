@@ -7,7 +7,6 @@ from numpy import (
     float32,
     memmap,
     uint64,
-    int32,
     zeros,
 )
 
@@ -102,7 +101,7 @@ def _read_fb_chunk(
     if num_cols % 2 != 0:
         raise ValueError("Number of columns must be even.")
     
-    X = zeros((row_end - row_start, num_cols), int32)
+    X = zeros((row_end - row_start, num_cols), float32)
     assert X.flags.aligned
     
     try:
@@ -114,8 +113,8 @@ def _read_fb_chunk(
             col_start,
             row_end,
             col_end,
-            ffi.cast("int32_t *", X.ctypes.data),
+            ffi.cast("float *", X.ctypes.data),
         )
     except Exception as e:
         raise IOError(f"Error reading data chunk: {e}")
-    return ascontiguousarray(X, int32)
+    return ascontiguousarray(X, float32)

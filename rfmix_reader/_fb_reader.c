@@ -11,45 +11,21 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define MIN(a, b) ((a > b) ? b : a)
-#define UNROLL_FACTOR 8
-
 // Function to read a chunk of the fb matrix
 void read_fb_chunk(float *buff, uint64_t nrows, uint64_t ncols,
                    uint64_t row_start, uint64_t col_start, uint64_t row_end,
-                   uint64_t col_end, int32_t *out) {
+                   uint64_t col_end, float *out) {
   uint64_t r, c;
-  uint64_t row_size = ncols;
-  uint64_t unrolled_cols = (col_end - col_start) / UNROLL_FACTOR * UNROLL_FACTOR;
-  uint64_t remaining_cols = col_end - col_start - unrolled_cols;
-
-  // Process each row in the specific range
-  for (r = row_start; r < row_end; ++r) {
-    // Process each column in unrolled chunks
-    for (c = col_start; c < col_start + unrolled_cols; c += UNROLL_FACTOR) {
-      out[(r - row_start) * row_size +
-	  (c - col_start) + 0] = (int32_t)buff[r * row_size + c + 0];
-      out[(r - row_start) * row_size +
-	  (c - col_start) + 1] = (int32_t)buff[r * row_size + c + 1];
-      out[(r - row_start) * row_size +
-	  (c - col_start) + 2] = (int32_t)buff[r * row_size + c + 2];
-      out[(r - row_start) * row_size +
-	  (c - col_start) + 3] = (int32_t)buff[r * row_size + c + 3];
-      out[(r - row_start) * row_size +
-	  (c - col_start) + 4] = (int32_t)buff[r * row_size + c + 4];
-      out[(r - row_start) * row_size +
-	  (c - col_start) + 5] = (int32_t)buff[r * row_size + c + 5];
-      out[(r - row_start) * row_size +
-	  (c - col_start) + 6] = (int32_t)buff[r * row_size + c + 6];
-      out[(r - row_start) * row_size +
-	  (c - col_start) + 7] = (int32_t)buff[r * row_size + c + 7];
+  
+  buff += row_start * ncols + col_start;
+    
+  while (r < row_end) {
+    for (c = col_start; c < col_start; ++c) {
+      out[(r - row_start) * ncols +
+	  (c - col_start)] = buff[r * ncols + c];
     }
-
-    // Process remaining columns
-    for (c = col_start + unrolled_cols; c < col_end; ++c) {
-      out[(r - row_start) * row_size +
-	  (c - col_start)] = (int32_t)buff[r * row_size + c];
-    }
+    ++r;
+    buff += ncols;
   }
 }
 
