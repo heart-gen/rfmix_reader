@@ -104,8 +104,8 @@ def read_rfmix(
         admix = _read_file(
             fn,
             lambda f: _read_fb(f["fb.tsv"], nsamples,
-                               nmarkers[f["fb.tsv"]], pops, Chunk(),
-                               temp_dir),
+                               nmarkers[f["fb.tsv"]], pops,
+                               temp_dir, Chunk()),
             pbar,
         )
         pbar.close()
@@ -290,7 +290,7 @@ def _read_Q_noi(fn: str) -> DataFrame:
 
 
 def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
-             chunk: Optional[Chunk] = None, temp_dir: str) -> Array:
+             temp_dir: str, chunk: Optional[Chunk] = None) -> Array:
     """
     Read the forward-backward matrix from a file as a Dask Array.
 
