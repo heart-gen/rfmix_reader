@@ -97,9 +97,6 @@ def _read_fb_chunk(
     """
     from .fb_reader import ffi, lib
     
-    # Formatting for C
-    base_size = float32().nbytes
-    
     # Ensure the number of columns to be processed is even
     num_cols = col_end - col_start
     if num_cols % 2 != 0:
