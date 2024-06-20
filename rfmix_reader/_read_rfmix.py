@@ -99,6 +99,7 @@ def read_rfmix(
     # Loading local ancestry by loci
     fb_files = [f["fb.tsv"] for f in fn]
     with TemporaryDirectory() as temp_dir:
+        print(f"Location of temporary director: {temp_dir}")
         generate_binary_files(fb_files, join(temp_dir, ""), verbose)
         pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
         admix = _read_file(
