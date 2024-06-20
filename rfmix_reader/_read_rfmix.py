@@ -66,9 +66,8 @@ def read_rfmix(
         This is in order of the populations see `rf_q`.
     """
     from tqdm import tqdm
-    from shutil import rmtree
-    from tempfile import mkdtemp
     from dask.array import concatenate
+    from tempfile import TemporaryDirectory
     # Get file prefixes
     file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("chr*")])
     if len(file_prefixes) == 1:
@@ -99,19 +98,19 @@ def read_rfmix(
     rf_q = concat(rf_q, axis=0, ignore_index=True)
     # Loading local ancestry by loci
     fb_files = [f["fb.tsv"] for f in fn]
-    temp_dir = mkdtemp()
-    print(f"Location of temporary director: {temp_dir}")
-    generate_binary_files(fb_files, join(temp_dir, ""), verbose)
-    pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
-    admix = _read_file(
-        fn,
-        lambda f: _read_fb(f["fb.tsv"], nsamples,
-                           nmarkers[f["fb.tsv"]], pops,
-                           temp_dir, Chunk()),
-        pbar,
-    )
-    pbar.close()
-    rmtree(temp_dir)
+    working_dir = "./tmp/"
+    with TemporaryDirectory(dir=working_dir) as temp_dir:
+        print(f"Created temporary directory: {temp_dir}")
+        generate_binary_files(fb_files, join(temp_dir, ""), verbose)
+        pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
+        admix = _read_file(
+            fn,
+            lambda f: _read_fb(f["fb.tsv"], nsamples,
+                               nmarkers[f["fb.tsv"]], pops,
+                               temp_dir, Chunk()),
+            pbar,
+        )
+        pbar.close()
     admix = concatenate(admix, axis=0)
     return loci, rf_q, admix
 
