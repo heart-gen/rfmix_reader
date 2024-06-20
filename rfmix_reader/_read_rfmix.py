@@ -66,6 +66,7 @@ def read_rfmix(
         This is in order of the populations see `rf_q`.
     """
     from tqdm import tqdm
+    from os import makedirs
     from dask.array import concatenate
     from tempfile import TemporaryDirectory
     # Get file prefixes
@@ -99,6 +100,7 @@ def read_rfmix(
     # Loading local ancestry by loci
     fb_files = [f["fb.tsv"] for f in fn]
     working_dir = "./tmp/"
+    makedirs(working_dir, exist_ok=True)
     with TemporaryDirectory(dir=working_dir) as temp_dir:
         print(f"Created temporary directory: {temp_dir}")
         generate_binary_files(fb_files, join(temp_dir, ""), verbose)
