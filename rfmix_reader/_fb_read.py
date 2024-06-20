@@ -8,7 +8,6 @@ from numpy import (
     memmap,
     uint64,
     int32,
-    empty,
     zeros,
 )
 
@@ -78,7 +77,7 @@ def read_fb(
     return X
 
 
-def _read_fb_chunk_old(
+def _read_fb_chunk(
         buff, nrows, ncols, row_start, row_end, col_start, col_end
 ):
     """
@@ -109,10 +108,6 @@ def _read_fb_chunk_old(
     X = zeros((row_end - row_start, num_cols), int32)
     assert X.flags.aligned
     
-    strides = empty(2, uint64)
-    strides[:] = X.strides
-    strides //= base_size
-    
     try:
         lib.read_fb_chunk(
             ffi.cast(f"float *", buff.ctypes.data),
@@ -123,81 +118,7 @@ def _read_fb_chunk_old(
             row_end,
             col_end,
             ffi.cast("int32_t *", X.ctypes.data),
-            ffi.cast("uint64_t *", strides.ctypes.data),
         )
     except Exception as e:
         raise IOError(f"Error reading data chunk: {e}")
     return ascontiguousarray(X, int32)
-
-def _read_fb_chunk(
-        buff, nrows, ncols, row_start, row_end, col_start, col_end
-):
-    """
-    Read a chunk of data from the buffer and process it based on populations.
-
-    Parameters:
-    buff (memmap): Memory-mapped buffer containing the data.
-    nrows (int): Total number of rows in the dataset.
-    ncols (int): Total number of columns in the dataset.    
-    row_start (int): Starting row index for the chunk.
-    row_end (int): Ending row index for the chunk.
-    col_start (int): Starting column index for the chunk.
-    col_end (int): Ending column index for the chunk.
-
-    Returns:
-    dask.array: Processed array with adjacent columns summed for each population subset.
-    """
-    # Ensure the number of columns to be processed is even
-    num_cols = col_end - col_start
-    if num_cols % 2 != 0:
-        raise ValueError("Number of columns must be even.")
-    
-    X = zeros((row_end - row_start, num_cols), int32)
-    assert X.flags.aligned
-    
-    try:
-        X = read_fb_chunk(
-            buff,
-            nrows,
-            ncols,
-            row_start,
-            col_start,
-            row_end,
-            col_end
-        )
-    except Exception as e:
-        raise IOError(f"Error reading data chunk: {e}")
-    return ascontiguousarray(X, int32)
-
-
-def read_fb_chunk(
-        buff, nrows, ncols, row_start, col_start, row_end, col_end
-):
-    """
-    Read a chunk of the fb matrix and convert floating-point values to integers.
-
-    Parameters:
-    buff (np.ndarray): Input buffer containing floating-point values.
-    nrows (int): Total number of rows in the dataset.
-    ncols (int): Total number of columns in the dataset.
-    row_start (int): Starting row index for the chunk.
-    col_start (int): Starting column index for the chunk.
-    row_end (int): Ending row index for the chunk.
-    col_end (int): Ending column index for the chunk.
-
-    Returns:
-    np.ndarray: Output array with integer values.
-    """
-    row_size = ncols
-
-    # Initialize the output array
-    out_shape = (row_end - row_start, col_end - col_start)
-    out = zeros(out_shape, dtype=int32)
-
-    # Process each row in the specific range
-    for r in range(row_start, row_end):
-        # Process each column in the specific range
-        for c in range(col_start, col_end):
-            value = buff[r, c]
-            out[r - row_start, c - col_start] = int(value)
-    return out
