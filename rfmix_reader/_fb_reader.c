@@ -1,65 +1,42 @@
 /*
  * Adapted from the `_bed_reader.h` script in the `pandas-plink` package.
  * Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_bed_reader.h
- * This is modified to handle a matrix of floating-point numbers converted
- * to integer for reduced memory.
  */
 
 #include <math.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
+
+#define MIN(a, b) ((a > b) ? b : a)
 
 // Function to read a chunk of the fb matrix
-void read_fb_chunk(float *buff, uint64_t nrows, uint64_t ncols,
+void read_fb_chunk(uint8_t *buff, uint64_t nrows, uint64_t ncols,
                    uint64_t row_start, uint64_t col_start, uint64_t row_end,
-                   uint64_t col_end, float *out) {
-  uint64_t r, c;
-  
-  buff += row_start * ncols + col_start;
+                   uint64_t col_end, uint8_t *out, uint64_t *strides) {
+  uint64_t r, c, ce;
+  uint64_t row_size = (ncols + 3) / 4; // in bytes
+
+  // Adjust buffer pointer to the start of the data
+  buff += row_start * row_size + col_start / 4;
     
-  while (r < row_end) {
-    for (c = col_start; c < col_start; ++c) {
-      out[(r - row_start) * ncols +
-	  (c - col_start)] = buff[r * ncols + c];
+  for (r = row_start; r < row_end; ++r) {
+    for (c = col_start; c < col_start;) {
+      uint8_t b = buff[(c - col_start) / 4];
+      uint8_t b0 = b & 0x55;
+      uint8_t b1 = (b & 0xAA) >> 1;
+      uint8_t p0 = b0 ^ b1;
+      uint8_t p1 = (b0 | b1) & b0;
+      p1 <<= 1;
+      p0 |= p1;
+      
+      ce = MIN(c + 4, col_end);
+      for (; c < ce; ++c) {
+	out[(r - row_start) * strides[0] +
+	    (c - col_start) * strides[1]] = p0 & 3;
+	p0 >>= 2;
+      }
     }
-    ++r;
-    buff += ncols;
+    buff += row_size;
   }
 }
-
-/* int main() { */
-/*     // Example usage */
-/*     // Sample matrix (for demonstration purposes) */
-/*     float matrix[4][4] = { */
-/*         {0.0000, 1.0000, 0.0000, 1.0000}, */
-/*         {1.0000, 0.0000, 1.0000, 0.0000}, */
-/*         {0.0000, 1.0000, 0.0000, 1.0000}, */
-/*         {1.0000, 0.0000, 1.0000, 0.0000} */
-/*     }; */
-/*     uint64_t nrows = 4; */
-/*     uint64_t ncols = 4; */
-
-/*     // Define start and end positions (for example purposes) */
-/*     uint64_t row_start = 1, col_start = 1, row_end = 3, col_end = 3; */
-
-/*     // Output buffer */
-/*     int32_t out[2][2]; */
-/*     memset(out, 0, sizeof(out)); */
-
-/*     // Read the chunk */
-/*     read_fb_chunk(&matrix[0][0], nrows, ncols, row_start, */
-/* 		  col_start, row_end, col_end, &out[0][0]); */
-
-/*     // Print the result */
-/*     printf("Output:\n"); */
-/*     for (uint64_t i = 0; i < row_end - row_start; ++i) { */
-/*         for (uint64_t j = 0; j < col_end - col_start; ++j) { */
-/*             printf("%d ", out[i][j]); */
-/*         } */
-/*         printf("\n"); */
-/*     } */
-
-/*     return 0; */
-/* } */

@@ -8,6 +8,8 @@ from numpy import (
     memmap,
     uint64,
     zeros,
+    empty,
+    uint8,
 )
 
 __all__ = ["read_fb"]
@@ -20,7 +22,7 @@ def read_fb(
     2 rows (comments) and 4 columns (loci annotation).
 
     Parameters:
-    filepath (str): Path to the file.
+    filepath (str): Path to the binary file.
     nrows (int): Total number of rows in the dataset.
     ncols (int): Total number of columns in the dataset.
     row_chunk (int): Number of rows to process in each chunk.
@@ -33,24 +35,22 @@ def read_fb(
     from dask.array import concatenate, from_delayed, Array
 
     # Validate input parameters
-    if nrows <= 2 or ncols <= 4:
-        raise ValueError("Number of rows must be greater than 2 and number of columns must be greater than 4.")
     if row_chunk <= 0 or col_chunk <= 0:
         raise ValueError("row_chunk and col_chunk must be positive integers.")
 
     # Calculate row size and total size for memory mapping
     try:
         size = nrows * ncols
-        buff = memmap(filepath, dtype=float32,
+        buff = memmap(filepath, dtype="float32",
                       mode="r", shape=(size,))
     except Exception as e:
         raise IOError(f"Error reading file: {e}")
     
-    row_start = 2 # Skip the first 2 rows
+    row_start = 0
     column_chunks: list[Array] = []
     while row_start < nrows:
         row_end = min(row_start + row_chunk, nrows)
-        col_start = 4 # Skip the first 4 columns
+        col_start = 0
         row_chunks: list[Array] = []
         while col_start < ncols:
             col_end = min(col_start + col_chunk, ncols)
@@ -95,25 +95,35 @@ def _read_fb_chunk(
     dask.array: Processed array with adjacent columns summed for each population subset.
     """
     from .fb_reader import ffi, lib
+
+    # C function headers
+    base_type = uint8
+    base_size = base_type().nbytes
+    base_repr = "uint8_t"
     
     # Ensure the number of columns to be processed is even
     num_cols = col_end - col_start
     if num_cols % 2 != 0:
         raise ValueError("Number of columns must be even.")
     
-    X = zeros((row_end - row_start, num_cols), float32)
+    X = zeros((row_end - row_start, num_cols), base_type)
     assert X.flags.aligned
+
+    strides = empty(2, uint64)
+    strides[:] = X.strides
+    strides //= base_size
     
     try:
         lib.read_fb_chunk(
-            ffi.cast(f"float *", buff.ctypes.data),
+            ffi.cast(f"{base_repr} *", buff.ctypes.data),
             nrows,
             ncols,
             row_start,
             col_start,
             row_end,
             col_end,
-            ffi.cast("float *", X.ctypes.data),
+            ffi.cast(f"{base_repr} *", X.ctypes.data),
+            ffi.cast("uint64_t *", strides.ctypes.data),
         )
     except Exception as e:
         raise IOError(f"Error reading data chunk: {e}")

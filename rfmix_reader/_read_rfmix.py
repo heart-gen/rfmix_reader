@@ -13,6 +13,8 @@ from typing import Optional, Callable, List, Tuple
 from ._chunk import Chunk
 from ._fb_read import read_fb
 from ._utils import set_gpu_environment
+from ._utils import generate_binary_files
+
 
 try:
     from torch.cuda import is_available
@@ -65,6 +67,7 @@ def read_rfmix(
     """
     from tqdm import tqdm
     from dask.array import concatenate
+    from tempfile import TemporaryDirectory
     # Get file prefixes
     file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("chr*")])
     if len(file_prefixes) == 1:
@@ -94,14 +97,18 @@ def read_rfmix(
     pops = rf_q[0].drop(["sample_id", "chrom"], axis=1).columns.values
     rf_q = concat(rf_q, axis=0, ignore_index=True)
     # Loading local ancestry by loci
-    pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
-    admix = _read_file(
-        fn,
-        lambda f: _read_fb(f["fb.tsv"], nsamples,
-                           nmarkers[f["fb.tsv"]], pops, Chunk()),
-        pbar,
-    )
-    pbar.close()
+    fb_files = [f["fb.tsv"] for f in fn]
+    with TemporaryDirectory() as temp_dir:
+        generate_binary_files(fb_files, join(temp_dir, ""), verbose)
+        pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
+        admix = _read_file(
+            fn,
+            lambda f: _read_fb(f["fb.tsv"], nsamples,
+                               nmarkers[f["fb.tsv"]], pops, Chunk(),
+                               temp_dir),
+            pbar,
+        )
+        pbar.close()
     admix = concatenate(admix, axis=0)    
     return loci, rf_q, admix
 
@@ -283,7 +290,7 @@ def _read_Q_noi(fn: str) -> DataFrame:
 
 
 def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
-             chunk: Optional[Chunk] = None) -> Array:
+             chunk: Optional[Chunk] = None, temp_dir: str) -> Array:
     """
     Read the forward-backward matrix from a file as a Dask Array.
 
@@ -300,14 +307,16 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
     dask.array.Array: The forward-backward matrix as a Dask Array.
     """
     npops = len(pops)
-    nrows = nloci + 2
-    ncols = (nsamples * npops * 2) + 4
+    nrows = nloci
+    ncols = (nsamples * npops * 2)
     row_chunk = nrows if chunk.nloci is None else min(nrows, chunk.nloci)
     col_chunk = ncols if chunk.nsamples is None else min(ncols, chunk.nsamples)
     max_npartitions = 16_384
     row_chunk = max(nrows // max_npartitions, row_chunk)
     col_chunk = max(ncols // max_npartitions, col_chunk)
-    X = read_fb(fn, nrows, ncols, row_chunk, col_chunk)
+    binary_fn = join(temp_dir,
+                     basename(fn).split(".")[0] + ".bin")
+    X = read_fb(binary_fn, nrows, ncols, row_chunk, col_chunk)
     # Subset populations and sum adjacent columns
     return _subset_populations(X, npops)
 
