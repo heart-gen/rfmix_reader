@@ -66,8 +66,9 @@ def read_rfmix(
     """
     from tqdm import tqdm
     from os import makedirs
+    from shutil import rmtree
+    from tempfile import mkdtemp
     from dask.array import concatenate
-    from tempfile import TemporaryDirectory
     # Get file prefixes
     file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("chr*")])
     if len(file_prefixes) == 1:
@@ -82,8 +83,7 @@ def read_rfmix(
         msg = "Multiple files read in this order:"
         print(f"{msg} {[basename(f) for f in file_prefixes]}")
     # Adjust loci indices and concatenate
-    nmarkers = {}
-    index_offset = 0
+    nmarkers = {}; index_offset = 0
     for i, bi in enumerate(loci):
         nmarkers[fn[i]["fb.tsv"]] = bi.shape[0]
         bi["i"] += index_offset
@@ -100,18 +100,18 @@ def read_rfmix(
     fb_files = [f["fb.tsv"] for f in fn]
     working_dir = "./tmp/"
     makedirs(working_dir, exist_ok=True)
-    with TemporaryDirectory(dir=working_dir) as temp_dir:
-        print(f"Created temporary directory: {temp_dir}")
-        generate_binary_files(fb_files, temp_dir)
-        pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
-        admix = _read_file(
-            fn,
-            lambda f: _read_fb(f["fb.tsv"], nsamples,
-                               nmarkers[f["fb.tsv"]], pops,
-                               temp_dir, Chunk()),
-            pbar,
-        )
-        pbar.close()
+    temp_dir = mkdtemp(dir=working_dir)
+    print(f"Created temporary directory: {temp_dir}")
+    generate_binary_files(fb_files, temp_dir)
+    pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
+    admix = _read_file(
+        fn,
+        lambda f: _read_fb(f["fb.tsv"], nsamples,
+                           nmarkers[f["fb.tsv"]], pops,
+                           temp_dir, Chunk()),
+        pbar,
+    )
+    pbar.close()
     admix = concatenate(admix, axis=0)
     return loci, rf_q, admix
 

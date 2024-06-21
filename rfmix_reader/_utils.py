@@ -1,5 +1,7 @@
+from tqdm import tqdm
 from numpy import float32, array
 from os.path import join, basename
+from multiprocessing import Pool, cpu_count
 from torch.cuda import (
     device_count,
     get_device_properties,
@@ -32,25 +34,27 @@ def _text_to_binary(input_file, output_file):
         # Skip the first two rows
         next(infile)
         next(infile)
-        # Convert the list of lines to a 2D NumPy array
-        data = array([line.split()[4:] for line in infile], dtype=float32)
-        # Write the binary data to the output file
-        data.tofile(outfile)
+        # Process and write each line individually
+        for line in infile:
+            data = array(line.split()[4:], dtype=float32)
+            # Write the binary data to the output file
+            data.tofile(outfile)
 
 
-def _process_file(file_path, temp_dir):
+def _process_file(args):
+    file_path, temp_dir = args
     input_file = file_path
     output_file = join(temp_dir,
                        basename(file_path).split(".")[0] + ".bin")
     _text_to_binary(input_file, output_file)
-    
+
 
 def generate_binary_files(fb_files, temp_dir):
-    from tqdm import tqdm
-    from concurrent.futures import ThreadPoolExecutor
     print("Converting fb files to binary!")
-    with tqdm(total=len(fb_files)) as pbar:
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            for _ in executor.map(_process_file, fb_files, [temp_dir] * len(fb_files)):
-                pbar.update()
-
+    # Determine the number of CPU cores to use
+    num_cores = min(cpu_count(), len(fb_files))
+    # Create a list of arguments for each file
+    args_list = [(file_path, temp_dir) for file_path in fb_files]
+    with Pool(num_cores) as pool:
+        list(tqdm(pool.imap(_process_file, args_list),
+                  total=len(fb_files)))
