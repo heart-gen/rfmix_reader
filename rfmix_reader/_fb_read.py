@@ -41,8 +41,8 @@ def read_fb(
     # Calculate row size and total size for memory mapping
     try:
         size = nrows * ncols
-        buff = memmap(filepath, dtype="float32",
-                      mode="r", shape=(size,))
+        buff = memmap(filepath, dtype="uint8",
+                      mode="r", offset=3, shape=(size,))
     except Exception as e:
         raise IOError(f"Error reading file: {e}")
     

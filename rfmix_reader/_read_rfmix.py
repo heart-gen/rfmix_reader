@@ -12,7 +12,7 @@ from os.path import basename, dirname, join, exists
 
 from ._chunk import Chunk
 from ._fb_read import read_fb
-from ._utils import set_gpu_environment, process_file
+from ._utils import set_gpu_environment, _process_file
 
 
 try:
