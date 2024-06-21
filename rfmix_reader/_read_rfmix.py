@@ -6,9 +6,9 @@ import warnings
 from glob import glob
 from pathlib import Path
 from dask.array import Array
-from os.path import basename, dirname, join
 from collections import OrderedDict as odict
 from typing import Optional, Callable, List, Tuple
+from os.path import basename, dirname, join, exists
 
 from ._chunk import Chunk
 from ._fb_read import read_fb
@@ -103,7 +103,7 @@ def read_rfmix(
     makedirs(working_dir, exist_ok=True)
     with TemporaryDirectory(dir=working_dir) as temp_dir:
         print(f"Created temporary directory: {temp_dir}")
-        generate_binary_files(fb_files, join(temp_dir, ""), verbose)
+        generate_binary_files(fb_files, join(temp_dir, ""))
         pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
         admix = _read_file(
             fn,
@@ -320,7 +320,10 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
     col_chunk = max(ncols // max_npartitions, col_chunk)
     binary_fn = join(temp_dir,
                      basename(fn).split(".")[0] + ".bin")
-    X = read_fb(binary_fn, nrows, ncols, row_chunk, col_chunk)
+    if exists(binary_fn):
+        X = read_fb(binary_fn, nrows, ncols, row_chunk, col_chunk)
+    else:
+        raise FileNotFoundError(f"File {binary_fn} not found.")
     # Subset populations and sum adjacent columns
     return _subset_populations(X, npops)
 

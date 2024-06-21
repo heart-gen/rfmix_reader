@@ -46,17 +46,12 @@ def _process_file(file_path, temp_dir):
     _text_to_binary(input_file, output_file)
     
 
-def generate_binary_files(fb_files, temp_dir, verbose):
+def generate_binary_files(fb_files, temp_dir):
     from tqdm import tqdm
-    from concurrent.futures import as_completed
-    from concurrent.futures import ProcessPoolExecutor
-    tot = len(fb_files)
-    msg = "Converting fb files to binary"
-    with tqdm(desc=msg, total=tot, disable=not verbose) as pbar:
-        with ProcessPoolExecutor(max_workers=10) as executor:
-            futures = [
-                executor.submit(_process_file, fb_file, temp_dir) for fb_file, temp_dir in zip(fb_files, [temp_dir] * len(fb_files))
-            ]
-            for future in as_completed(futures):
-                pbar.update(1)
+    from concurrent.futures import ThreadPoolExecutor
+    print("Converting fb files to binary!")
+    with tqdm(total=len(fb_files)) as pbar:
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            for _ in executor.map(_process_file, fb_files, [temp_dir] * len(fb_files)):
+                pbar.update()
 
