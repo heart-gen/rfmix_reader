@@ -7,7 +7,8 @@ from torch.cuda import (
 
 __all__ = [
     "set_gpu_environment",
-    "process_file",
+    "_process_file",
+    "generate_binary_files",
 ]
 
 def set_gpu_environment():
@@ -37,14 +38,14 @@ def _text_to_binary(input_file, output_file):
         data.tofile(outfile)
 
 
-def process_file(file_path, temp_dir):
+def _process_file(file_path, temp_dir):
     input_file = file_path
     output_file = join(temp_dir,
                        basename(file_path).split(".")[0] + ".bin")
     _text_to_binary(input_file, output_file)
     
 
-def _generate_binary_files(fb_files, temp_dir):
+def generate_binary_files(fb_files, temp_dir):
     from tqdm import tqdm
     from concurrent.futures import ThreadPoolExecutor
     print("Converting fb files to binary!")
