@@ -12,8 +12,7 @@ from os.path import basename, dirname, join, exists
 
 from ._chunk import Chunk
 from ._fb_read import read_fb
-from ._utils import set_gpu_environment
-from ._utils import generate_binary_files
+from ._utils import set_gpu_environment, process_file
 
 
 try:
@@ -103,7 +102,6 @@ def read_rfmix(
     makedirs(working_dir, exist_ok=True)
     with TemporaryDirectory(dir=working_dir) as temp_dir:
         print(f"Created temporary directory: {temp_dir}")
-        generate_binary_files(fb_files, join(temp_dir, ""))
         pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
         admix = _read_file(
             fn,
@@ -318,6 +316,8 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
     max_npartitions = 16_384
     row_chunk = max(nrows // max_npartitions, row_chunk)
     col_chunk = max(ncols // max_npartitions, col_chunk)
+    # Convert text to binary
+    process_file(fn, temp_dir)
     binary_fn = join(temp_dir,
                      basename(fn).split(".")[0] + ".bin")
     if exists(binary_fn):

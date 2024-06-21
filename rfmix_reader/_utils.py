@@ -1,3 +1,5 @@
+from numpy import float32, array
+from os.path import join, basename
 from torch.cuda import (
     device_count,
     get_device_properties,
@@ -5,7 +7,7 @@ from torch.cuda import (
 
 __all__ = [
     "set_gpu_environment",
-    "generate_binary_files",
+    "process_file",
 ]
 
 def set_gpu_environment():
@@ -25,28 +27,24 @@ def set_gpu_environment():
 
 
 def _text_to_binary(input_file, output_file):
-    from numpy import float32, array
     with open(input_file, 'r') as infile, open(output_file, 'wb') as outfile:
         # Skip the first two rows
         next(infile)
         next(infile)
-        # Read the remaining lines into a list
-        lines = infile.readlines()
         # Convert the list of lines to a 2D NumPy array
-        data = array([line.split()[4:] for line in lines], dtype=float32)
+        data = array([line.split()[4:] for line in infile], dtype=float32)
         # Write the binary data to the output file
         data.tofile(outfile)
 
 
-def _process_file(file_path, temp_dir):
-    from os.path import join, basename
+def process_file(file_path, temp_dir):
     input_file = file_path
     output_file = join(temp_dir,
                        basename(file_path).split(".")[0] + ".bin")
     _text_to_binary(input_file, output_file)
     
 
-def generate_binary_files(fb_files, temp_dir):
+def _generate_binary_files(fb_files, temp_dir):
     from tqdm import tqdm
     from concurrent.futures import ThreadPoolExecutor
     print("Converting fb files to binary!")
