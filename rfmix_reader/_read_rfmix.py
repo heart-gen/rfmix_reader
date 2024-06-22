@@ -33,7 +33,7 @@ else:
 __all__ = ["read_rfmix"]
 
 def read_rfmix(
-        file_prefix: str, verbose: bool = True
+        file_prefix: str, verbose: bool = True, bed_format: bool = True,
 ) -> Tuple[DataFrame, DataFrame, Array]:
     """
     Read RFMix files into data frames and a Dask array.
@@ -54,6 +54,8 @@ def read_rfmix(
         at once.
     verbose : bool, optional
         :const:`True` for progress information; :const:`False` otherwise.
+    bed_format : bool, optional
+        "const:`True` for outputing BED format of haplotypes
 
     Returns
     -------
@@ -71,7 +73,7 @@ def read_rfmix(
     from tempfile import mkdtemp
     from dask.array import concatenate
     # Get file prefixes
-    file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("chr2*")])
+    file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("chr*")])
     if len(file_prefixes) == 1:
         file_prefixes = sorted(glob(join(file_prefix, "*")))
     file_prefixes = sorted(_clean_prefixes(file_prefixes))
@@ -114,9 +116,10 @@ def read_rfmix(
     )
     pbar.close()
     admix = concatenate(admix, axis=0)
+    # Generate BED format
     # Clean directory of temporary files
-    delete_files_or_directories([join(temp_dir, "*")])
-    rmtree(temp_dir); rmtree(working_dir)
+    ##delete_files_or_directories([join(temp_dir, "*")])
+    ##rmtree(temp_dir); rmtree(working_dir)
     return loci, rf_q, admix
 
 
