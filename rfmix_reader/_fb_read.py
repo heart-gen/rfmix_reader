@@ -43,20 +43,37 @@ def read_fb(
         raise ValueError("row_chunk and col_chunk must be positive integers.")
     
     # Calculate row size and total size for memory mapping
-    chunks = []
-    for ii in range(0, nrows, row_chunk):
-        num_rows = min(row_chunk, nrows - ii)
-        delayed_chunk = delayed(_read_chunk)(filepath, ii, num_rows, ncols)
-        shape = (num_rows, col_chunk)
-        dask_array_chunk = from_delayed(delayed_chunk,shape,float32)
-        chunks.append(dask_array_chunk)
+    col_sx: list[Array] = []; row_start = 0
+    while row_start < nrows:
+        row_end = min(row_start + row_chunk, nrows)
+        col_start = 0
+        row_sx: list[Array] = []
+        while col_start < ncols:
+            col_end = min(col_start + col_chunk, ncols)
+            x = delayed(_read_chunk)(
+                filepath,
+                nrows,
+                ncols,
+                row_start,
+                row_end,
+                col_start,
+                col_end,
+            )
+            shape = (row_end - row_start, col_end - col_start)
+            row_sx.append(from_delayed(x, shape, float32))
+            col_start = col_end
+        col_sx.append(concatenate(row_sx, 1, True))
+        row_start = row_end
         
     # Concatenate all chunks
-    X = concatenate(chunks, axis=0)
+    X = concatenate(col_sx, 0, True)
+    assert isinstance(X, Array)
     return X
 
 
-def _read_chunk(filepath, start_row, num_rows, num_cols):
+def _read_chunk(
+        filepath, nrows, ncols, row_start, row_end, col_start, col_end
+):
     """
     Helper function to read a chunk of data from the binary file.
 
@@ -72,7 +89,9 @@ def _read_chunk(filepath, start_row, num_rows, num_cols):
     np.ndarray: The chunk of data read from the file.
     """
     base_size = float32().nbytes
-    offset = start_row * num_cols * base_size
+    num_cols = col_end - col_start
+    offset = row_end * num_cols * base_size
+    size = (row_end - row_start, col_end - col_start)
     buff = memmap(filepath, dtype=float32, mode="r",
-                  offset=offset, shape=(num_rows, num_cols))
+                  offset=offset, shape=size)
     return ascontiguousarray(buff, int32)
