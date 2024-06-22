@@ -321,7 +321,6 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
     max_npartitions = 16_384
     row_chunk = max(nrows // max_npartitions, row_chunk)
     col_chunk = max(ncols // max_npartitions, col_chunk)
-    ##process_file(fn, temp_dir)
     binary_fn = join(temp_dir,
                      basename(fn).split(".")[0] + ".bin")
     if exists(binary_fn):
