@@ -29,7 +29,7 @@ def read_fb(
         raise ValueError("row_chunk and col_chunk must be positive integers.")
     # Calculate row size and total size for memory mapping
     try:
-        buff = memmap(f, dtype=float32, mode="r", offset=0,
+        buff = memmap(filepath, dtype=float32, mode="r", offset=0,
                       shape=(nrows,ncols))
         X = from_array(buff, chunks=(row_chunk, col_chunk))
         buff._mmap.close()
