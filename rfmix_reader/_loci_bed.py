@@ -21,26 +21,6 @@ def convert_loci(loci: DataFrame, rf_q: DataFrame, admix: Array):
     sample_ids = _get_sample_names(rf_q)
     pops = _get_pops(rf_q)
     col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
-    # Intervals to keep
-    idx = _find_intervals(admix, len(pops))
-    filtered_df = loci[loci["i"].isin(idx)]
-    # Extract the physical positions
-    physical_positions = filtered_df['physical_position'].to_arrow().tolist()
-    # Initialize the BED format list
-    bed_format = []
-    if physical_positions:
-        bed_format.append({
-            "chromosome": loci["chromosome"][0],
-            "start": loci["physical_position"][0],
-            "end": physical_positions[0]
-        })
-    # Add the subsequent rows
-    for i in range(len(physical_positions) - 1):
-        bed_format.append({
-            "chromosome": filtered_df["chromosome"][idx[i+1]],
-            "start": physical_positions[i] + 1,
-            "end": physical_positions[i + 1]
-        })
     # New Data
     annot_df = DataFrame(bed_format)
     dx = DataFrame(admix[idx,:].compute(),
@@ -56,7 +36,39 @@ def _get_sample_names(rf_q: DataFrame):
     return rf_q.sample_id.unique().to_arrow()
 
 
-def _find_intervals(dask_matrix, npops):
+def _split_array(loci: DataFrame, admix: Array, npop: int) -> Array:
+    chrom_idx = _find_chromosomes(loci)
+    start_row = 0
+    for end_row in chrom_idx:
+        dask_matrix = admix[start_row:end_row+1]
+        loci_chrom = loci.loc[start_row:end_row]
+        loci_idx = _find_intervals(dask_matrix, npops)
+        filtered_df = loci_chrom[loci_chrom["i"].isin(loci_idx)]
+        physical_positions = filtered_df['physical_position'].to_arrow().tolist()
+        start_row += end_row + 1
+    return None
+
+
+def _bed_format():     
+    # Initialize the BED format list
+    bed_format = []
+    if physical_positions:
+        bed_format.append({
+            "chromosome": loci["chromosome"][0],
+            "start": loci["physical_position"][0],
+            "end": physical_positions[0]
+        })
+    # Add the subsequent rows
+    for i in range(len(physical_positions) - 1):
+        bed_format.append({
+            "chromosome": filtered_df["chromosome"][idx[i+1]],
+            "start": physical_positions[i] + 1,
+            "end": physical_positions[i + 1]
+        })
+    return bed_format
+
+
+def _find_intervals(dask_matrix: Array, npops: int):
     ## This should be done per chromosome!
     from dask.array import diff, where    
     num_cols = round(dask_matrix.shape[1] / npops) if npops == 2 else dask_matrix.shape[1]
@@ -67,6 +79,12 @@ def _find_intervals(dask_matrix, npops):
         col_change_indices = where(diffs != 0)[0].compute() # Gets position at change
         all_indices.update(col_change_indices)    
     return sorted(all_indices)
+
+
+def _find_chromosomes(loci: DataFrame):
+    from numpy import array, where
+    matrix = loci.loc[:, "chromosome"].astype(str).to_numpy()
+    return where(matrix[1:] != matrix[:-1])[0]
 
 
 def _testing():
