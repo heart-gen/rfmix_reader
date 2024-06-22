@@ -9,7 +9,7 @@ from numpy import (
     memmap,
     int32
 )
-from dask.array import from_array, Array, concatenate
+from dask.array import from_delayed, Array, concatenate
 
 __all__ = ["read_fb"]
 
