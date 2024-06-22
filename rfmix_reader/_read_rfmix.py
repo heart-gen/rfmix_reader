@@ -71,7 +71,7 @@ def read_rfmix(
     from tempfile import mkdtemp
     from dask.array import concatenate
     # Get file prefixes
-    file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("chr*")])
+    file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("chr2*")])
     if len(file_prefixes) == 1:
         file_prefixes = sorted(glob(join(file_prefix, "*")))
     file_prefixes = sorted(_clean_prefixes(file_prefixes))
