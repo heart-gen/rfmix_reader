@@ -1,7 +1,9 @@
 from tqdm import tqdm
+from glob import glob
 from numpy import float32, array
-from os.path import join, basename
+from os.path import join, basename, exists
 from multiprocessing import Pool, cpu_count
+from subprocess import run, CalledProcessError
 from torch.cuda import (
     device_count,
     get_device_properties,
@@ -9,8 +11,8 @@ from torch.cuda import (
 
 __all__ = [
     "set_gpu_environment",
-    "_process_file",
     "generate_binary_files",
+    "delete_files_or_directories",
 ]
 
 def set_gpu_environment():
@@ -58,3 +60,24 @@ def generate_binary_files(fb_files, temp_dir):
     with Pool(num_cores) as pool:
         list(tqdm(pool.imap(_process_file, args_list),
                   total=len(fb_files)))
+
+
+def delete_files_or_directories(path_patterns):
+    """
+    Deletes the specified files or directories using 'rm -rf'.
+    
+    Parameters:
+    paths (list): List of file or directory paths to delete.
+    """
+    for pattern in path_patterns:
+        match_paths = glob(pattern, recursive=True)
+        for path in match_paths:
+            if exists(path):
+                try:
+                    # Use subprocess to call 'rm -rf' on the path
+                    run(['rm', '-rf', path], check=True)
+                    print(f"Deleted: {path}")
+                except CalledProcessError as e:
+                    print(f"Error deleting {path}: {e}")
+            else:
+                print(f"Path does not exist: {path}")
