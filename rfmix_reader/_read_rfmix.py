@@ -12,8 +12,9 @@ from os.path import basename, dirname, join, exists
 
 from ._chunk import Chunk
 from ._fb_read import read_fb
+from ._utils import set_gpu_environment
 from ._utils import generate_binary_files
-from ._utils import set_gpu_environment, _process_file
+from ._utils import delete_files_or_directories
 
 try:
     from torch.cuda import is_available
@@ -113,6 +114,9 @@ def read_rfmix(
     )
     pbar.close()
     admix = concatenate(admix, axis=0)
+    # Clean directory of temporary files
+    delete_files_or_directories([join(temp_dir, "*")])
+    rmtree(temp_dir); rmtree(working_dir)
     return loci, rf_q, admix
 
 
