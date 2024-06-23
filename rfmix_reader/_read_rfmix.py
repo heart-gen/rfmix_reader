@@ -4,7 +4,6 @@ Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_read.py
 """
 import warnings
 from glob import glob
-from pathlib import Path
 from dask.array import Array
 from collections import OrderedDict as odict
 from typing import Optional, Callable, List, Tuple
@@ -13,8 +12,7 @@ from os.path import basename, dirname, join, exists
 from ._chunk import Chunk
 from ._fb_read import read_fb
 from ._utils import set_gpu_environment
-from ._utils import generate_binary_files
-from ._utils import delete_files_or_directories
+from ._utils import get_prefixes, create_binaries
 
 try:
     from torch.cuda import is_available
@@ -33,7 +31,9 @@ else:
 __all__ = ["read_rfmix"]
 
 def read_rfmix(
-        file_prefix: str, verbose: bool = True, bed_format: bool = True,
+        file_prefix: str, binary_dir: str = "./binary_files",
+        generate_binary: bool = False, verbose: bool = True,
+        bed_format: bool = False,
 ) -> Tuple[DataFrame, DataFrame, Array]:
     """
     Read RFMix files into data frames and a Dask array.
@@ -52,10 +52,17 @@ def read_rfmix(
     file_prefix : str
         Path prefix to the set of RFMix files. It will load all of the chromosomes
         at once.
+    binary_dir : str, optional
+        Path prefix to the binary version of RFMix (*fb.tsv) files. Default is
+        "./binary_files".
+    generate_binary: bool, optional
+       :const:`True` generate the binary file. Default: `False`.
     verbose : bool, optional
         :const:`True` for progress information; :const:`False` otherwise.
+        Default:`True`.
     bed_format : bool, optional
-        "const:`True` for outputing BED format of haplotypes
+        :const:`True` for outputing BED format of haplotypes. Default is
+        `False`.
 
     Returns
     -------
@@ -68,16 +75,9 @@ def read_rfmix(
         This is in order of the populations see `rf_q`.
     """
     from tqdm import tqdm
-    from os import makedirs
-    from shutil import rmtree
-    from tempfile import mkdtemp
     from dask.array import concatenate
-    # Get file prefixes
-    file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("chr*")])
-    if len(file_prefixes) == 1:
-        file_prefixes = sorted(glob(join(file_prefix, "*")))
-    file_prefixes = sorted(_clean_prefixes(file_prefixes))
-    fn = [{s: f"{fp}.{s}" for s in ["fb.tsv", "rfmix.Q"]} for fp in file_prefixes]
+    # Get file prefixes    
+    fn = get_prefixes(file_path)
     # Load loci information
     pbar = tqdm(desc="Mapping loci files", total=len(fn), disable=not verbose)
     loci = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
@@ -100,12 +100,8 @@ def read_rfmix(
     pops = rf_q[0].drop(["sample_id", "chrom"], axis=1).columns.values
     rf_q = concat(rf_q, axis=0, ignore_index=True)
     # Loading local ancestry by loci
-    fb_files = [f["fb.tsv"] for f in fn]
-    working_dir = "./tmp/"
-    makedirs(working_dir, exist_ok=True)
-    temp_dir = mkdtemp(dir=working_dir)
-    print(f"Created temporary directory: {temp_dir}")
-    generate_binary_files(fb_files, temp_dir)
+    if generate_binary:
+        create_binaries(file_prefix, binary_dir)
     pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
     admix = _read_file(
         fn,
@@ -117,9 +113,8 @@ def read_rfmix(
     pbar.close()
     admix = concatenate(admix, axis=0)
     # Generate BED format
-    # Clean directory of temporary files
-    ##delete_files_or_directories([join(temp_dir, "*")])
-    ##rmtree(temp_dir); rmtree(working_dir)
+    if bed_format:
+        pass
     return loci, rf_q, admix
 
 
@@ -409,33 +404,3 @@ def _types(fn: str) -> dict:
     return header
 
 
-def _clean_prefixes(prefixes):
-    """
-    Clean and filter a list of file prefixes.
-
-    Parameters:
-    ----------
-    prefixes (list): A list of file prefixes (paths).
-
-    Returns:
-    -------
-    list: A list of unique, cleaned file prefixes without the file extensions.
-
-    Notes:
-    -----
-        - The function removes any prefixes that end with ".logs".
-        - It also removes any duplicate prefixes after cleaning.
-    """
-    cleaned_prefixes = []
-    for prefix in prefixes:
-        # Split the prefix into directory and base name
-        dir_path = dirname(prefix)
-        base_name = basename(prefix)
-        # Remove the file extensions from the base name
-        base = base_name.split(".")[0]        
-        # Skip prefixes that end with ".logs"
-        if base.startswith("chr"):
-            cleaned_prefix = join(dir_path, base)
-            cleaned_prefixes.append(cleaned_prefix)
-    # Remove duplicate prefixes
-    return list(set(cleaned_prefixes))

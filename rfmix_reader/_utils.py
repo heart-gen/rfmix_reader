@@ -1,18 +1,17 @@
 from tqdm import tqdm
 from glob import glob
+from os import makedirs
+from pathlib import Path
 from numpy import float32, array
-from os.path import join, basename, exists
 from multiprocessing import Pool, cpu_count
 from subprocess import run, CalledProcessError
-from torch.cuda import (
-    device_count,
-    get_device_properties,
-)
+from os.path import basename, dirname, join, exists
+from torch.cuda import device_count, get_device_properties
 
 __all__ = [
     "set_gpu_environment",
-    "generate_binary_files",
     "delete_files_or_directories",
+    "get_prefixes", "create_binaries"
 ]
 
 def set_gpu_environment():
@@ -61,7 +60,49 @@ def set_gpu_environment():
             print(f"  CUDA capability: {gpu_properties.major}.{gpu_properties.minor}")
 
 
-def _text_to_binary(input_file, output_file):
+def _clean_prefixes(prefixes: list[str]):
+    """
+    Clean and filter a list of file prefixes.
+
+    Parameters:
+    ----------
+    prefixes (list): A list of file prefixes (paths).
+
+    Returns:
+    -------
+    list: A list of unique, cleaned file prefixes without the file extensions.
+
+    Notes:
+    -----
+        - The function removes any prefixes that end with ".logs".
+        - It also removes any duplicate prefixes after cleaning.
+    """
+    cleaned_prefixes = []
+    for prefix in prefixes:
+        # Split the prefix into directory and base name
+        dir_path = dirname(prefix)
+        base_name = basename(prefix)
+        # Remove the file extensions from the base name
+        base = base_name.split(".")[0]        
+        # Skip prefixes that end with ".logs"
+        if base.startswith("chr"):
+            cleaned_prefix = join(dir_path, base)
+            cleaned_prefixes.append(cleaned_prefix)
+    # Remove duplicate prefixes
+    return list(set(cleaned_prefixes))
+
+
+def get_prefixes(file_prefix: str):
+    # Get file prefixes
+    file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("chr*")])
+    if len(file_prefixes) == 1:
+        file_prefixes = sorted(glob(join(file_prefix, "*")))
+    file_prefixes = sorted(_clean_prefixes(file_prefixes))
+    fn = [{s: f"{fp}.{s}" for s in ["fb.tsv", "rfmix.Q"]} for fp in file_prefixes]
+    return fn
+
+
+def _text_to_binary(input_file: str, output_file: str):
     """
     Converts a text file to a binary file, skipping the first two rows
     and processing the remaining lines.
@@ -156,11 +197,11 @@ def _process_file(args):
     _text_to_binary(input_file, output_file)
 
 
-def generate_binary_files(fb_files, temp_dir):
+def _generate_binary_files(fb_files, binary_dir):
     """
     Convert multiple FB (Fullband) files to binary format using parallel processing.
 
-    This function takes a list of FB file paths and a temporary directory path, then
+    This function takes a list of FB file paths and a binary directory path, then
     converts each FB file to a binary format. It utilizes multiprocessing to speed up
     the conversion process by distributing the work across multiple CPU cores.
 
@@ -168,7 +209,7 @@ def generate_binary_files(fb_files, temp_dir):
     ----------
     fb_files (list of str): A list of file paths to the FB files that
                             need to be converted.
-    temp_dir (str): The path to the temporary directory where the 
+    binary_dir (str): The path to the binary directory where the 
                     output binary files will be stored.
 
     Returns
@@ -177,7 +218,7 @@ def generate_binary_files(fb_files, temp_dir):
 
     Side Effects
     ------------
-    - Creates binary files in the specified temporary directory for
+    - Creates binary files in the specified binary directory for
       each input FB file.
     - Prints a message indicating the start of the conversion process.
     - Displays a progress bar during the conversion process.
@@ -190,8 +231,8 @@ def generate_binary_files(fb_files, temp_dir):
 
     Example
     -------
-    generate_binary_files(['/path/to/file1.fb.tsv', '/path/to/file2.fb.tsv'],
-                           '/tmp/output/')
+    _generate_binary_files(['/path/to/file1.fb.tsv', '/path/to/file2.fb.tsv'],
+                            '/tmp/output/')
 
     Notes
     -----
@@ -204,7 +245,7 @@ def generate_binary_files(fb_files, temp_dir):
     # Determine the number of CPU cores to use
     num_cores = min(cpu_count(), len(fb_files))
     # Create a list of arguments for each file
-    args_list = [(file_path, temp_dir) for file_path in fb_files]
+    args_list = [(file_path, binary_dir) for file_path in fb_files]
     with Pool(num_cores) as pool:
         list(tqdm(pool.imap(_process_file, args_list),
                   total=len(fb_files)))
@@ -260,3 +301,12 @@ def delete_files_or_directories(path_patterns):
                     print(f"Error deleting {path}: {e}")
             else:
                 print(f"Path does not exist: {path}")
+
+
+def create_binaries(file_prefix: str, binary_dir: str):
+    fn = get_prefixes(file_prefix)
+    fb_files = [f["fb.tsv"] for f in fn]
+    makedirs(binary_dir, exist_ok=True)
+    print(f"Created binary files at: {binary_dir}")
+    _generate_binary_files(fb_files, binary_dir)
+
