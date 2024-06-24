@@ -24,7 +24,6 @@ except ModuleNotFoundError as e:
 
 if is_available():
     from cudf import DataFrame, read_csv, concat
-    set_gpu_environment()
 else:
     from pandas import DataFrame, read_csv, concat
 
@@ -76,6 +75,9 @@ def read_rfmix(
     """
     from tqdm import tqdm
     from dask.array import concatenate
+    # Device information
+    if verbose and is_available():
+        set_gpu_environment()
     # Get file prefixes    
     fn = get_prefixes(file_prefix, verbose)
     # Load loci information
@@ -104,7 +106,7 @@ def read_rfmix(
         fn,
         lambda f: _read_fb(f["fb.tsv"], nsamples,
                            nmarkers[f["fb.tsv"]], pops,
-                           temp_dir, Chunk()),
+                           binary_dir, Chunk()),
         pbar,
     )
     pbar.close()
