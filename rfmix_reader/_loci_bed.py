@@ -88,9 +88,10 @@ def _find_chromosomes(loci: DataFrame):
 
 
 def _testing():
-    from rfmix_reader import read_rfmix
+    from rfmix_reader import read_rfmix, create_binaries
     # prefix_path = "../examples/two_populations/out/"
     prefix_path = "/dcs05/lieber/hanlab/jbenjami/projects/"+\
         "localQTL_manuscript/local_ancestry_rfmix/_m/"
+    create_binaries(prefix_path)
     loci, rf_q, admix = read_rfmix(prefix_path, verbose=True)
 
