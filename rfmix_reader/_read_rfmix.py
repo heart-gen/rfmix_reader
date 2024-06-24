@@ -77,14 +77,11 @@ def read_rfmix(
     from tqdm import tqdm
     from dask.array import concatenate
     # Get file prefixes    
-    fn = get_prefixes(file_path)
+    fn = get_prefixes(file_prefix, verbose)
     # Load loci information
     pbar = tqdm(desc="Mapping loci files", total=len(fn), disable=not verbose)
     loci = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
     pbar.close()
-    if len(file_prefixes) > 1 and verbose:
-        msg = "Multiple files read in this order:"
-        print(f"{msg} {[basename(f) for f in file_prefixes]}")
     # Adjust loci indices and concatenate
     nmarkers = {}; index_offset = 0
     for i, bi in enumerate(loci):

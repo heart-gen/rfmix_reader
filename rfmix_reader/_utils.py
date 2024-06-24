@@ -38,15 +38,15 @@ def set_gpu_environment():
       Total memory: 8.00 GB
       CUDA capability: 8.6
 
-    Note
-    ----
-    Ensure that the `device_count` and `get_device_properties` functions 
-    are defined and accessible in the scope where this function is called.
-
     Raises
     ------
     Any exceptions raised by `device_count` or `get_device_properties`
     will propagate up to the caller.
+
+    Dependencies
+    ------------
+    - torch.cuda.device_count: Counts the numer of GPU devices
+    - torch.cuda.get_device_propoerties: Get device properties
     """
     num_gpus = device_count()
     if num_gpus == 0:
@@ -64,18 +64,24 @@ def _clean_prefixes(prefixes: list[str]):
     """
     Clean and filter a list of file prefixes.
 
-    Parameters:
+    Parameters
     ----------
     prefixes (list): A list of file prefixes (paths).
 
-    Returns:
+    Returns
     -------
     list: A list of unique, cleaned file prefixes without the file extensions.
 
-    Notes:
+    Notes
     -----
-        - The function removes any prefixes that end with ".logs".
-        - It also removes any duplicate prefixes after cleaning.
+    - The function removes any prefixes that end with ".logs".
+    - It also removes any duplicate prefixes after cleaning.
+
+    Dependencies
+    ------------
+    - os.path.dirname: For extracting the directory name from file prefix
+    - os.path.basename: For extracting the base name from file prefix
+    - os.path.join: For joining file names
     """
     cleaned_prefixes = []
     for prefix in prefixes:
@@ -92,13 +98,81 @@ def _clean_prefixes(prefixes: list[str]):
     return list(set(cleaned_prefixes))
 
 
-def get_prefixes(file_prefix: str):
-    # Get file prefixes
-    file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("chr*")])
-    if len(file_prefixes) == 1:
-        file_prefixes = sorted(glob(join(file_prefix, "*")))
-    file_prefixes = sorted(_clean_prefixes(file_prefixes))
-    fn = [{s: f"{fp}.{s}" for s in ["fb.tsv", "rfmix.Q"]} for fp in file_prefixes]
+def get_prefixes(file_prefix: str, verbose: bool = True):
+    """
+    Retrieve and clean file prefixes for specified file types.
+
+    This function searches for files with a given prefix, cleans
+    the prefixes, and constructs a list of dictionaries mapping
+    specific file types to their corresponding file paths.
+
+    Parameters
+    ----------
+    file_prefix (str):
+        The prefix used to identify relevant files. This can be
+        a directory or a common prefix for the files.
+
+    verbose (bool):
+        :const:`True` for progress information; :const:`False` otherwise.
+        Default:`True`.
+
+    Returns
+    -------
+    list of dict:
+        A list of dictionaries where each dictionary maps file
+        types (e.g., "fb.tsv", "rfmix.Q") to their corresponding 
+        file paths.
+
+    Example
+    -------
+    Given a directory structure:
+        /data/
+            chr1.fb.tsv
+            chr1.rfmix.Q
+            chr2.fb.tsv
+            chr2.rfmix.Q
+
+    Calling get_prefixes("/data/") will return:
+        [
+            {'fb.tsv': '/data/chr1.fb.tsv', 'rfmix.Q': '/data/chr1.rfmix.Q'},
+            {'fb.tsv': '/data/chr2.fb.tsv', 'rfmix.Q': '/data/chr2.rfmix.Q'}
+        ]
+
+    Notes
+    -----
+    - This function assumes that the files follow a naming convention
+      where the prefix is followed by a file type extension associated 
+      with RFMix (e.g., ".fb.tsv", ".rfmix.Q").
+    - The function uses the `glob` module to search for files and the 
+      `Path` class from the `pathlib` module for path manipulations.
+
+    Dependencies
+    ------------
+    - pathlib.Path
+    - glob.glob
+    - os.path.join
+    - _clean_prefixes: A helper function to clean and sort file prefixes.
+
+    Raises
+    ------
+    FileNotFoundError: If no files matching the given prefix are found.
+    """
+    try:
+        file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("chr*")])
+        if len(file_prefixes) == 1:
+            file_prefixes = sorted(glob(join(file_prefix, "*")))
+            if not file_prefixes:
+                raise FileNotFoundError()
+        file_prefixes = sorted(_clean_prefixes(file_prefixes))
+        fn = [{s: f"{fp}.{s}" for s in ["fb.tsv", "rfmix.Q"]} for fp in file_prefixes]
+        if not fn:
+            raise FileNotFoundError()
+        if len(file_prefixes) > 1 and verbose:
+            msg = "Multiple files read in this order:"
+            print(f"{msg} {[basename(f) for f in file_prefixes]}")
+
+    except FileNotFoundError:
+        raise FileNotFoundError(f"No valid files found for prefix: {file_prefix}")
     return fn
 
 
@@ -303,10 +377,73 @@ def delete_files_or_directories(path_patterns):
                 print(f"Path does not exist: {path}")
 
 
-def create_binaries(file_prefix: str, binary_dir: str):
-    fn = get_prefixes(file_prefix)
-    fb_files = [f["fb.tsv"] for f in fn]
-    makedirs(binary_dir, exist_ok=True)
-    print(f"Created binary files at: {binary_dir}")
-    _generate_binary_files(fb_files, binary_dir)
+def create_binaries(
+        file_prefix: str, binary_dir: str = "./binary_files"
+):
+    """
+    Create binary files from fullband (FB) TSV files.
 
+    This function identifies FB TSV files based on a given prefix, creates a directory
+    for binary files if it doesn't exist, and converts the identified TSV files to binary format.
+
+    Parameters
+    ----------
+    file_prefix (str):
+        The prefix used to identify the relevant FB TSV files.
+    binary_dir (str, optional):
+        The directory where the binary files will be stored.
+        Defaults to "./binary_files".
+
+    Returns
+    -------
+    None
+
+    Side Effects
+    ------------
+    - Creates a directory for binary files if it doesn't exist.
+    - Converts identified FB TSV files to binary format.
+    - Prints messages about the creation process.
+
+    Raises
+    ------
+    FileNotFoundError: If no files matching the given prefix are found.
+    PermissionError: If there are insufficient permissions to create
+                     the binary directory.
+    IOError: If there's an error during the file conversion process.
+
+    Example
+    -------
+    create_binaries("sample_data_", "./output_binaries")
+
+    Notes
+    -----
+    - This function relies on helper functions `get_prefixes` and
+      `_generate_binary_files`.
+    - Ensure that the necessary permissions are available to create
+      directories and files.
+
+    Dependencies
+    ------------
+    - get_prefixes: Function to get file prefixes.
+    - _generate_binary_files: Function to convert TSV files to binary format.
+    - os.makedirs: For creating directories.
+    """
+    try:
+        fn = get_prefixes(file_prefix, False)
+        if not fn:
+            raise FileNotFoundError(f"No files found with prefix: {file_prefix}")
+        
+        fb_files = [f["fb.tsv"] for f in fn]
+        makedirs(binary_dir, exist_ok=True)
+        print(f"Created binary files at: {binary_dir}")
+        _generate_binary_files(fb_files, binary_dir)
+        print(f"Successfully converted {len(fb_files)} files to binary format.")
+
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+    except PermissionError:
+        print(f"Error: Insufficient permissions to create directory: {binary_dir}")
+    except IOError as e:
+        print(f"Error during file conversion: {e}")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
