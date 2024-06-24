@@ -3,13 +3,13 @@ Adapted from `_bed_read.py` script in the `pandas-plink` package.
 Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_bed_read.py
 """
 from dask.delayed import delayed
+from dask.array import from_delayed, Array, concatenate
 from numpy import (
     ascontiguousarray,
     float32,
     memmap,
     int32
 )
-from dask.array import from_delayed, Array, concatenate
 
 __all__ = ["read_fb"]
 
@@ -43,7 +43,8 @@ def read_fb(
         raise ValueError("row_chunk and col_chunk must be positive integers.")
     
     # Calculate row size and total size for memory mapping
-    col_sx: list[Array] = []; row_start = 0
+    col_sx: list[Array] = []
+    row_start = 0
     while row_start < nrows:
         row_end = min(row_start + row_chunk, nrows)
         col_start = 0
@@ -60,7 +61,7 @@ def read_fb(
                 col_end,
             )
             shape = (row_end - row_start, col_end - col_start)
-            row_sx.append(from_delayed(x, shape, float32))
+            row_sx.append(from_delayed(x, shape, dtype=float32))
             col_start = col_end
         col_sx.append(concatenate(row_sx, 1, True))
         row_start = row_end
@@ -80,18 +81,22 @@ def _read_chunk(
     Parameters
     ----------
     filepath (str): Path to the binary file.
-    start_row (int): Starting row index for the chunk.
-    num_rows (int): Number of rows in the chunk.
-    num_cols (int): Number of columns in the chunk.
+    nrows (int): Total number of rows in the dataset.
+    ncols (int): Total number of columns in the dataset.
+    row_start (int): Starting row index for the chunk.
+    row_end (int): Ending row index for the chunk.
+    col_start (int): Starting column index for the chunk.
+    col_end (int): Ending column index for the chunk.
 
     Returns
     -------
     np.ndarray: The chunk of data read from the file.
     """
     base_size = float32().nbytes
-    num_cols = col_end - col_start
-    offset = row_end * num_cols * base_size
+    offset = (row_start * ncols + col_start) * base_size
     size = (row_end - row_start, col_end - col_start)
+    
     buff = memmap(filepath, dtype=float32, mode="r",
                   offset=offset, shape=size)
     return ascontiguousarray(buff, int32)
+    
