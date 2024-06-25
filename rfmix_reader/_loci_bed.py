@@ -24,16 +24,13 @@ else:
 
 __all__ = ["convert_loci"]
 
-def convert_loci(loci: DataFrame, rf_q: DataFrame, admix: Array):
-    # Column annotations
-    sample_ids = _get_sample_names(rf_q)
-    pops = _get_pops(rf_q)
-    col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
-    # New Data
-    annot_df = DataFrame(bed_format)
-    dx = DataFrame(admix[idx,:].compute(),
-                   columns=col_names)
-    return None
+def _testing():
+    from rfmix_reader import read_rfmix, create_binaries
+    # prefix_path = "../examples/two_populations/out/"
+    prefix_path = "/dcs05/lieber/hanlab/jbenjami/projects/"+\
+        "localQTL_manuscript/local_ancestry_rfmix/_m/"
+    create_binaries(prefix_path)
+    loci, rf_q, admix = read_rfmix(prefix_path)
 
 df = DataFrame({
     'chromosome': ['chr1', 'chr1', 'chr1', 'chr2', 'chr2'],
@@ -48,7 +45,22 @@ dask_matrix = from_array([
 ])
 npops = 2
 
-def _generate_bed(df: DataFrame, dask_matrix: Array, npops: int):
+
+def convert_loci(loci: DataFrame, rf_q: DataFrame, admix: Array):
+    # Column annotations
+    sample_ids = _get_sample_names(rf_q)
+    pops = _get_pops(rf_q)
+    col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
+    # New Data
+    annot_df = DataFrame(bed_format)
+    dx = DataFrame(admix[idx,:].compute(),
+                   columns=col_names)
+    return None
+
+
+def _generate_bed(
+        df: DataFrame, dask_matrix: Array, npops: int, col_names: list[str]
+) -> DataFrame:
     # Check if the DataFrame and Dask array have the same number of rows
     assert df.shape[0] == dask_matrix.shape[0], "DataFrame and Dask array must have the same number of rows"
     # Convert the DataFrame to a Dask DataFrame
@@ -56,33 +68,29 @@ def _generate_bed(df: DataFrame, dask_matrix: Array, npops: int):
     ncols = dask_matrix.shape[1]
     ddf = dd.from_pandas(df.to_pandas(), npartitions=parts)    
     # Add each column of the Dask array to the DataFrame
-    for i in range(ncols):
-        ddf[f'data_{i}'] = dd.from_array(dask_matrix[:, i],
-                                         chunksize=dask_matrix.chunksize[0])
+    for i, cname in enumerate(col_names):
+        ddf[f'{cname}'] = dd.from_array(dask_matrix[:, i],
+                                        chunksize=dask_matrix.chunksize[0])
     # Increase recursion limit
     setrecursionlimit(10000)
-
     # Loop through chromosomes
     results = []
     chromosomes = ddf['chromosome'].unique().compute()
-    for chrom in chromosomes:
+    for chrom in sorted(chromosomes):
         chrom_group = ddf[ddf['chromosome'] == chrom]
-        result = chrom_group.map_partitions(_process_chromosome,
-                                            col_chunk=ncols,
-                                            npops=npops)
-        results.append(result)
+        results.append(_process_chromosome(chrom_group, npops, col_names))
     # Group by chromosome and apply the process_chromosome function
-    bed_ddf = concat(results, axis=0)
+    bed_df = concat(results, axis=0)
     # Reset recursive limit to default value
     setrecursionlimit(1000)
-    return bed_ddf
+    return bed_df
 
 
 def _process_chromosome(
-        group: dd.DataFrame, col_chunk: int, npops: int
+        group: dd.DataFrame, npops: int, col_names: list[str]
 ) -> DataFrame:
     positions = group['physical_position'].to_dask_array(lengths=True)
-    chromosome = group["chromosome"].unique().compute()[0]
+    chromosome = group["chromosome"].unique().compute()
     if len(chromosome) != 1:
         raise ValueError(f"Only one chromosome expected got: {len(chromosome)}")
     data_matrix = group.drop(["chromosome", "physical_position"], axis=1)\
@@ -92,15 +100,15 @@ def _process_chromosome(
     if change_indices:
         start = positions[0]
         for idx in change_indices:
-            end = positions[idx + 1]
-            bed_records.append([chromosome, start.compute(), end.compute()] +
+            end = positions[idx]
+            bed_records.append([chromosome[0], start.compute(), end.compute()] +
                                data_matrix[idx].compute().tolist())
-            start = end
+            start = end + 1
         # Add the last interval
-        bed_records.append([chromosome, start.compute(), positions[-1].compute()] +
+        bed_records.append([chromosome[0], start.compute(), positions[-1].compute()] +
                            data_matrix[-1].compute().tolist())    
     return DataFrame(bed_records, columns=['chromosome', 'start', 'end'] +
-                     [f'data_{i}' for i in range(col_chunk)])
+                     [f'{cname}' for cname in col_names])
 
 
 def _find_intervals(dask_matrix: Array, npops: int):
@@ -113,34 +121,6 @@ def _find_intervals(dask_matrix: Array, npops: int):
         col_change_indices = where(diffs != 0)[0].compute()
         all_indices.update(col_change_indices)    
     return sorted(all_indices)
-
-
-def _split_array(loci: DataFrame, admix: Array, npop: int) -> Array:
-    chrom_idx = _find_chromosomes(loci)
-    start_row = 0
-    for end_row in chrom_idx:
-        dask_matrix = admix[start_row:end_row+1]
-        loci_chrom = loci.loc[start_row:end_row]
-        loci_idx = _find_intervals(dask_matrix, npops)
-        filtered_df = loci_chrom[loci_chrom["i"].isin(loci_idx)]
-        physical_positions = filtered_df['physical_position'].to_arrow().tolist()
-        start_row += end_row + 1
-    return None
-
-
-def _find_chromosomes(loci: DataFrame):
-    from numpy import array, where
-    matrix = loci.loc[:, "chromosome"].astype(str).to_numpy()
-    return where(matrix[1:] != matrix[:-1])[0]
-
-
-def _testing():
-    from rfmix_reader import read_rfmix, create_binaries
-    # prefix_path = "../examples/two_populations/out/"
-    prefix_path = "/dcs05/lieber/hanlab/jbenjami/projects/"+\
-        "localQTL_manuscript/local_ancestry_rfmix/_m/"
-    create_binaries(prefix_path)
-    loci, rf_q, admix = read_rfmix(prefix_path, verbose=True)
 
 
 def _get_pops(rf_q: DataFrame):
