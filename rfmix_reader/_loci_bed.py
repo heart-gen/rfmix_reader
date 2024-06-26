@@ -1,3 +1,4 @@
+import dask.bag as db
 from typing import List
 import dask.dataframe as dd
 from dask import delayed, compute
@@ -20,9 +21,9 @@ except ModuleNotFoundError as e:
 
 
 if is_available():
-    from cudf import DataFrame, read_csv, concat
+    from cudf import DataFrame, concat
 else:
-    from pandas import DataFrame, read_csv, concat
+    from pandas import DataFrame, concat
 
 __all__ = ["convert_loci"]
 
@@ -73,6 +74,30 @@ def _demo():
     elapse = toc - tic
     return bed_df, elapse
 
+df = DataFrame({
+    'chromosome': ['chr1', 'chr1', 'chr1', 'chr1', 'chr1', 'chr1', 'chr1',
+                   'chr2', 'chr2', 'chr2', 'chr2', 'chr2', 'chr2', 'chr2'],
+    'physical_position': [1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7]
+})
+dask_matrix = from_array([
+        [0, 1, 1, 1, 0, 0],
+        [0, 1, 1, 1, 0, 0],
+        [1, 1, 0, 0, 0, 1],
+        [0, 0, 0, 1, 1, 1],
+        [1, 1, 1, 0, 0, 0],
+        [1, 1, 1, 0, 0, 0],
+        [1, 0, 1, 0, 1, 0],
+        [1, 0, 1, 0, 1, 0],
+        [0, 0, 1, 1, 1, 0],
+        [0, 0, 0, 1, 1, 1],
+        [0, 1, 0, 1, 0, 1],
+        [0, 1, 0, 1, 0, 1],
+        [1, 1, 1, 0, 0, 0],
+        [1, 1, 1, 0, 0, 0],
+])
+sample_ids = ["data_1", "data_2", "data_3"]; pops = ["AFR", "EUR"]
+npops = len(pops)
+col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
 
 def convert_loci(loci: DataFrame, rf_q: DataFrame, admix: Array) -> DataFrame:
     # Column annotations
@@ -160,7 +185,7 @@ def _process_chromosome(
     chromosome | start | end | pop1 | pop2
     1          | 100   | 200 | 1    | 0
     1          | 300   | 400 | 0    | 1
-    """
+    """ #L57
     # Convert 'physical_position' column to a Dask array
     positions = group['physical_position'].to_dask_array(lengths=True)
     # Ensure the DataFrame contains data for only one chromosome
@@ -171,24 +196,21 @@ def _process_chromosome(
     # and 'physical_position' columns
     data_matrix = group[col_names].to_dask_array(lengths=True)
     # Find indices where genetic changes occur
-    change_indices = _find_intervals(data_matrix, npops)
-    change_indices = array(change_indices)
-        # Compute chromosome value once
+    change_indices = array(_find_intervals(data_matrix, npops))
+    # Compute chromosome value once
     chromosome_value = chromosome.compute()[0]
-    # Use a generator to create bed records
-    def bed_record_generator():
-        start = positions[0]
-        for idx in change_indices:
-            end = positions[idx]
-            yield create_bed_record(chromosome_value, start, end, data_matrix[idx])
-            start = positions[idx + 1]
-        # Add the last interval
-        yield create_bed_record(chromosome_value, start,
-                                positions[-1],data_matrix[-1])
-    # Create a Dask bag from the generator
-    bed_records_bag = from_sequence(bed_record_generator(), npartitions=100)
+    # Create start indices
+    start_indices = concatenate([array([0]), change_indices[:-1] + 1])
+    # Create a bag of bed records
+    bed_records = db.from_sequence(zip(start_indices, change_indices),npartitions=min(100, len(change_indices))).map(lambda x: create_bed_record(chromosome_value,positions[x[0]],positions[x[1]],data_matrix[x[1]]))
+    # Add the last interval
+    last_record = create_bed_record(chromosome_value,positions[change_indices[-1] + 1],positions[-1], data_matrix[-1])
+    last_record_bag = db.from_sequence([last_record])
+    # Concatenate the bags
+    bed_records = db.concat([bed_records, last_record_bag])
+    # Convert to DataFrame
     cnames = ['chromosome', 'start', 'end'] + col_names
-    return bed_records_bag.to_dataframe(columns=cnames)
+    return bed_records.to_dataframe(columns=cnames)
 
 
 def _find_intervals(data_matrix: Array, npops: int) -> List[int]:
