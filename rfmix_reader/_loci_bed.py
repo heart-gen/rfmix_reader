@@ -1,8 +1,16 @@
-from numpy import array
+import numpy as np
 import dask.dataframe as dd
+from dask import delayed, compute
 from multiprocessing import cpu_count
 from typing import Optional, Callable, List, Tuple
-from dask.array import diff, where, Array, from_array
+from dask.array import (
+    diff,
+    where,
+    Array,
+    array,
+    from_array,
+    concatenate
+)
 
 try:
     from torch.cuda import is_available
@@ -19,6 +27,11 @@ else:
 
 __all__ = ["convert_loci"]
 
+@delayed
+def create_bed_record(chrom, start, end, data):
+    return [chrom, start, end] + data.tolist()
+
+
 def _testing():
     from rfmix_reader import read_rfmix, create_binaries
     # prefix_path = "../examples/two_populations/out/"
@@ -26,39 +39,41 @@ def _testing():
         "localQTL_manuscript/local_ancestry_rfmix/_m/"
     create_binaries(prefix_path)
     loci, rf_q, admix = read_rfmix(prefix_path)
+    return None
+
 
 def _demo():
+    from time import time
+    df = DataFrame({
+        'chromosome': ['chr1', 'chr1', 'chr1', 'chr1', 'chr1', 'chr1', 'chr1',
+                       'chr2', 'chr2', 'chr2', 'chr2', 'chr2', 'chr2', 'chr2'],
+        'physical_position': [1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7]
+    })
+    dask_matrix = from_array([
+        [0, 1, 1, 1, 0, 0],
+        [0, 1, 1, 1, 0, 0],
+        [1, 1, 0, 0, 0, 1],
+        [0, 0, 0, 1, 1, 1],
+        [1, 1, 1, 0, 0, 0],
+        [1, 1, 1, 0, 0, 0],
+        [1, 0, 1, 0, 1, 0],
+        [1, 0, 1, 0, 1, 0],
+        [0, 0, 1, 1, 1, 0],
+        [0, 0, 0, 1, 1, 1],
+        [0, 1, 0, 1, 0, 1],
+        [0, 1, 0, 1, 0, 1],
+        [1, 1, 1, 0, 0, 0],
+        [1, 1, 1, 0, 0, 0],
+    ])
+    sample_ids = ["data_1", "data_2", "data_3"]; pops = ["AFR", "EUR"]
+    npops = len(pops)
+    col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
+    tic = time()
+    bed_df = _generate_bed(df, dask_matrix, len(pops), col_names)
+    toc = time()
+    elapse = toc - tic
     return bed_df, elapse
 
-from time import time
-df = DataFrame({
-    'chromosome': ['chr1', 'chr1', 'chr1', 'chr1', 'chr1', 'chr1', 'chr1',
-                   'chr2', 'chr2', 'chr2', 'chr2', 'chr2', 'chr2', 'chr2'],
-    'physical_position': [1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7]
-})
-dask_matrix = from_array([
-    [0, 1, 1, 1, 0, 0],
-    [0, 1, 1, 1, 0, 0],
-    [1, 1, 0, 0, 0, 1],
-    [0, 0, 0, 1, 1, 1],
-    [1, 1, 1, 0, 0, 0],
-    [1, 1, 1, 0, 0, 0],
-    [1, 0, 1, 0, 1, 0],
-    [1, 0, 1, 0, 1, 0],
-    [0, 0, 1, 1, 1, 0],
-    [0, 0, 0, 1, 1, 1],
-    [0, 1, 0, 1, 0, 1],
-    [0, 1, 0, 1, 0, 1],
-    [1, 1, 1, 0, 0, 0],
-    [1, 1, 1, 0, 0, 0],
-])
-sample_ids = ["data_1", "data_2", "data_3"]; pops = ["AFR", "EUR"]
-npops = len(pops)
-col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
-tic = time()
-bed_df = _generate_bed(df, dask_matrix, len(pops), col_names)
-toc = time()
-elapse = toc - tic
 
 def convert_loci(loci: DataFrame, rf_q: DataFrame, admix: Array) -> DataFrame:
     # Column annotations
@@ -150,35 +165,41 @@ def _process_chromosome(
     # Convert 'physical_position' column to a Dask array
     positions = group['physical_position'].to_dask_array(lengths=True)
     # Ensure the DataFrame contains data for only one chromosome
-    chromosome = group["chromosome"].unique().compute()
+    chromosome = group["chromosome"].unique()
     if len(chromosome) != 1:
         raise ValueError(f"Only one chromosome expected got: {len(chromosome)}")
     # Convert the data matrix to a Dask array, excluding 'chromosome' 
     # and 'physical_position' columns
     data_matrix = group[col_names].to_dask_array(lengths=True)
     # Find indices where genetic changes occur
-    change_indices = _find_intervals(data_matrix, npops)
+    change_indices = da.array(_find_intervals(data_matrix, npops))
     bed_records = []
-    if change_indices:
-        # Collect all positions and data_matrix slices
-        start_pos = positions[change_indices[:-1] + 1] # Skip the first position
-        end_pos = positions[change_indices]
-        data_slices = data_matrix[change_indices]
-        # Compute required arrays at once
-        computed_start_pos = start_pos.compute()
-        computed_end_pos = end_pos.compute()
-        computed_data_slices = data_slices.compute()
-        start = positions[0].compute()
-        # Create bed_records
-        for idx in range(len(change_indices)):
-            bed_records.append([chromosome[0], start, end] +
-                               data_matrix[idx].tolist())
-            start = computed_start_pos[idx]
+    if change_indices.any():
+        # Compute chromosome value once
+        chromosome_value = chromosome.compute()[0]
+        # Create start and end indices
+        start_indices = concatenate([da.array([0]), change_indices[:-1] + 1])
+        end_indices = change_indices
+        # Create bed records using delayed computations
+        bed_records = [
+            create_bed_record(chromosome_value,
+                              positions[start],
+                              positions[end],
+                              data_matrix[end])
+            for start, end in zip(start_indices, end_indices)
+        ]
         # Add the last interval
-        bed_records.append([chromosome[0], start, positions[-1].compute()] +
-                           data_matrix[-1].compute().tolist())
+        bed_records.append(
+            create_bed_record(chromosome_value,
+                              positions[change_indices[-1] + 1],
+                              positions[-1],
+                              data_matrix[-1])
+        )
+        # Compute all bed records
+        bed_records = compute(*bed_records)
     cnames = ['chromosome', 'start', 'end'] + col_names
     return DataFrame(bed_records, columns=cnames)
+
 
 
 def _find_intervals(data_matrix: Array, npops: int) -> List[int]:
