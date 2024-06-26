@@ -1,8 +1,7 @@
-import numpy as np
+from typing import List
 import dask.dataframe as dd
 from dask import delayed, compute
 from multiprocessing import cpu_count
-from typing import Optional, Callable, List, Tuple
 from dask.array import (
     diff,
     where,
@@ -29,7 +28,7 @@ __all__ = ["convert_loci"]
 
 @delayed
 def create_bed_record(chrom, start, end, data):
-    return [chrom, start, end] + data.tolist()
+    return [chrom, start, end] + data.compute().tolist()
 
 
 def _testing():
@@ -172,34 +171,24 @@ def _process_chromosome(
     # and 'physical_position' columns
     data_matrix = group[col_names].to_dask_array(lengths=True)
     # Find indices where genetic changes occur
-    change_indices = da.array(_find_intervals(data_matrix, npops))
-    bed_records = []
-    if change_indices.any():
+    change_indices = _find_intervals(data_matrix, npops)
+    change_indices = array(change_indices)
         # Compute chromosome value once
-        chromosome_value = chromosome.compute()[0]
-        # Create start and end indices
-        start_indices = concatenate([da.array([0]), change_indices[:-1] + 1])
-        end_indices = change_indices
-        # Create bed records using delayed computations
-        bed_records = [
-            create_bed_record(chromosome_value,
-                              positions[start],
-                              positions[end],
-                              data_matrix[end])
-            for start, end in zip(start_indices, end_indices)
-        ]
+    chromosome_value = chromosome.compute()[0]
+    # Use a generator to create bed records
+    def bed_record_generator():
+        start = positions[0]
+        for idx in change_indices:
+            end = positions[idx]
+            yield create_bed_record(chromosome_value, start, end, data_matrix[idx])
+            start = positions[idx + 1]
         # Add the last interval
-        bed_records.append(
-            create_bed_record(chromosome_value,
-                              positions[change_indices[-1] + 1],
-                              positions[-1],
-                              data_matrix[-1])
-        )
-        # Compute all bed records
-        bed_records = compute(*bed_records)
+        yield create_bed_record(chromosome_value, start,
+                                positions[-1],data_matrix[-1])
+    # Create a Dask bag from the generator
+    bed_records_bag = from_sequence(bed_record_generator(), npartitions=100)
     cnames = ['chromosome', 'start', 'end'] + col_names
-    return DataFrame(bed_records, columns=cnames)
-
+    return bed_records_bag.to_dataframe(columns=cnames)
 
 
 def _find_intervals(data_matrix: Array, npops: int) -> List[int]:
