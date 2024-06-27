@@ -10,6 +10,7 @@ API
   Chunk
   create_binaries
   delete_files_or_directories
+  export_loci_admix_to_bed
   get_prefixes
   read_fb
   read_rfmix

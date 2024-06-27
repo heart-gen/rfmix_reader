@@ -6,7 +6,6 @@ from numpy import float32, array
 from multiprocessing import Pool, cpu_count
 from subprocess import run, CalledProcessError
 from os.path import basename, dirname, join, exists
-from torch.cuda import device_count, get_device_properties
 
 __all__ = [
     "set_gpu_environment",
@@ -50,6 +49,7 @@ def set_gpu_environment():
       Total memory: 8.00 GB
       CUDA capability: 8.6
     """
+    from torch.cuda import device_count, get_device_properties
     num_gpus = device_count()
     if num_gpus == 0:
         print("No GPUs available.")
