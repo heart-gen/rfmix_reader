@@ -23,7 +23,7 @@ extensions = [
 ]
 
 templates_path = ['_templates']
-autosummary_generate = False
+autosummary_generate = True
 autosectionlabel_prefix_document = True
 napoleon_numpy_docstring = True
 
