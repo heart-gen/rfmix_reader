@@ -95,12 +95,13 @@ loci, rf_q, admix = read_rfmix(file_path)
 so this is an optional parameter.
 
 #### BED format
-One helpful function we provide is `name_here`. This function
-takes the output of the `read_rfmix` and generates a BED format
-with haplotypes condensed to regional variation. 
+One helpful function we provide is `export_loci_admix_to_bed`. 
+This function takes the output of the `read_rfmix` and 
+exports a BED format with haplotypes condensed to regional
+variation in parquet files per chromosome. 
 
 ```python
-# TODO: write usage here
+export_loci_admix_to_bed(loci, rf_q, admix)
 ```
 
 Unlike generating binary files, this takes a large amount of 
@@ -111,6 +112,19 @@ of the main function.
 `RFMix-reader` is adaptable for as many population admixtures as
 needed. However, due to some conservative parameters, the use
 of BED formatting will take longer than a two population analysis.
+
+```python
+from rfmix_reader import read_rfmix
+
+file_path = "examples/three_popuations/out/"
+binary_dir = "./binary_files"
+loci, rf_q, admix = read_rfmix(file_path, binary_dir=binary_dir,
+                               generate_binary_files=True)
+```
+
+```python
+export_loci_admix_to_bed(loci, rf_q, admix)
+```
 
 ## Authors
 * [Kynon JM Benjamin](https://github.com/Krotosbenjamin)
