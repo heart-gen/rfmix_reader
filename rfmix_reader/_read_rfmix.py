@@ -36,15 +36,6 @@ def read_rfmix(
     """
     Read RFMix files into data frames and a Dask array.
 
-    Notes
-    -----
-    Local ancestry can be either :const:`0`, :const:`1`, :const:`2`, or
-    :data:`math.nan`:
-
-    - :const:`0` No alleles are associated with this ancestry
-    - :const:`1` One allele is associated with this ancestry
-    - :const:`2` Both alleles are associated with this ancestry
-
     Parameters
     ----------
     file_prefix : str
@@ -71,6 +62,15 @@ def read_rfmix(
     admix : :class:`dask.array.Array`
         Local ancestry per population (columns pop1*nsamples ... popX*nsamples).
         This is in order of the populations see `rf_q`.
+    
+    Notes
+    -----
+    Local ancestry output will be either :const:`0`, :const:`1`, :const:`2`, or
+    :data:`math.nan`:
+
+    - :const:`0` No alleles are associated with this ancestry
+    - :const:`1` One allele is associated with this ancestry
+    - :const:`2` Both alleles are associated with this ancestry
     """
     from tqdm import tqdm
     from dask.array import concatenate

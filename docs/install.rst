@@ -7,8 +7,8 @@ It can be installed via pip::
   pip install rfmix-reader
 
 
-GPU Acceleration:
------------------
+GPU Acceleration
+----------------
 
 ``rfmix-reader`` leverages GPU acceleration for improved performance. To use this
 functionality, you will need to install the following libraries for your specific

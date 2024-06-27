@@ -25,18 +25,11 @@ def set_gpu_environment():
     and CUDA capability.
 
     The function relies on two external functions:
-    - `device_count()`: Returns the number of GPUs available.
-    - `get_device_properties(device_id)`: Returns the properties of the GPU
-      with the given device ID.
-
-    Example output
-    --------------
-    GPU 0: NVIDIA GeForce RTX 3080
-      Total memory: 10.00 GB
-      CUDA capability: 8.6
-    GPU 1: NVIDIA GeForce RTX 3070
-      Total memory: 8.00 GB
-      CUDA capability: 8.6
+    
+    - `device_count()`:
+      Returns the number of GPUs available.
+    - `get_device_properties(device_id)`:
+      Returns the properties of the GPU with the given device ID.
 
     Raises
     ------
@@ -47,6 +40,15 @@ def set_gpu_environment():
     ------------
     - torch.cuda.device_count: Counts the numer of GPU devices
     - torch.cuda.get_device_propoerties: Get device properties
+    
+    Example
+    -------
+    GPU 0: NVIDIA GeForce RTX 3080
+      Total memory: 10.00 GB
+      CUDA capability: 8.6
+    GPU 1: NVIDIA GeForce RTX 3070
+      Total memory: 8.00 GB
+      CUDA capability: 8.6
     """
     num_gpus = device_count()
     if num_gpus == 0:
@@ -124,6 +126,10 @@ def get_prefixes(file_prefix: str, verbose: bool = True):
         types (e.g., "fb.tsv", "rfmix.Q") to their corresponding 
         file paths.
 
+    Raises
+    ------
+    FileNotFoundError: If no files matching the given prefix are found.
+    
     Example
     -------
     Given a directory structure:
@@ -154,9 +160,6 @@ def get_prefixes(file_prefix: str, verbose: bool = True):
     - os.path.join
     - _clean_prefixes: A helper function to clean and sort file prefixes.
 
-    Raises
-    ------
-    FileNotFoundError: If no files matching the given prefix are found.
     """
     try:
         file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("chr*")])
@@ -292,13 +295,6 @@ def _generate_binary_files(fb_files, binary_dir):
     -------
     None
 
-    Side Effects
-    ------------
-    - Creates binary files in the specified binary directory for
-      each input FB file.
-    - Prints a message indicating the start of the conversion process.
-    - Displays a progress bar during the conversion process.
-
     Performance
     -----------
     The function automatically determines the optimal number of CPU
@@ -316,6 +312,13 @@ def _generate_binary_files(fb_files, binary_dir):
     - Any exceptions raised during the processing of individual files 
       will be handled by the multiprocessing Pool and may interrupt 
       the entire process.
+
+    Side Effects
+    ------------
+    - Creates binary files in the specified binary directory for
+      each input FB file.
+    - Prints a message indicating the start of the conversion process.
+    - Displays a progress bar during the conversion process.
     """
     print("Converting fb files to binary!")
     # Determine the number of CPU cores to use
@@ -345,12 +348,6 @@ def delete_files_or_directories(path_patterns):
     -------
     None
 
-    Side Effects
-    ------------
-    - Deletes files or directories that match the specified patterns.
-    - Prints messages indicating the deletion status of each path.
-    - Prints error messages if a path cannot be deleted.
-
     Example
     -------
     delete_files_or_directories(['/tmp/test_dir/*', '/tmp/old_files/*.log'])
@@ -364,6 +361,9 @@ def delete_files_or_directories(path_patterns):
       directories.
     - Use this function with caution as it will permanently delete
       the specified files or directories.
+    - Deletes files or directories that match the specified patterns.
+    - Prints messages indicating the deletion status of each path.
+    - Prints error messages if a path cannot be deleted.
     """
     for pattern in path_patterns:
         match_paths = glob(pattern, recursive=True)
@@ -400,12 +400,6 @@ def create_binaries(
     -------
     None
 
-    Side Effects
-    ------------
-    - Creates a directory for binary files if it doesn't exist.
-    - Converts identified FB TSV files to binary format.
-    - Prints messages about the creation process.
-
     Raises
     ------
     FileNotFoundError: If no files matching the given prefix are found.
@@ -423,6 +417,9 @@ def create_binaries(
       `_generate_binary_files`.
     - Ensure that the necessary permissions are available to create
       directories and files.
+    - Creates a directory for binary files if it doesn't exist.
+    - Converts identified FB TSV files to binary format.
+    - Prints messages about the creation process.
 
     Dependencies
     ------------
