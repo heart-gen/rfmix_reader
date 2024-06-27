@@ -32,7 +32,6 @@ __all__ = ["read_rfmix"]
 def read_rfmix(
         file_prefix: str, binary_dir: str = "./binary_files",
         generate_binary: bool = False, verbose: bool = True,
-        bed_format: bool = False,
 ) -> Tuple[DataFrame, DataFrame, Array]:
     """
     Read RFMix files into data frames and a Dask array.
@@ -111,9 +110,6 @@ def read_rfmix(
     )
     pbar.close()
     admix = concatenate(admix, axis=0)
-    # Generate BED format
-    if bed_format:
-        pass
     return loci, rf_q, admix
 
 
