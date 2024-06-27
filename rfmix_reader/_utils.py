@@ -17,14 +17,14 @@ def set_gpu_environment():
     """
     Reviews and prints the properties of available GPUs.
 
-    This function checks the number of GPUs available on the system. 
+    This function checks the number of GPUs available on the system.
     If no GPUs are found, it prints a message indicating that no GPUs
     are available. If GPUs are found, it iterates through each GPU
     and prints its properties, including the name, total memory in gigabytes,
     and CUDA capability.
 
     The function relies on two external functions:
-    
+
     - `device_count()`:
       Returns the number of GPUs available.
     - `get_device_properties(device_id)`:
@@ -39,7 +39,7 @@ def set_gpu_environment():
     ------------
     - torch.cuda.device_count: Counts the numer of GPU devices
     - torch.cuda.get_device_propoerties: Get device properties
-    
+
     Example
     -------
     GPU 0: NVIDIA GeForce RTX 3080
