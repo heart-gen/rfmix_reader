@@ -409,7 +409,7 @@ def create_binaries(
 
     Example
     -------
-    create_binaries("sample_data_", "./output_binaries")
+    create_binaries("data_", "./output_binaries")
 
     Notes
     -----
