@@ -51,8 +51,7 @@ def loci_to_bed(loci: DataFrame, rf_q: DataFrame, admix: Array) -> None:
 
 def _generate_bed(
         df: DataFrame, dask_matrix: Array, npops: int,
-        col_names: List[str], output_dir: str = "output",
-        output_file: str = "bed_results.hdf",
+        col_names: List[str], output_dir: str = "bed_results",
         verbose: bool = True
 ) -> None:
     # Check if the DataFrame and Dask array have the same number of rows
@@ -71,18 +70,17 @@ def _generate_bed(
     # Loop through results
     chromosomes = ddf['chromosome'].unique().compute()
     makedirs(output_dir, exist_ok=True)
-    out_file = join(output_dir, output_file)
     for chrom in tqdm(sorted(chromosomes), desc="Processing Chromosomes",
                       disable=not verbose):
         chrom_group = ddf[ddf['chromosome'] == chrom]
         bed_records = _process_chromosome(chrom_group, npops, col_names)
         # Write results to Parquet file
-        bed_records.to_hdf(out_file, key="bed_records", mode="a", complevel=9,
-                           format="table", data_columns=True, index=False)
+        out_path = join(output_dir, chrom)
+        bed_records.to_parquet(out_path, write_index=False)
         # Clear memory
         del bed_records, chrom_group
     if verbose:
-        print(f"Results written to {out_file}")
+        print(f"Results written to {out_dir}")
     return None
 
 
@@ -155,26 +153,26 @@ def _process_chromosome(
     return dd.from_dask_array(bed_records, columns=cnames)
 
 
-def _create_bed_records(chromosome_value, positions, data_matrix, change_indices):
+def _create_bed_records(chrom_value, pos, data_matrix, idx):
     # Create start indices
-    start_indices = concatenate([array([0]), change_indices[:-1] + 1])
+    start_indices = concatenate([array([0]), idx[:-1] + 1])
     # Create arrays for each column
-    chrom_column = full(change_indices.shape, chromosome_value)
-    start_column = positions[start_indices]
-    end_column = positions[change_indices]
-    data_columns = data_matrix[change_indices]
+    chrom_col = full(idx.shape, chrom_value)
+    start_col = pos[start_indices]
+    end_col = pos[idx]
+    data_cols = data_matrix[idx]
     # Add the last interval
-    last_start = positions[change_indices[-1] + 1]
-    last_end = positions[-1]
+    last_start = pos[idx[-1] + 1]
+    last_end = pos[-1]
     last_data = data_matrix[-1]
     # Concatenate all data
-    chrom_column = concatenate([chrom_column, array([chromosome_value])])
-    start_column = concatenate([start_column, array([last_start])])
-    end_column = concatenate([end_column, array([last_end])])
-    data_columns = concatenate([data_columns, last_data.reshape(1, -1)])
+    chrom_col = concatenate([chrom_col, array([chrom_value])])
+    start_col = concatenate([start_col, array([last_start])])
+    end_col = concatenate([end_col, array([last_end])])
+    data_cols = concatenate([data_cols, last_data.reshape(1, -1)])
     # Combine all columns
-    return concatenate([chrom_column[:, None], start_column[:, None],
-                        end_column[:, None], data_columns], axis=1)
+    return concatenate([chrom_col[:, None], start_col[:, None],
+                        end_col[:, None], data_cols], axis=1)
 
 
 def _find_intervals(data_matrix: Array, npops: int) -> List[int]:
