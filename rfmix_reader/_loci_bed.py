@@ -426,5 +426,5 @@ def _testing():
         "localQTL_manuscript/local_ancestry_rfmix/_m/"
     #create_binaries(prefix_path)
     loci, rf_q, admix = read_rfmix(prefix_path)
-    loci_to_bed(loci, rf_q, admix)
+    export_loci_admix_to_bed(loci, rf_q, admix)
     return None
