@@ -2,6 +2,7 @@ from tqdm import tqdm
 from numpy import full
 from typing import List
 from os import makedirs
+from os.path import join
 import dask.dataframe as dd
 from multiprocessing import cpu_count
 from dask.array import (
@@ -26,63 +27,33 @@ if is_available():
 else:
     from pandas import DataFrame, concat
 
-__all__ = ["convert_loci"]
+__all__ = ["loci_to_bed"]
 
 def _testing():
     from rfmix_reader import read_rfmix, create_binaries
     # prefix_path = "../examples/two_populations/out/"
     prefix_path = "/dcs05/lieber/hanlab/jbenjami/projects/"+\
         "localQTL_manuscript/local_ancestry_rfmix/_m/"
-    create_binaries(prefix_path)
+    #create_binaries(prefix_path)
     loci, rf_q, admix = read_rfmix(prefix_path)
-    bed_df = loci_to_bed(loci, rf_q, admix)
+    loci_to_bed(loci, rf_q, admix)
     return None
 
 
-def _demo():
-    from time import time
-    df = DataFrame({
-        'chromosome': ['chr1', 'chr1', 'chr1', 'chr1', 'chr1', 'chr1', 'chr1',
-                       'chr2', 'chr2', 'chr2', 'chr2', 'chr2', 'chr2', 'chr2'],
-        'physical_position': [1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7]
-    })
-    dask_matrix = from_array([
-        [0, 1, 1, 1, 0, 0],
-        [0, 1, 1, 1, 0, 0],
-        [1, 1, 0, 0, 0, 1],
-        [0, 0, 0, 1, 1, 1],
-        [1, 1, 1, 0, 0, 0],
-        [1, 1, 1, 0, 0, 0],
-        [1, 0, 1, 0, 1, 0],
-        [1, 0, 1, 0, 1, 0],
-        [0, 0, 1, 1, 1, 0],
-        [0, 0, 0, 1, 1, 1],
-        [0, 1, 0, 1, 0, 1],
-        [0, 1, 0, 1, 0, 1],
-        [1, 1, 1, 0, 0, 0],
-        [1, 1, 1, 0, 0, 0],
-    ])
-    sample_ids = ["data_1", "data_2", "data_3"]; pops = ["AFR", "EUR"]
-    npops = len(pops)
-    col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
-    tic = time()
-    bed_df = _generate_bed(df, dask_matrix, len(pops), col_names)
-    toc = time()
-    elapse = toc - tic
-    return bed_df, elapse
-
-
-def loci_to_bed(loci: DataFrame, rf_q: DataFrame, admix: Array) -> dd.DataFrame:
+def loci_to_bed(loci: DataFrame, rf_q: DataFrame, admix: Array) -> None:
     # Column annotations
     sample_ids = _get_sample_names(rf_q); pops = _get_pops(rf_q)
     col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
     # Generate BED dataframe
-    return _generate_bed(loci, admix, len(pops), col_names)
+    _generate_bed(loci, admix, len(pops), col_names)
+    return None
 
 
 def _generate_bed(
         df: DataFrame, dask_matrix: Array, npops: int,
-        col_names: List[str], output_dir: str, verbose: bool = True
+        col_names: List[str], output_dir: str = "output",
+        output_file: str = "bed_results.hdf",
+        verbose: bool = True
 ) -> None:
     # Check if the DataFrame and Dask array have the same number of rows
     assert df.shape[0] == dask_matrix.shape[0], "DataFrame and Dask array must have the same number of rows"
@@ -97,15 +68,22 @@ def _generate_bed(
     dask_df = dd.from_dask_array(dask_matrix, columns=col_names)
     ddf = dd.concat([ddf, dask_df], axis=1)
     del dask_df    
-    # Loop through chromosomes
-    results = []
+    # Loop through results
     chromosomes = ddf['chromosome'].unique().compute()
+    makedirs(output_dir, exist_ok=True)
+    out_file = join(output_dir, output_file)
     for chrom in tqdm(sorted(chromosomes), desc="Processing Chromosomes",
                       disable=not verbose):
         chrom_group = ddf[ddf['chromosome'] == chrom]
-        results.append(_process_chromosome(chrom_group, npops, col_names))
-    # Group by chromosome and apply the process_chromosome function
-    return dd.concat(results, axis=0)
+        bed_records = _process_chromosome(chrom_group, npops, col_names)
+        # Write results to Parquet file
+        bed_records.to_hdf(out_file, key="bed_records", mode="a", complevel=9,
+                           format="table", data_columns=True, index=False)
+        # Clear memory
+        del bed_records, chrom_group
+    if verbose:
+        print(f"Results written to {out_file}")
+    return None
 
 
 def _process_chromosome(
@@ -151,7 +129,7 @@ def _process_chromosome(
     1          | 300               | 0    | 1
     1          | 400               | 0    | 1
 
-    Output DataFrame:
+    Output Dask DataFrame:
     chromosome | start | end | pop1 | pop2
     1          | 100   | 200 | 1    | 0
     1          | 300   | 400 | 0    | 1
@@ -169,6 +147,15 @@ def _process_chromosome(
     change_indices = array(_find_intervals(data_matrix, npops))
     # Compute chromosome value once
     chromosome_value = chromosome.compute()[0]
+    # Create arrays for each column
+    # Create Dask DataFrame
+    bed_records = _create_bed_records(chromosome_value, positions,
+                                      data_matrix, change_indices)
+    cnames = ['chromosome', 'start', 'end'] + col_names
+    return dd.from_dask_array(bed_records, columns=cnames)
+
+
+def _create_bed_records(chromosome_value, positions, data_matrix, change_indices):
     # Create start indices
     start_indices = concatenate([array([0]), change_indices[:-1] + 1])
     # Create arrays for each column
@@ -186,11 +173,8 @@ def _process_chromosome(
     end_column = concatenate([end_column, array([last_end])])
     data_columns = concatenate([data_columns, last_data.reshape(1, -1)])
     # Combine all columns
-    bed_records = concatenate([chrom_column[:, None], start_column[:, None],
-                               end_column[:, None], data_columns], axis=1)
-    # Create Dask DataFrame
-    cnames = ['chromosome', 'start', 'end'] + col_names
-    return dd.from_dask_array(bed_records, columns=cnames)
+    return concatenate([chrom_column[:, None], start_column[:, None],
+                        end_column[:, None], data_columns], axis=1)
 
 
 def _find_intervals(data_matrix: Array, npops: int) -> List[int]:
@@ -253,26 +237,6 @@ def _find_intervals(data_matrix: Array, npops: int) -> List[int]:
     changes = where(diffs != 0)    
     # Compute only once and convert to set for faster operations
     return sorted(set(changes[0].compute()))
-
-
-def _old_intervals(data_matrix: Array, npops: int) -> List[int]:
-    # Validate input dimensions
-    if data_matrix.shape[1] % npops != 0:
-        raise ValueError(f"Matrix column count ({data_matrix.shape[1]}) is not divisible by npops ({npops})")
-    # Determine the number of columns to process
-    num_cols = data_matrix.shape[1] // npops if npops == 2 else data_matrix.shape[1]
-    all_indices = set()    
-    for col in range(num_cols):
-        # Extract column data
-        col_data = data_matrix[:, col]
-        # Compute differences between adjacent elements
-        diffs = diff(col_data)
-        # Fine indices where differences are non-zero (indicating a change)
-        col_change_indices = where(diffs != 0)[0].compute()
-        # Add these indices to the set of all change indices
-        all_indices.update(col_change_indices)
-    # Return a unique set of indices
-    return sorted(all_indices)
 
 
 def _get_pops(rf_q: DataFrame):
@@ -339,3 +303,56 @@ def _get_sample_names(rf_q: DataFrame):
         return rf_q.sample_id.unique().to_arrow()
     else:
         return rf_q.sample_id.unique()
+
+
+def _demo():
+    from time import time
+    df = DataFrame({
+        'chromosome': ['chr1', 'chr1', 'chr1', 'chr1', 'chr1', 'chr1', 'chr1',
+                       'chr2', 'chr2', 'chr2', 'chr2', 'chr2', 'chr2', 'chr2'],
+        'physical_position': [1, 2, 3, 4, 5, 6, 7, 1, 2, 3, 4, 5, 6, 7]
+    })
+    dask_matrix = from_array([
+        [0, 1, 1, 1, 0, 0],
+        [0, 1, 1, 1, 0, 0],
+        [1, 1, 0, 0, 0, 1],
+        [0, 0, 0, 1, 1, 1],
+        [1, 1, 1, 0, 0, 0],
+        [1, 1, 1, 0, 0, 0],
+        [1, 0, 1, 0, 1, 0],
+        [1, 0, 1, 0, 1, 0],
+        [0, 0, 1, 1, 1, 0],
+        [0, 0, 0, 1, 1, 1],
+        [0, 1, 0, 1, 0, 1],
+        [0, 1, 0, 1, 0, 1],
+        [1, 1, 1, 0, 0, 0],
+        [1, 1, 1, 0, 0, 0],
+    ])
+    sample_ids = ["data_1", "data_2", "data_3"]; pops = ["AFR", "EUR"]
+    npops = len(pops)
+    col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
+    tic = time()
+    bed_df = _generate_bed(df, dask_matrix, len(pops), col_names)
+    toc = time()
+    elapse = toc - tic
+    return bed_df, elapse
+
+
+def _old_intervals(data_matrix: Array, npops: int) -> List[int]:
+    # Validate input dimensions
+    if data_matrix.shape[1] % npops != 0:
+        raise ValueError(f"Matrix column count ({data_matrix.shape[1]}) is not divisible by npops ({npops})")
+    # Determine the number of columns to process
+    num_cols = data_matrix.shape[1] // npops if npops == 2 else data_matrix.shape[1]
+    all_indices = set()    
+    for col in range(num_cols):
+        # Extract column data
+        col_data = data_matrix[:, col]
+        # Compute differences between adjacent elements
+        diffs = diff(col_data)
+        # Fine indices where differences are non-zero (indicating a change)
+        col_change_indices = where(diffs != 0)[0].compute()
+        # Add these indices to the set of all change indices
+        all_indices.update(col_change_indices)
+    # Return a unique set of indices
+    return sorted(all_indices)
