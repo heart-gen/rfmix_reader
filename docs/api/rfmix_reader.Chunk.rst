@@ -1,6 +1,10 @@
-rfmix\_reader.read\_rfmix
-==========
+rfmix\_reader.Chunk
+===================
 
 .. currentmodule:: rfmix_reader
 
-.. autofunction:: read_rfmix
+.. autoclass:: Chunk
+   :exclude-members: dataclass
+
+
+   .. automethod:: __init__

@@ -1,6 +1,6 @@
-rfmix\_reader.read\_rfmix
-==========
+rfmix\_reader.create\_binaries
+==============================
 
 .. currentmodule:: rfmix_reader
 
-.. autofunction:: read_rfmix
+.. autofunction:: create_binaries

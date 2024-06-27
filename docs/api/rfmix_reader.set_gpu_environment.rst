@@ -1,6 +1,6 @@
-rfmix\_reader.read\_rfmix
-==========
+rfmix\_reader.set\_gpu\_environment
+===================================
 
 .. currentmodule:: rfmix_reader
 
-.. autofunction:: read_rfmix
+.. autofunction:: set_gpu_environment

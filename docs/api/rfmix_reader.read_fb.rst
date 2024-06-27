@@ -1,6 +1,6 @@
-rfmix\_reader.read\_rfmix
-==========
+rfmix\_reader.read\_fb
+======================
 
 .. currentmodule:: rfmix_reader
 
-.. autofunction:: read_rfmix
+.. autofunction:: read_fb

@@ -1,6 +1,6 @@
-rfmix\_reader.read\_rfmix
-==========
+rfmix\_reader.delete\_files\_or\_directories
+============================================
 
 .. currentmodule:: rfmix_reader
 
-.. autofunction:: read_rfmix
+.. autofunction:: delete_files_or_directories

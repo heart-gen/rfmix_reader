@@ -1,6 +1,6 @@
-rfmix\_reader.read\_rfmix
-==========
+rfmix\_reader.get\_prefixes
+===========================
 
 .. currentmodule:: rfmix_reader
 
-.. autofunction:: read_rfmix
+.. autofunction:: get_prefixes
