@@ -28,4 +28,11 @@ pytest = "^8.2"
 sphinx = "^7.3.7"
 sphinx-rtd-theme = "^2.0.0"
 sphinx-autodoc-typehints = "^2.1.0"
+torch = {version = "^2.3.1+cpu", source = "pytorch_cpu"}
+torchvision = {version = "^0.18.1+cpu", source = "pytorch_cpu"}
+
+[[tool.poetry.source]]
+name = "pytorch_cpu"
+url = "https://download.pytorch.org/whl/cpu"
+priority = "explicit"
 

@@ -5,6 +5,7 @@
 
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
+import rfmix_reader
 import sphinx_rtd_theme
 
 # -- General configuration ---------------------------------------------------
