@@ -103,15 +103,9 @@ with haplotypes condensed to regional variation.
 # TODO: write usage here
 ```
 
-Similar to generating binary files, this can also be done
-on the fly within the main function.
-
-```python
-from rfmix_reader import read_rfmix
-
-file_path = "examples/two_popuations/out/"
-loci, rf_q, admix = read_rfmix(file_path, bed_format=True)
-```
+Unlike generating binary files, this takes a large amount of 
+memory to write files, so it must be called separately outside
+of the main function.
 
 ### Three population admixture example
 `RFMix-reader` is adaptable for as many population admixtures as
