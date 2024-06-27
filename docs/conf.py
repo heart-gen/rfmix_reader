@@ -43,8 +43,6 @@ author = 'Kynon JM Benjamin'
 version = get_version()
 release = version
 
-language = None
-
 exclude_patterns = ["_build", "conf.py"]
 pygments_style = "default"
 todo_include_todos = False
