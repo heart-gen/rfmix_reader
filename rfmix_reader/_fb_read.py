@@ -22,11 +22,16 @@ def read_fb(
 
     Parameters
     ----------
-    filepath (str): Path to the binary file.
-    nrows (int): Total number of rows in the dataset.
-    ncols (int): Total number of columns in the dataset.
-    row_chunk (int): Number of rows to process in each chunk.
-    col_chunk (int): Number of columns to process in each chunk.
+    filepath : str
+        Path to the binary file.
+    nrows : int
+        Total number of rows in the dataset.
+    ncols : int
+        Total number of columns in the dataset.
+    row_chunk : int
+        Number of rows to process in each chunk.
+    col_chunk : int
+        Number of columns to process in each chunk.
 
     Returns
     -------
