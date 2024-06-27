@@ -144,13 +144,16 @@ def _generate_bed(
         ddf = dd.from_pandas(df.to_pandas(), npartitions=parts)
     else:
         ddf = dd.from_pandas(df, npartitions=parts)
+    
     # Add each column of the Dask array to the DataFrame
     dask_df = dd.from_dask_array(dask_matrix, columns=col_names)
     ddf = dd.concat([ddf, dask_df], axis=1)
-    del dask_df    
+    del dask_df
+    
     # Loop through results
     chromosomes = ddf['chromosome'].unique().compute()
     makedirs(output_dir, exist_ok=True)
+    
     for chrom in tqdm(sorted(chromosomes), desc="Processing Chromosomes",
                       disable=not verbose):
         chrom_group = ddf[ddf['chromosome'] == chrom]
@@ -160,6 +163,7 @@ def _generate_bed(
         bed_records.to_parquet(out_path, write_index=False)
         # Clear memory
         del bed_records, chrom_group
+        
     if verbose:
         print(f"Results written to {out_dir}")
     return None
@@ -219,6 +223,7 @@ def _process_chromosome(
     chromosome = group["chromosome"].unique()
     if len(chromosome) != 1:
         raise ValueError(f"Only one chromosome expected got: {len(chromosome)}")
+    
     # Convert the data matrix to a Dask array, excluding 'chromosome' 
     # and 'physical_position' columns
     data_matrix = group[col_names].to_dask_array(lengths=True)
@@ -226,7 +231,6 @@ def _process_chromosome(
     change_indices = array(_find_intervals(data_matrix, npops))
     # Compute chromosome value once
     chromosome_value = chromosome.compute()[0]
-    # Create arrays for each column
     # Create Dask DataFrame
     bed_records = _create_bed_records(chromosome_value, positions,
                                       data_matrix, change_indices)

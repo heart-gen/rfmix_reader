@@ -94,6 +94,7 @@ def _clean_prefixes(prefixes: list[str]):
         if base.startswith("chr"):
             cleaned_prefix = join(dir_path, base)
             cleaned_prefixes.append(cleaned_prefix)
+
     # Remove duplicate prefixes
     return list(set(cleaned_prefixes))
 
@@ -163,6 +164,7 @@ def get_prefixes(file_prefix: str, verbose: bool = True):
             file_prefixes = sorted(glob(join(file_prefix, "*")))
             if not file_prefixes:
                 raise FileNotFoundError()
+        
         file_prefixes = sorted(_clean_prefixes(file_prefixes))
         fn = [{s: f"{fp}.{s}" for s in ["fb.tsv", "rfmix.Q"]} for fp in file_prefixes]
         if not fn:
