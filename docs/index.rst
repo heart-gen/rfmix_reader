@@ -14,7 +14,7 @@ than loading the entire dataset into memory at once.
 
 .. toctree::
    :maxdepth: 2
-   :caption: Contents:
+   :caption: Table of Contents
 
    install
    usage
