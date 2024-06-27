@@ -16,11 +16,17 @@ than loading the entire dataset into memory at once.
    :maxdepth: 2
    :caption: Contents:
 
+* :ref:`install`
+* :ref:`usage`
+* :ref:`api`
 
+*****************
+Comments and bugs
+*****************
+
+You can get the source code and open issues `on Github.`_
+
+.. _on Github.: https://github.com/heart-gen/rfmix_reader
 
 Indices and tables
 ==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
