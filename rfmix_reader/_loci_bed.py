@@ -27,22 +27,57 @@ if is_available():
 else:
     from pandas import DataFrame, concat
 
-__all__ = ["loci_to_bed"]
+__all__ = ["export_loci_admix_to_bed"]
 
-def _testing():
-    from rfmix_reader import read_rfmix, create_binaries
-    # prefix_path = "../examples/two_populations/out/"
-    prefix_path = "/dcs05/lieber/hanlab/jbenjami/projects/"+\
-        "localQTL_manuscript/local_ancestry_rfmix/_m/"
-    #create_binaries(prefix_path)
-    loci, rf_q, admix = read_rfmix(prefix_path)
-    loci_to_bed(loci, rf_q, admix)
-    return None
+def export_loci_admix_to_bed(
+        loci: DataFrame, rf_q: DataFrame, admix: Array,
+        output_dir: str = "bed_results", verbose: bool = True) -> None:
+    """
+    Export loci and admixture data to a BED (Browser Extensible Data) file.
+
+    This function processes genetic loci data along with admixture proportions and 
+    writes the results to a BED format file. The output file includes sample-specific 
+    admixture proportions for each population.
+
+    Parameters
+    ----------
+    loci : DataFrame
+        A DataFrame containing genetic loci information. Expected to have columns 
+        for chromosome, position, and other relevant genetic markers.
+
+    rf_q : DataFrame
+        A DataFrame containing sample and population information. Used to derive 
+        sample IDs and population names.
+
+    admix : Array
+        A Dask Array containing admixture proportions. The shape should be 
+        compatible with the number of loci and populations.
+
+    output_dir : str (optional)
+        The path for the output BED file. Default: bed_results
+
+    Returns
+    -------
+    None
+        The function writes data to a file and doesn't return any value.
 
 
-def loci_to_bed(loci: DataFrame, rf_q: DataFrame, admix: Array) -> None:
+    Notes
+    -----
+    - The function internally calls _generate_bed() to perform the actual file writing.
+    - Column names in the output file are formatted as "{sample}_{population}".
+    - The output file includes data for all chromosomes present in the input 
+      loci DataFrame.
+    - Large datasets may require significant processing time and disk space.
+
+    Example
+    -------
+    >>> loci, rf_q, admix = read_rfmix(prefix_path)
+    >>> export_loci_admix_to_bed(loci_df, rf_q_df, admix_array)
+    """
     # Column annotations
-    sample_ids = _get_sample_names(rf_q); pops = _get_pops(rf_q)
+    pops = _get_pops(rf_q)
+    sample_ids = _get_sample_names(rf_q)
     col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
     # Generate BED dataframe
     _generate_bed(loci, admix, len(pops), col_names)
@@ -51,9 +86,55 @@ def loci_to_bed(loci: DataFrame, rf_q: DataFrame, admix: Array) -> None:
 
 def _generate_bed(
         df: DataFrame, dask_matrix: Array, npops: int,
-        col_names: List[str], output_dir: str = "bed_results",
-        verbose: bool = True
+        col_names: List[str], output_dir: str, verbose: bool
 ) -> None:
+    """
+    Generate BED records from loci and admixture data and write them to Parquet files.
+
+    This function processes genetic loci data along with admixture proportions and 
+    writes the results to Parquet files, one for each chromosome. The output files 
+    include sample-specific admixture proportions for each population.
+
+    Parameters
+    ----------
+    df : DataFrame
+        A DataFrame containing genetic loci information from `read_rfmix`
+
+    dask_matrix : Array
+        A Dask Array containing admixture proportions. The shape should be 
+        compatible with the number of loci and populations. This is from
+        `read_rfmix`.
+
+    npops : int
+        The number of populations in the admixture data.
+
+    col_names : List[str]
+        A list of column names for the admixture data. These should be formatted 
+        as "{sample}_{population}".
+
+    output_dir : str
+        The directory where the output Parquet files will be written. Each 
+        chromosome will have its own Parquet file.
+
+    verbose : bool
+        If True, progress information will be printed to the console.
+
+    Returns
+    -------
+    None
+        The function writes data to Parquet files and doesn't return any value.
+
+    Side Effects
+    ------------
+    - Creates or overwrites Parquet files in the specified output directory.
+    - Prints progress information to the console if verbose mode is enabled.
+
+    Notes
+    -----
+    - The function internally calls _process_chromosome() to process each chromosome.
+    - The output files are named based on the chromosome they contain data for.
+    - Large datasets may require significant processing time and disk space.
+    """
     # Check if the DataFrame and Dask array have the same number of rows
     assert df.shape[0] == dask_matrix.shape[0], "DataFrame and Dask array must have the same number of rows"
     # Convert the DataFrame to a Dask DataFrame
@@ -154,6 +235,41 @@ def _process_chromosome(
 
 
 def _create_bed_records(chrom_value, pos, data_matrix, idx):
+    """
+    Create BED records for a given chromosome.
+
+    This function generates BED (Browser Extensible Data) records for a specific chromosome
+    by processing the positions and admixture data. It returns a concatenated array containing
+    chromosome, start position, end position, and admixture data for each interval.
+
+    Parameters
+    ----------
+    chrom_value : int or str
+        The chromosome identifier (e.g., chromosome number or name).
+
+    pos : dask.array
+        A dask array containing the positions of genetic loci.
+
+    data_matrix : dask.array
+        A dask array containing admixture proportions. The shape should be compatible
+        with the number of loci and populations.
+
+    idx : dask.array
+        A dask array of indices indicating the change points in the positions array.
+
+    Returns
+    -------
+    dask.array
+        A concatenated dask array with columns for chromosome, start position, end position,
+        and admixture data for each interval. The shape of the array is (n_intervals, n_columns),
+        where n_columns = 3 + n_pops (chromosome, start, end, and admixture proportions).
+
+    Notes
+    -----
+    - The function assumes that the input arrays are properly aligned and that the indices
+      in `idx` are valid for the `pos` and `data_matrix` arrays.
+    - The last interval is handled separately to ensure all data is included.
+    """
     # Create start indices
     start_indices = concatenate([array([0]), idx[:-1] + 1])
     # Create arrays for each column
@@ -301,3 +417,14 @@ def _get_sample_names(rf_q: DataFrame):
         return rf_q.sample_id.unique().to_arrow()
     else:
         return rf_q.sample_id.unique()
+
+
+def _testing():
+    from rfmix_reader import read_rfmix, create_binaries
+    # prefix_path = "../examples/two_populations/out/"
+    prefix_path = "/dcs05/lieber/hanlab/jbenjami/projects/"+\
+        "localQTL_manuscript/local_ancestry_rfmix/_m/"
+    #create_binaries(prefix_path)
+    loci, rf_q, admix = read_rfmix(prefix_path)
+    loci_to_bed(loci, rf_q, admix)
+    return None
