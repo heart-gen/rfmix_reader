@@ -16,9 +16,9 @@ than loading the entire dataset into memory at once.
    :maxdepth: 2
    :caption: Contents:
 
-* :ref:`install`
-* :ref:`usage`
-* :ref:`api`
+   install
+   usage
+   api
 
 *****************
 Comments and bugs
@@ -30,3 +30,5 @@ You can get the source code and open issues `on Github.`_
 
 Indices and tables
 ==================
+* :ref:`genindex`
+* :ref:`search`
