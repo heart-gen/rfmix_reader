@@ -10,7 +10,7 @@ authors = ["Kynon JM Benjamin <kj.benjamin90@gmail.com>"]
 maintainers = ["Kynon JM Benjamin <kj.benjamin90@gmail.com>"]
 license = "GPL-3.0"
 readme = "README.md"
-homepage = "https://github.com/heart-gen/rfmix_reader.git"
+homepage = "https://rfmix-reader.readthedocs.io/en/latest/"
 repository = "https://github.com/heart-gen/rfmix_reader.git"
 keywords = ["file parser", "rfmix", "gpu acceleration", "local ancestry"]
 
