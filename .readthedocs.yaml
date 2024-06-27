@@ -11,6 +11,8 @@ build:
     python: "3.10"
   install:
       - requirements: docs/requirements.txt
+      - method: pip
+        path: .
   jobs:
     post_create_environment:
       # Install poetry
