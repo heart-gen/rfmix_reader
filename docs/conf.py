@@ -8,6 +8,10 @@
 import rfmix_reader
 import sphinx_rtd_theme
 
+
+def get_version():
+    return rfmix_reader.__version__
+
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
 
@@ -35,7 +39,7 @@ project = 'rfmix-reader'
 copyright = '2024, Kynon JM Benjamin'
 author = 'Kynon JM Benjamin'
 
-version = '0.1.13'
+version = get_version()
 release = version
 
 exclude_patterns = ["_build", "conf.py"]
