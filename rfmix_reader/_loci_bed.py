@@ -1,9 +1,9 @@
 from tqdm import tqdm
-from numpy import full
 from typing import List
 from os import makedirs
 from os.path import join
 import dask.dataframe as dd
+from numpy import full, ndarray
 from multiprocessing import cpu_count
 from dask.array import (
     diff,
@@ -146,6 +146,8 @@ def _generate_bed(
         ddf = dd.from_pandas(df, npartitions=parts)
     
     # Add each column of the Dask array to the DataFrame
+    if isinstance(dask_matrix, ndarray):
+        dask_matrix = from_array(dask_matrix, chunks="auto")
     dask_df = dd.from_dask_array(dask_matrix, columns=col_names)
     ddf = dd.concat([ddf, dask_df], axis=1)
     del dask_df
