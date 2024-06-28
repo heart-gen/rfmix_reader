@@ -6,7 +6,6 @@ Haplotypes
 ==========
 
 
-
 BED Format
 ==========
 

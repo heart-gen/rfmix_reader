@@ -80,7 +80,7 @@ def export_loci_admix_to_bed(
     sample_ids = _get_sample_names(rf_q)
     col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
     # Generate BED dataframe
-    _generate_bed(loci, admix, len(pops), col_names)
+    _generate_bed(loci, admix, len(pops), col_names, output_dir, verbose)
     return None
 
 
