@@ -26,7 +26,7 @@ Haplotypes
 ==========
 
 Using ``rfmix-reader`` is as simple as
-```pandas-plink`` <https://pandas-plink.readthedocs.io/en/latest/usage.html>`__.
+`pandas-plink <https://pandas-plink.readthedocs.io/en/latest/usage.html>`__.
 
 We provide example data for two and three population admixtured from
 simulation data created with
