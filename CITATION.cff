@@ -8,8 +8,8 @@ message: >-
   metadata from this file.
 type: software
 authors:
-  - given-names: Kynon
-    name-particle: J M
+  - given-names: Kynon JM
+    name-particle:
     family-names: Benjamin
     email: heartgen.lab@gmail.com
     affiliation: Lieber Institute for Brain Development
