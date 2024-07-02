@@ -8,7 +8,7 @@ message: >-
   metadata from this file.
 type: software
 authors:
-  - given-names: Kynon JM
+  - given-names: Kynon J M
     name-particle:
     family-names: Benjamin
     email: heartgen.lab@gmail.com
