@@ -397,5 +397,3 @@ def _types(fn: str) -> dict:
     # Update the header dictionary with the data types of the remaining columns
     header.update(df.dtypes[1:].to_dict())    
     return header
-
-

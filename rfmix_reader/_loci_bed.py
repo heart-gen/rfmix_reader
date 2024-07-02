@@ -3,7 +3,6 @@ from typing import List
 from os import makedirs
 from os.path import join
 import dask.dataframe as dd
-from numpy import full, ndarray
 from multiprocessing import cpu_count
 from dask.array import (
     diff,
@@ -24,8 +23,11 @@ except ModuleNotFoundError as e:
 
 if is_available():
     from cudf import DataFrame, concat
+    from cupy import full, ndarray
 else:
     from pandas import DataFrame, concat
+    from numpy import full, ndarray
+
 
 __all__ = ["export_loci_admix_to_bed"]
 
