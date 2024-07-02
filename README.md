@@ -127,4 +127,6 @@ loci, rf_q, admix = read_rfmix(file_path, binary_dir=binary_dir,
 
 ## Citation
 
-Please cite: XXXX.
+If you use this software in your work, please cite it.
+
+Benjamin, K. J. M. (2024). RFMix-reader (Version v0.1.15) [Computer software]. https://github.com/heart-gen/rfmix_reader
