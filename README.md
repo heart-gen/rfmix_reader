@@ -73,7 +73,7 @@ from rfmix_reader import read_rfmix
 file_path = "examples/two_popuations/out/"
 binary_dir = "./binary_files"
 loci, rf_q, admix = read_rfmix(file_path, binary_dir=binary_dir,
-                               generate_binary_files=True)
+                               generate_binary=True)
 ```
 
 We do not have this turned on by default, as it is the
@@ -94,19 +94,19 @@ loci, rf_q, admix = read_rfmix(file_path)
 **Note:** `./binary_files` is the default for `binary_dir`, 
 so this is an optional parameter.
 
-#### BED format
-One helpful function we provide is `export_loci_admix_to_bed`. 
-This function takes the output of the `read_rfmix` and 
-exports a BED format with haplotypes condensed to regional
-variation in parquet files per chromosome. 
+<!-- #### BED format -->
+<!-- One helpful function we provide is `export_loci_admix_to_bed`.  -->
+<!-- This function takes the output of the `read_rfmix` and  -->
+<!-- exports a BED format with haplotypes condensed to regional -->
+<!-- variation in parquet files per chromosome.  -->
 
-```python
-export_loci_admix_to_bed(loci, rf_q, admix)
-```
+<!-- ```python -->
+<!-- export_loci_admix_to_bed(loci, rf_q, admix) -->
+<!-- ``` -->
 
-Unlike generating binary files, this takes a large amount of 
-memory to write files, so it must be called separately outside
-of the main function.
+<!-- Unlike generating binary files, this takes a large amount of  -->
+<!-- memory to write files, so it must be called separately outside -->
+<!-- of the main function. -->
 
 ### Three population admixture example
 `RFMix-reader` is adaptable for as many population admixtures as
@@ -119,11 +119,7 @@ from rfmix_reader import read_rfmix
 file_path = "examples/three_popuations/out/"
 binary_dir = "./binary_files"
 loci, rf_q, admix = read_rfmix(file_path, binary_dir=binary_dir,
-                               generate_binary_files=True)
-```
-
-```python
-export_loci_admix_to_bed(loci, rf_q, admix)
+                               generate_binary=True)
 ```
 
 ## Authors
