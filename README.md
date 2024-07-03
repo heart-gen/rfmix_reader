@@ -131,3 +131,8 @@ If you use this software in your work, please cite it.
 [![DOI](https://zenodo.org/badge/807052842.svg)](https://zenodo.org/doi/10.5281/zenodo.12629787)
 
 Benjamin, K. J. M. (2024). RFMix-reader (Version v0.1.15) [Computer software]. https://github.com/heart-gen/rfmix_reader
+
+## Funding
+
+This work was supported by grants from the National Institutes of Health,
+National Institute on Minority Health and Health Disparities (NIMHD) K99MD016964.
