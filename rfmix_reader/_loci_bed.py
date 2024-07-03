@@ -1,8 +1,6 @@
-from tqdm import tqdm
 from typing import List
-from os import makedirs
-from os.path import join
 import dask.dataframe as dd
+from numpy import full, ndarray
 from multiprocessing import cpu_count
 from dask.array import (
     diff,
@@ -23,23 +21,21 @@ except ModuleNotFoundError as e:
 
 if is_available():
     from cudf import DataFrame, concat
-    from cupy import full, ndarray
 else:
     from pandas import DataFrame, concat
-    from numpy import full, ndarray
 
 
-__all__ = ["export_loci_admix_to_bed"]
+__all__ = ["admix_to_bed_chromosome"]
 
-def export_loci_admix_to_bed(
-        loci: DataFrame, rf_q: DataFrame, admix: Array,
-        output_dir: str = "bed_results", verbose: bool = True) -> None:
+def admix_to_bed_chromosome(
+        loci: DataFrame, rf_q: DataFrame, admix: Array, chrom: str
+) -> DataFrame:
     """
-    Export loci and admixture data to a BED (Browser Extensible Data) file.
+    Returns loci and admixture data to a BED (Browser Extensible Data) file for
+    a specific chromosome.
 
     This function processes genetic loci data along with admixture proportions and 
-    writes the results to a BED format file. The output file includes sample-specific 
-    admixture proportions for each population.
+    returns BED format DataFrame for a specific chromosome. 
 
     Parameters
     ----------
@@ -55,18 +51,18 @@ def export_loci_admix_to_bed(
         A Dask Array containing admixture proportions. The shape should be 
         compatible with the number of loci and populations.
 
-    output_dir : str (optional)
-        The path for the output BED file. Default: bed_results
+    chrom : str
+       The chromosome to generate BED format for.
 
     Returns
     -------
-    None
-        The function writes data to a file and doesn't return any value.
+    DataFrame: A DataFrame (pandas or cudf) in BED-like format with columns:
+        'chromosome', 'start', 'end', and ancestry data columns.
 
 
     Notes
     -----
-    - The function internally calls _generate_bed() to perform the actual file writing.
+    - The function internally calls _generate_bed() to perform the actual BED formatting.
     - Column names in the output file are formatted as "{sample}_{population}".
     - The output file includes data for all chromosomes present in the input 
       loci DataFrame.
@@ -75,27 +71,26 @@ def export_loci_admix_to_bed(
     Example
     -------
     >>> loci, rf_q, admix = read_rfmix(prefix_path)
-    >>> export_loci_admix_to_bed(loci_df, rf_q_df, admix_array)
+    >>> admix_to_bed_chromosome(loci_df, rf_q_df, admix_array, "chr22")
     """
     # Column annotations
     pops = _get_pops(rf_q)
     sample_ids = _get_sample_names(rf_q)
     col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
     # Generate BED dataframe
-    _generate_bed(loci, admix, len(pops), col_names, output_dir, verbose)
-    return None
+    return _generate_bed(loci, admix, len(pops), col_names, chrom)
 
 
 def _generate_bed(
         df: DataFrame, dask_matrix: Array, npops: int,
-        col_names: List[str], output_dir: str, verbose: bool
-) -> None:
+        col_names: List[str], chrom: str
+) -> DataFrame:
     """
-    Generate BED records from loci and admixture data and write them to Parquet files.
+    Generate BED records from loci and admixture data and subsets for specific
+    chromosome.
 
     This function processes genetic loci data along with admixture proportions and 
-    writes the results to Parquet files, one for each chromosome. The output files 
-    include sample-specific admixture proportions for each population.
+    returns the results for a specific chromosome.
 
     Parameters
     ----------
@@ -114,27 +109,17 @@ def _generate_bed(
         A list of column names for the admixture data. These should be formatted 
         as "{sample}_{population}".
 
-    output_dir : str
-        The directory where the output Parquet files will be written. Each 
-        chromosome will have its own Parquet file.
-
-    verbose : bool
-        If True, progress information will be printed to the console.
+    chrom : str
+        The chromosome to generate BED format for.
 
     Returns
     -------
-    None
-        The function writes data to Parquet files and doesn't return any value.
-
-    Side Effects
-    ------------
-    - Creates or overwrites Parquet files in the specified output directory.
-    - Prints progress information to the console if verbose mode is enabled.
+    DataFrame: A DataFrame (pandas or cudf) in BED-like format with columns:
+        'chromosome', 'start', 'end', and ancestry data columns.
 
     Notes
     -----
     - The function internally calls _process_chromosome() to process each chromosome.
-    - The output files are named based on the chromosome they contain data for.
     - Large datasets may require significant processing time and disk space.
     """
     # Check if the DataFrame and Dask array have the same number of rows
@@ -154,23 +139,9 @@ def _generate_bed(
     ddf = dd.concat([ddf, dask_df], axis=1)
     del dask_df
     
-    # Loop through results
-    chromosomes = ddf['chromosome'].unique().compute()
-    makedirs(output_dir, exist_ok=True)
-    
-    for chrom in tqdm(sorted(chromosomes), desc="Processing Chromosomes",
-                      disable=not verbose):
-        chrom_group = ddf[ddf['chromosome'] == chrom]
-        bed_records = _process_chromosome(chrom_group, npops, col_names)
-        # Write results to Parquet file
-        out_path = join(output_dir, chrom)
-        bed_records.to_parquet(out_path, write_index=False)
-        # Clear memory
-        del bed_records, chrom_group
-        
-    if verbose:
-        print(f"Results written to {out_dir}")
-    return None
+    # Subset for chromosome
+    chrom_group = ddf[ddf['chromosome'] == chrom]
+    return _process_chromosome(chrom_group, npops, col_names)
 
 
 def _process_chromosome(
@@ -431,8 +402,10 @@ def _testing():
     from rfmix_reader import read_rfmix, create_binaries
     # prefix_path = "../examples/two_populations/out/"
     prefix_path = "/dcs05/lieber/hanlab/jbenjami/projects/"+\
-        "localQTL_manuscript/local_ancestry_rfmix/_m/"
+        "software_manuscripts/localQTL/local_ancestry_rfmix/_m/"
     #create_binaries(prefix_path)
-    loci, rf_q, admix = read_rfmix(prefix_path)
-    export_loci_admix_to_bed(loci, rf_q, admix)
+    binary_dir = "/dcs05/lieber/hanlab/jbenjami/projects/"+\
+        "software_manuscripts/rfmix_reader/real_data/gpu_version/_m/binary_files/"
+    loci, rf_q, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
+    bed = admix_to_bed_chromosome(loci, rf_q, admix, "chr22")
     return None
