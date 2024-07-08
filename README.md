@@ -110,8 +110,7 @@ so this is an optional parameter.
 
 ### Three population admixture example
 `RFMix-reader` is adaptable for as many population admixtures as
-needed. However, due to some conservative parameters, the use
-of BED formatting will take longer than a two population analysis.
+needed. 
 
 ```python
 from rfmix_reader import read_rfmix
