@@ -7,7 +7,7 @@ from ._utils import (
     get_prefixes, create_binaries
 )
 
-__version__ = "0.1.15"
+__version__ = "0.1.16"
 
 __all__ = [
     "Chunk",
