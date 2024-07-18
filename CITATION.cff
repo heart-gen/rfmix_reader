@@ -17,6 +17,8 @@ authors:
 identifiers:
   - type: doi
     value: 10.5281/zenodo.12629788
+  - type: doi
+    value: 10.1101/2024.07.13.603370
 repository-code: 'https://github.com/heart-gen/rfmix_reader'
 url: 'https://rfmix-reader.readthedocs.io/en/latest/index.html'
 abstract: >-
