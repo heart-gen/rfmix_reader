@@ -133,7 +133,7 @@ Benjamin, K. J. M. (2024). RFMix-reader (Version v0.1.15) [Computer software]. h
 
 Kynon JM Benjamin. "RFMix-reader: Accelerated reading and processing for
 local ancestry studies." *bioRxiv*. 2024.
-DOI: <https://doi.org/10.1101/2024.07.13.603370>.
+DOI: [10.1101/2024.07.13.603370](https://www.biorxiv.org/content/10.1101/2024.07.13.603370v2).
 
 ## Funding
 
