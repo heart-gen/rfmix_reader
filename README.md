@@ -46,6 +46,10 @@ solution for reading and processing `RFMix` output files. Its lazy loading appro
 ensures optimal resource utilization, making it a valuable tool for researchers
 and bioinformaticians working with admixed population data.
 
+## Simulation data
+Simulation data is available for testing two and three population admixture on Synapse:
+[syn61691659](https://www.synapse.org/Synapse:syn61691659).
+
 ## Usage
 This works similarly to [`pandas-plink`]():
 
