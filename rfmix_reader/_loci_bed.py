@@ -1,3 +1,4 @@
+from tqdm import tqdm
 from typing import List
 import dask.dataframe as dd
 from numpy import full, ndarray
@@ -24,11 +25,180 @@ if is_available():
 else:
     from pandas import DataFrame, concat
 
+__all__ = [
+    "admix_to_bed_chromosome",
+    "generate_tagore_bed"
+]
 
-__all__ = ["admix_to_bed_chromosome"]
+def generate_tagore_bed(
+        loci: DataFrame, rf_q: DataFrame, admix: Array, sample_num: int,
+        verbose: bool = True
+) -> DataFrame:
+    """
+    Generate a BED (Browser Extensible Data) file formatted for TAGORE visualization.
+
+    This function processes genomic data and creates a BED file suitable for
+    visualization with TAGORE (https://github.com/jordanlab/tagore).
+
+    Parameters:
+        loci (DataFrame): A DataFrame containing genomic loci information.
+        rf_q (DataFrame): A DataFrame containing recombination fraction quantiles.
+        admix (Array): An array of admixture proportions.
+        sample_num (int): The sample number to process.
+        verbose (bool, optional): If True, print progress information. Defaults to True.
+
+    Returns:
+        DataFrame: A DataFrame in BED format, annotated and ready for TAGORE 
+                   visualization.
+
+    Note:
+        This function relies on several helper functions:
+        - admix_to_bed_chromosome: Converts admixture data to BED format for a specific chromosome.
+        - _string_to_int: Converts specific columns in the BED DataFrame to integer type (interal function).
+        - _annotate_tagore: Adds annotation columns required for TAGORE visualization (internal function).
+    """
+    # Convert admixture data to BED format for the specified sample
+    bed = admix_to_bed_chromosome(loci, rf_q, admix, 0, verbose)
+
+    # Get the name of the sample column (assumed to be the 4th column)
+    sample_name = bed.columns[3]
+
+    # Convert string columns to integer type
+    bed = _string_to_int(bed, sample_name)
+
+    # Annotate the BED file for TAGORE visualization
+    return _annotate_tagore(bed, sample_name)
+
+
+def _annotate_tagore(df: DataFrame, sample_name: str) -> DataFrame:
+    """
+    Annotate a DataFrame with additional columns for visualization purposes.
+
+    This function expands the input DataFrame, adds annotation columns such as
+    'feature', 'size', 'color', and 'chrCopy', and renames some columns for 
+    compatibility with visualization tools.
+
+    Parameters:
+        df (DataFrame): The input DataFrame to be annotated.
+        sample_name (str): The name of the column containing sample data.
+
+    Returns:
+        DataFrame: The annotated DataFrame with additional columns.
+    """
+    # Import cupy if CUDA is available, otherwise import numpy
+    if is_available():
+        import cupy as cp
+    else:
+        import numpy as cp
+
+    # Define a color dictionary to map sample values to colors
+    color_dict = {1:"#E64B35FF", 0:"#4DBBD5FF"}
+
+    # Expand the DataFrame using the _expand_dataframe function
+    expanded_df = _expand_dataframe(df, sample_name)
+
+    # Initialize columns for feature and size
+    expanded_df["feature"] = 0
+    expanded_df["size"] = 1
+
+    # Map the sample_name column to colors using the color_dict
+    expanded_df["color"] = expanded_df[sample_name].map(color_dict)
+    
+    # Generate a repeating sequence of 1 and 2
+    repeating_sequence = cp.tile(cp.array([1, 2]),
+                                 int(cp.ceil(len(expanded_df) / 2)))[:len(expanded_df)]
+    
+    # Add the repeating sequence as a new column
+    expanded_df['chrCopy'] = repeating_sequence
+
+    # Drop the sample_name column and rename columns for compatibility
+    return expanded_df.drop([sample_name], axis=1)\
+                      .rename(columns={"chromosome": "#chr", "end": "stop"})
+
+
+def _string_to_int(bed: DataFrame, sample_name: str) -> DataFrame:
+    """
+    Convert specific columns in a BED DataFrame from string to integer type.
+
+    This function converts the sample_name column and the 'start' and 'end' 
+    columns to integer type. If CUDA is available, it also converts the 
+    DataFrame to a cuDF DataFrame for GPU-accelerated processing.
+
+    Parameters:
+        bed (DataFrame): The input BED DataFrame.
+        sample_name (str): The name of the column containing sample data.
+
+    Returns:
+        DataFrame: The modified DataFrame with converted column types.
+    """
+    # Convert the columns to integer type
+    bed[sample_name] = bed[sample_name].astype(int)
+    bed["start"] = bed["start"].astype(int)
+    bed["end"] = bed["end"].astype(int)
+    
+    # Check if CUDA is available
+    if is_available():
+        from cudf import from_pandas
+        # Convert the pandas DataFrame to a cuDF DataFrame
+        bed = from_pandas(bed)
+    return bed
+
+
+def _expand_dataframe(df: DataFrame, sample_name: str) -> DataFrame:
+    """
+    Expands a dataframe by duplicating rows based on a specified sample name column.
+    
+    For rows where the value in the sample name column is greater than 1, the 
+    function creates two sets of rows:
+    1. The original rows with the sample name value decremented by 1.
+    2. Rows with the sample name value set to either 1 or 0 based on the condition.
+    
+    The resulting dataframe is then sorted by 'chromosome', 'start', and the sample
+    name column.
+    
+    Parameters:
+        df (DataFrame): The input dataframe to be expanded.
+        sample_name (str): The name of the column to be used for the expansion 
+                           condition.
+    
+    Returns:
+        DataFrame: The expanded and sorted dataframe.
+    """
+    if is_available():
+        import cupy as cp # Import cupy for GPU-accelerated operations
+    else:
+        import numpy as cp
+    # Create a boolean mask for rows where sample_id > 1
+    mask = df[sample_name] > 1
+    
+    # Create the first set of rows:
+    # - For rows where mask is True: decrease sample_id by 1
+    # - For rows where mask is False: keep original sample_id
+    df1 = df.copy()
+    df1.loc[mask, sample_name] -= 1
+    
+    # Create the second set of rows:
+    # - For rows where mask is True: set sample_id to 1
+    # - For rows where mask is False: set sample_id to 0
+    df2 = df.copy()
+    df2[sample_name] = cp.where(mask, 1, 0)
+    
+    # Concatenate the two dataframes vertically
+    expanded_df = concat([df1, df2], ignore_index=True)
+    
+    # Sort the expanded DataFrame:
+    # - First by 'chromosome' (ascending)
+    # - Then by 'start' (ascending)
+    # - Finally by sample_name (descending)
+    # Reset the index after sorting
+    return expanded_df.sort_values(by=['chromosome', 'start', sample_name],
+                                   ascending=[True, True, False])\
+                      .reset_index(drop=True)    
+
 
 def admix_to_bed_chromosome(
-        loci: DataFrame, rf_q: DataFrame, admix: Array, chrom: str
+        loci: DataFrame, rf_q: DataFrame, admix: Array, sample_num: int,
+        verbose: bool=True
 ) -> DataFrame:
     """
     Returns loci and admixture data to a BED (Browser Extensible Data) file for
@@ -51,8 +221,12 @@ def admix_to_bed_chromosome(
         A Dask Array containing admixture proportions. The shape should be 
         compatible with the number of loci and populations.
 
-    chrom : str
-       The chromosome to generate BED format for.
+    sample_num : int
+       The column name including in data, will take the first population
+
+    verbose : bool
+       :const:`True` for progress information; :const:`False` otherwise.
+       Default:`True`.
 
     Returns
     -------
@@ -77,13 +251,15 @@ def admix_to_bed_chromosome(
     pops = _get_pops(rf_q)
     sample_ids = _get_sample_names(rf_q)
     col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
+    sample_name = f"{sample_ids[sample_num]}_{pops[0]}"
     # Generate BED dataframe
-    return _generate_bed(loci, admix, len(pops), col_names, chrom)
+    ddf = _generate_bed(loci, admix, len(pops), col_names, sample_name, verbose)
+    return ddf.compute()
 
 
 def _generate_bed(
         df: DataFrame, dask_matrix: Array, npops: int,
-        col_names: List[str], chrom: str
+        col_names: List[str], sample_name: str, verbose: bool
 ) -> DataFrame:
     """
     Generate BED records from loci and admixture data and subsets for specific
@@ -140,13 +316,16 @@ def _generate_bed(
     del dask_df
     
     # Subset for chromosome
-    chrom_group = ddf[ddf['chromosome'] == chrom]
-    return _process_chromosome(chrom_group, npops, col_names)
+    results = []
+    chromosomes = ddf["chromosome"].unique().compute()
+    for chrom in tqdm(sorted(chromosomes), desc="Processing Chromosomes",
+                      disable=not verbose):
+        chrom_group = ddf[ddf['chromosome'] == chrom]
+        results.append(_process_chromosome(chrom_group, sample_name))
+    return dd.concat(results, axis=0)
 
 
-def _process_chromosome(
-        group: dd.DataFrame, npops: int, col_names: List[str]
-) -> DataFrame:
+def _process_chromosome(group: dd.DataFrame, sample_name: str) -> DataFrame:
     """
     Process genetic data for a single chromosome to identify ancestry
     intervals.
@@ -159,13 +338,12 @@ def _process_chromosome(
     ----------
     group (dd.DataFrame): A Dask DataFrame containing genetic data for
                           a single chromosome.
-    npops (int): The number of ancestral populations.
-    col_names (List[str]): Names of the ancestry data columns.
+    sample_name (str): Name of ancestry data column to keep.
 
     Returns
     -------
     DataFrame: A DataFrame (pandas or cudf) in BED-like format with columns:
-        'chromosome', 'start', 'end', and ancestry data columns.
+        'chromosome', 'start', 'end', and ancestry data column.
 
     Raises
     ------
@@ -201,15 +379,15 @@ def _process_chromosome(
     
     # Convert the data matrix to a Dask array, excluding 'chromosome' 
     # and 'physical_position' columns
-    data_matrix = group[col_names].to_dask_array(lengths=True)
+    data_matrix = group[sample_name].to_dask_array(lengths=True)
     # Find indices where genetic changes occur
-    change_indices = array(_find_intervals(data_matrix, npops))
+    change_indices = array(_find_intervals(data_matrix))
     # Compute chromosome value once
     chromosome_value = chromosome.compute()[0]
     # Create Dask DataFrame
     bed_records = _create_bed_records(chromosome_value, positions,
                                       data_matrix, change_indices)
-    cnames = ['chromosome', 'start', 'end'] + col_names
+    cnames = ['chromosome', 'start', 'end'] + [sample_name]
     return dd.from_dask_array(bed_records, columns=cnames)
 
 
@@ -264,13 +442,13 @@ def _create_bed_records(chrom_value, pos, data_matrix, idx):
     chrom_col = concatenate([chrom_col, array([chrom_value])])
     start_col = concatenate([start_col, array([last_start])])
     end_col = concatenate([end_col, array([last_end])])
-    data_cols = concatenate([data_cols, last_data.reshape(1, -1)])
+    data_cols = concatenate([data_cols, array([last_data])])
     # Combine all columns
     return concatenate([chrom_col[:, None], start_col[:, None],
-                        end_col[:, None], data_cols], axis=1)
+                        end_col[:, None], data_cols[:, None]], axis=1)
 
 
-def _find_intervals(data_matrix: Array, npops: int) -> List[int]:
+def _find_intervals(data_matrix: Array) -> List[int]:
     """
     Find the indices where changes occur in a Dask array representing
     genetic data.
@@ -285,8 +463,6 @@ def _find_intervals(data_matrix: Array, npops: int) -> List[int]:
         ancestry data. Each row corresponds to a position along the 
         chromosome, and each column (or group of columns for npops > 2) 
         represents a sample.
-    npops (int): The number of ancestral populations. This affects how
-        columns are grouped and processed.
 
     Returns
     -------
@@ -319,15 +495,10 @@ def _find_intervals(data_matrix: Array, npops: int) -> List[int]:
     - This function may be computationally intensive for large matrices.
     - It performs computations lazily until the final `compute()` call.
     """
-    # Validate input dimensions
-    if data_matrix.shape[1] % npops != 0:
-        raise ValueError(f"Matrix column count ({data_matrix.shape[1]}) is not divisible by npops ({npops})")
-    # Determine the number of columns to process
-    num_cols = data_matrix.shape[1] // npops if npops == 2 else data_matrix.shape[1]
     # Vectorized diff operation across all relevant columns
-    diffs = diff(data_matrix[:, :num_cols], axis=0)    
+    diffs = diff(data_matrix, axis=0)
     # Find non-zero elements across all columns at once
-    changes = where(diffs != 0)    
+    changes = where(diffs != 0)
     # Compute only once and convert to set for faster operations
     return sorted(set(changes[0].compute()))
 
@@ -400,12 +571,14 @@ def _get_sample_names(rf_q: DataFrame):
 
 def _testing():
     from rfmix_reader import read_rfmix, create_binaries
-    # prefix_path = "../examples/two_populations/out/"
     prefix_path = "/dcs05/lieber/hanlab/jbenjami/projects/"+\
-        "software_manuscripts/localQTL/local_ancestry_rfmix/_m/"
-    #create_binaries(prefix_path)
+        "software_manuscripts/localQTL-software/local_ancestry_rfmix/_m/"
     binary_dir = "/dcs05/lieber/hanlab/jbenjami/projects/"+\
-        "software_manuscripts/rfmix_reader/real_data/gpu_version/_m/binary_files/"
+        "software_manuscripts/rfmix_reader-benchmarking/"+\
+        "real_data/gpu_version/_m/binary_files/"
     loci, rf_q, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
-    bed = admix_to_bed_chromosome(loci, rf_q, admix, "chr22")
+    bed = admix_to_bed_chromosome(loci, rf_q, admix, 0)
+    sample_name = bed.columns[3]
+    bed = string_to_int(bed, sample_name)
+    bed_df = annotate_tagore(bed, sample_name)
     return None
