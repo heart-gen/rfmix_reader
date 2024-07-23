@@ -20,6 +20,16 @@ than loading the entire dataset into memory at once.
    usage
    api
 
+********
+Citation
+********
+
+If using, please cite the following pre-print:
+
+.. code-block:: text
+
+   Kynon J M Benjamin. "RFMix-reader: Accelerated reading and processing for local ancestry studies." bioRxiv. 2024. https://doi.org/10.1101/2024.07.13.603370
+
 *****************
 Comments and bugs
 *****************
