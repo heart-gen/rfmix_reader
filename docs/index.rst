@@ -26,9 +26,9 @@ Citation
 
 If using, please cite the following pre-print:
 
-.. code-block:: text
-
-   Kynon J M Benjamin. "RFMix-reader: Accelerated reading and processing for local ancestry studies." bioRxiv. 2024. https://doi.org/10.1101/2024.07.13.603370
+Kynon JM Benjamin. "RFMix-reader: Accelerated reading and processing for
+local ancestry studies." *bioRxiv*. 2024.
+DOI: `10.1101/2024.07.13.603370 <https://www.biorxiv.org/content/10.1101/2024.07.13.603370v2>`_
 
 *****************
 Comments and bugs
