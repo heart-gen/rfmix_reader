@@ -26,8 +26,8 @@ else:
     from pandas import DataFrame, concat
 
 __all__ = [
-    "admix_to_bed_chromosome",
-    "generate_tagore_bed"
+    "generate_tagore_bed",
+    "admix_to_bed_chromosome"
 ]
 
 def generate_tagore_bed(
