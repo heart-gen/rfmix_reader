@@ -446,3 +446,4 @@ def create_binaries(
         print(f"Error during file conversion: {e}")
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
+

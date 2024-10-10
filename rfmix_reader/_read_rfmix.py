@@ -13,6 +13,7 @@ from ._chunk import Chunk
 from ._fb_read import read_fb
 from ._utils import set_gpu_environment
 from ._utils import get_prefixes, create_binaries
+from ._errorhandling import BinaryFileNotFoundError
 
 try:
     from torch.cuda import is_available
@@ -319,7 +320,7 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
     if exists(binary_fn):
         X = read_fb(binary_fn, nrows, ncols, row_chunk, col_chunk)
     else:
-        raise FileNotFoundError(f"File {binary_fn} not found.")
+        raise BinaryFileNotFoundError(binary_fn, temp_dir)
     # Subset populations and sum adjacent columns
     return _subset_populations(X, npops)
 
