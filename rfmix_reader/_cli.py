@@ -1,0 +1,14 @@
+import argparse
+from ._utils import create_binaries
+
+def main():
+    parser = argparse.ArgumentParser(description="Create binary files from RFMix *.fb.tsv files.")
+    parser.add_argument("file_prefix", type=str, help="The prefix used to identify the relevant FB TSV files.")
+    parser.add_argument("--binary_dir", type=str, default="./binary_files", help="The directory where the binary files will be stored. Defaults to './binary_files'.")
+    
+    args = parser.parse_args()    
+    create_binaries(args.file_prefix, args.binary_dir)
+
+
+if __name__ == "__main__":
+    main()
