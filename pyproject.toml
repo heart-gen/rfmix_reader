@@ -2,6 +2,9 @@
 requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning"]
 build-backend = "poetry_dynamic_versioning.backend"
 
+[tool.poetry-dynamic-versioning]
+enable = true
+
 [tool.poetry]
 name = "rfmix-reader"
 version = "0.1.17"
@@ -35,3 +38,6 @@ torchvision = {version = "^0.18.1+cpu", source = "pytorch_cpu"}
 name = "pytorch_cpu"
 url = "https://download.pytorch.org/whl/cpu"
 priority = "explicit"
+
+[tool.poetry.scripts]
+create-binaries = "rfmix-reader._cli:main"
