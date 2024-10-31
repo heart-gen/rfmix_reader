@@ -22,7 +22,7 @@ python = "^3.9"
 pandas = "^2.0"
 dask = "^2024.5"
 tqdm = "^4.66"
-numpy = "^1.26"
+numpy = "^2.0"
 
 [tool.poetry.dev-dependencies]
 pytest = "^8.2"
