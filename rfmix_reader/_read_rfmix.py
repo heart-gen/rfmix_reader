@@ -6,8 +6,8 @@ import warnings
 from glob import glob
 from dask.array import Array
 from collections import OrderedDict as odict
-from typing import Optional, Callable, List, Tuple
 from os.path import basename, dirname, join, exists
+from typing import Optional, Callable, List, Tuple, Dict
 
 from ._chunk import Chunk
 from ._fb_read import read_fb
@@ -25,6 +25,7 @@ except ModuleNotFoundError as e:
 
 if is_available():
     from cudf import DataFrame, read_csv, concat
+    from polars import LazyFrame
 else:
     from pandas import DataFrame, read_csv, concat
 
@@ -63,7 +64,7 @@ def read_rfmix(
     admix : :class:`dask.array.Array`
         Local ancestry per population (columns pop1*nsamples ... popX*nsamples).
         This is in order of the populations see `rf_q`.
-    
+
     Notes
     -----
     Local ancestry output will be either :const:`0`, :const:`1`, :const:`2`, or
@@ -78,19 +79,24 @@ def read_rfmix(
     # Device information
     if verbose and is_available():
         set_gpu_environment()
-    # Get file prefixes    
+    # Get file prefixes
     fn = get_prefixes(file_prefix, verbose)
     # Load loci information
     pbar = tqdm(desc="Mapping loci files", total=len(fn), disable=not verbose)
     loci = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
     pbar.close()
     # Adjust loci indices and concatenate
-    nmarkers = {}; index_offset = 0
-    for i, bi in enumerate(loci):
-        nmarkers[fn[i]["fb.tsv"]] = bi.shape[0]
-        bi["i"] += index_offset
-        index_offset += bi.shape[0]
-    loci = concat(loci, axis=0, ignore_index=True)
+    if isinstance(loci[0], LazyFrame):
+        loci, nmarkers, total_markers = _process_lazy_loci(loci, fn)
+        loci = loci.collect()
+    else:
+        nmarkers = {}; total_markers = 0
+        for i, bi in enumerate(loci):
+            file_markers = bi.shape[0]
+            nmarkers[fn[i]["fb.tsv"]] = file_markers
+            total_markers += file_markers
+        loci = concat(loci, axis=0, ignore_index=True)
+        loci["i"] = range(total_markers)
     # Load global ancestry per chromosome
     pbar = tqdm(desc="Mapping Q files", total=len(fn), disable=not verbose)
     rf_q = _read_file(fn, lambda f: _read_Q(f["rfmix.Q"]), pbar)
@@ -112,6 +118,49 @@ def read_rfmix(
     pbar.close()
     admix = concatenate(admix, axis=0)
     return loci, rf_q, admix
+
+
+def _process_lazy_loci(
+        loci: List[LazyFrame], fn: List[Dict[str, str]]
+) -> tuple[LazyFrame, Dict[str, int], int]:
+    """
+    Process a list of LazyFrames, concatenate them, and add an index column.
+
+    Args:
+    loci (List[LazyFrame]): List of LazyFrames to process
+    fn (List[Dict[str, str]]): List of dictionaries containing file information
+
+    Returns:
+    tuple[LazyFrame, Dict[str, int], int]:
+        - Combined LazyFrame with added 'i' column
+        - Dictionary of marker counts per file
+        - Total number of markers
+    """
+    import polars as pl
+    # Create a list to store marker count LazyFrames
+    marker_counts_lf = []
+    # Process each LazyFrame
+    for i, lf in enumerate(loci):
+        # Add file index and get marker count
+        lf_with_count = lf.with_columns([
+            pl.lit(i).alias("file_index"),
+            pl.len().alias("marker_count")
+        ])
+        marker_counts_lf.append(lf_with_count.select(["file_index",
+                                                      "marker_count"]))
+        loci[i] = lf_with_count  # Replace original LazyFrame with the updated
+    # Concatenate all LazyFrames
+    combined_lf = pl.concat(loci)
+    # Process marker counts
+    marker_counts = pl.concat(marker_counts_lf).collect()
+    nmarkers = {fn[row['file_index']]["fb.tsv"]: row['marker_count'] for row in marker_counts.iter_rows(named=True)}
+    total_markers = marker_counts["marker_count"].sum()
+    # Add the 'i' column
+    result_lf = combined_lf.with_columns([
+        (pl.col("marker_count").cumsum() - pl.col("marker_count") +
+         pl.arange(0, pl.col("marker_count"))).alias("i")
+    ]).drop(["file_index", "marker_count"])
+    return result_lf, nmarkers, total_markers
 
 
 def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:
@@ -136,7 +185,37 @@ def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:
     return data
 
 
-def _read_tsv(fn: str) -> DataFrame:
+def _tsv_fallback(fn: str) -> DataFrame | LazyFrame:
+    from numpy import int32
+    from pandas import StringDtype
+    from polars import Utf8, Int64, scan_csv
+    try:
+        header = {"chromosome": StringDtype(), "physical_position": int32}
+        df = read_csv(
+            fn,
+            sep="\t",
+            header=0,
+            usecols=list(header.keys()),
+            dtype=header,
+            comment="#"
+        )
+        print("Using cuDF")
+        return df
+    except Exception as e:
+        header = {"chromosome": Utf8, "physical_position": Int64}
+        print(f"cuDF read_csv failed\n{e}")
+        print("Falling back to Polars scan_csv")
+        df = scan_csv(
+            fn,
+            separator="\t",
+            comment_prefix="#",
+            new_columns=list(header.keys()),
+            schema=header
+        ).select(header.keys())
+        return df
+
+
+def _read_tsv(fn: str) -> DataFrame | LazyFrame:
     """
     Read a TSV file into a pandas DataFrame.
 
@@ -150,44 +229,31 @@ def _read_tsv(fn: str) -> DataFrame:
     """
     from numpy import int32
     from pandas import StringDtype
-    header = {"chromosome": StringDtype(), "physical_position": int32}
-    columns = ["chromosome", "physical_position"]
+    from polars import Utf8, Int64, scan_csv
     try:
         if is_available():
-            df = read_csv(
-                fn,
-                sep="\t",
-                header=0,
-                usecols=columns,
-                dtype=header,
-                comment="#"
-            )
+            df = _tsv_fallback(fn)
         else:
+            header = {"chromosome": StringDtype(), "physical_position": int32}
             chunks = read_csv(
                 fn,
                 delim_whitespace=True,
                 header=0,
-                usecols=columns,
+                usecols=list(header.keys()),
                 dtype=header,
                 comment="#",
                 chunksize=100000, # Low memory chunks
-            )        
+            )
             # Concatenate chunks into single DataFrame
             df = concat(chunks, ignore_index=True)
     except FileNotFoundError:
-        raise FileNotFoundError(f"File {fn} not found.")    
+        raise FileNotFoundError(f"File {fn} not found.")
     except Exception as e:
-        raise IOError(f"Error reading file {fn}: {e}")    
-    # Validate that resulting DataFrame is correct type
-    if not isinstance(df, DataFrame):
-        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")    
-    # Ensure DataFrame contains correct columns
-    if not all(column in df.columns for column in columns):
-        raise ValueError(f"DataFrame does not contain expected columns: {columns}")    
+        raise IOError(f"Error reading file {fn}: {e}")
     return df
 
 
-def _read_loci(fn: str) -> DataFrame:
+def _read_loci(fn: str) -> DataFrame | LazyFrame:
     """
     Read loci information from a TSV file and add a sequential index column.
 
@@ -197,14 +263,19 @@ def _read_loci(fn: str) -> DataFrame:
 
     Returns:
     -------
-    DataFrame: A pandas DataFrame containing the loci information with an additional 'i' column for indexing.
+    DataFrame: A DataFrame or LazyFrame containing the loci information with an
+               additional 'i' column for indexing.
     """
+    import polars as pl
     df = _read_tsv(fn)
-    df["i"] = range(df.shape[0])
+    if isinstance(df, LazyFrame):
+        df = df.with_columns(pl.arange(0, pl.len()).alias("i"))
+    else:
+        df["i"] = range(df.shape[0])
     return df
 
 
-def _read_csv(fn: str, header: dict) -> DataFrame:
+def _read_csv(fn: str, header: dict) -> DataFrame | LazyFrame:
     """
     Read a CSV file into a pandas DataFrame with specified data types.
 
@@ -243,7 +314,7 @@ def _read_csv(fn: str, header: dict) -> DataFrame:
         raise IOError(f"Error reading file '{fn}': {e}")
     # Validate that resulting DataFrame is correct type
     if not isinstance(df, DataFrame):
-        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")    
+        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
     return df
 
 
@@ -260,14 +331,14 @@ def _read_Q(fn: str) -> DataFrame:
     DataFrame: The Q matrix with the chromosome information added.
     """
     from re import search
-    
+
     df = _read_Q_noi(fn)
     match = search(r'chr(\d+)', fn)
     if match:
         chrom = match.group(0)
         df["chrom"] = chrom
     else:
-        print(f"Warning: Could not extract chromosome information from '{fn}'")        
+        print(f"Warning: Could not extract chromosome information from '{fn}'")
     return df
 
 
@@ -337,19 +408,19 @@ def _subset_populations(X: Array, npops: int) -> Array:
     dask.array: Processed array with adjacent columns summed for each population subset.
     """
     from dask.array import concatenate
-    
+
     pop_subset = []
     pop_start = 0
-    ncols = X.shape[1]    
+    ncols = X.shape[1]
     if ncols % npops != 0:
-        raise ValueError("The number of columns in X must be divisible by npops.")    
+        raise ValueError("The number of columns in X must be divisible by npops.")
     while pop_start < npops:
         X0 = X[:, pop_start::npops] # Subset based on populations
         if X0.shape[1] % 2 != 0:
             raise ValueError("Number of columns must be even.")
         X0_summed = X0[:, ::2] + X0[:, 1::2] # Sum adjacent columns
         pop_subset.append(X0_summed)
-        pop_start += 1        
+        pop_start += 1
     return concatenate(pop_subset, 1, True)
 
 
@@ -366,7 +437,7 @@ def _types(fn: str) -> dict:
     dict : Dictionary mapping column names to their inferred data types.
     """
     from pandas import StringDtype
-    
+
     try:
         # Read the first two rows of the file, skipping the first row
         if is_available():
@@ -386,15 +457,15 @@ def _types(fn: str) -> dict:
     except FileNotFoundError:
         raise FileNotFoundError(f"File '{fn}' not found.")
     except Exception as e:
-        raise IOError(f"Error reading file '{fn}': {e}")    
+        raise IOError(f"Error reading file '{fn}': {e}")
     # Validate that the resulting DataFrame is of the correct type
     if not isinstance(df, DataFrame):
-        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")    
+        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
     # Ensure the DataFrame contains at least one column
     if df.shape[1] < 1:
         raise ValueError("The DataFrame does not contain any columns.")
     # Initialize the header dictionary with the sample_id column
     header = {"sample_id": StringDtype()}
     # Update the header dictionary with the data types of the remaining columns
-    header.update(df.dtypes[1:].to_dict())    
+    header.update(df.dtypes[1:].to_dict())
     return header
