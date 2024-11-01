@@ -18,7 +18,7 @@ repository = "https://github.com/heart-gen/rfmix_reader.git"
 keywords = ["file parser", "rfmix", "gpu acceleration", "local ancestry"]
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = "^3.10"
 pandas = "^2.0"
 dask = "^2024.5"
 tqdm = "^4.66"
