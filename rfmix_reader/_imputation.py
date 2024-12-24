@@ -11,19 +11,16 @@ def _load_genotypes(plink_prefix_path):
     return pgr.load_genotypes(), variant_df
 
 
-def _load_admix():
+def _load_admix(prefix_path, binary_dir):
     from rfmix_reader import read_rfmix
-    prefix_path = "/projects/b1213/large_projects/brain_coloc_app/"+\
-        "input/local_ancestry_rfmix/_m/"
-    binary_dir = "/projects/b1213/large_projects/brain_coloc_app/"+\
-        "input/local_ancestry_rfmix/_m/binary_files/"
     return read_rfmix(prefix_path, binary_dir=binary_dir)
 
 
-def _expand_array(dx, admix):
+def _expand_array(dx, admix, path):
     import numpy as np
-    z = zarr.zeros((dx.shape[0], admix.shape[1]),
-                   chunks=(1000, 100), dtype='float32')
+    z = zarr.open(f"{path}/local-ancestry.zarr", mode="w",
+                  shape=(dx.shape[0], admix.shape[1]),
+                  chunks=(1000, 100), dtype='float32')
     # Fill with NaNs
     arr_nans = np.array(dx.loc[dx.isnull().any(axis=1)].index,
                         dtype=np.int32)
@@ -32,23 +29,26 @@ def _expand_array(dx, admix):
     # Fill with local ancestry
     arr = np.array(dx.dropna().index)
     z[arr, :] = admix.compute()
-    return z
+    return None
 
 
 def testing():
+    basename = "/projects/b1213/large_projects/brain_coloc_app/input"
     # Local ancestry
-    loci, rf_q, admix = _load_admix()
+    prefix_path = f"{basename}/local_ancestry_rfmix/_m/"
+    binary_dir = f"{basename}/local_ancestry_rfmix/_m/binary_files/"
+    loci, rf_q, admix = _load_admix(prefix_path, binary_dir)
     loci.rename(columns={"chromosome": "chrom",
                          "physical_position": "pos"},
                 inplace=True)
     sample_ids = list(rf_q.sample_id.unique().to_pandas())
     # Variant data
-    plink_prefix = "/projects/b1213/large_projects/brain_coloc_app/"+\
-        "input/genotypes/TOPMed_LIBD"
+    plink_prefix = f"{basename}/genotypes/TOPMed_LIBD"
     _, variant_df = _load_genotypes(plink_prefix)
     variant_df = variant_df.drop_duplicates(subset=["chrom", "pos"],
                                             keep='first')
     dx = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"],
                           how="outer", indicator=True)\
                    .loc[:, ["chrom", "pos", "i"]]
-    z = _expand_array(dx, admix)
+    data_path = f"{basename}/local_ancestry_rfmix/_m/data"
+    _expand_array(dx, admix, path)
