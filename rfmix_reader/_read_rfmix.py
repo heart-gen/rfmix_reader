@@ -157,7 +157,7 @@ def _read_tsv(fn: str) -> DataFrame:
                 fn,
                 sep="\t",
                 header=0,
-                usecols=columns,
+                usecols=list(header.keys()),
                 dtype=header,
                 comment="#"
             )
