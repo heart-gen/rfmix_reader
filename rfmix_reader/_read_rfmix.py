@@ -25,7 +25,6 @@ except ModuleNotFoundError as e:
 
 if is_available():
     from cudf import DataFrame, read_csv, concat
-    from polars import LazyFrame
 else:
     from pandas import DataFrame, read_csv, concat
 
@@ -86,17 +85,12 @@ def read_rfmix(
     loci = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
     pbar.close()
     # Adjust loci indices and concatenate
-    if isinstance(loci[0], LazyFrame):
-        loci, nmarkers, total_markers = _process_lazy_loci(loci, fn)
-        loci = loci.collect()
-    else:
-        nmarkers = {}; total_markers = 0
-        for i, bi in enumerate(loci):
-            file_markers = bi.shape[0]
-            nmarkers[fn[i]["fb.tsv"]] = file_markers
-            total_markers += file_markers
-        loci = concat(loci, axis=0, ignore_index=True)
-        loci["i"] = range(total_markers)
+    nmarkers = {}; total_markers = 0
+    for i, bi in enumerate(loci):
+        nmarkers[fn[i]["fb.tsv"]] = bi.shape[0]
+        bi["i"] += index_offset
+        index_offset += bi.shape[0]
+    loci = concat(loci, axis=0, ignore_index=True)
     # Load global ancestry per chromosome
     pbar = tqdm(desc="Mapping Q files", total=len(fn), disable=not verbose)
     rf_q = _read_file(fn, lambda f: _read_Q(f["rfmix.Q"]), pbar)
@@ -118,49 +112,6 @@ def read_rfmix(
     pbar.close()
     admix = concatenate(admix, axis=0)
     return loci, rf_q, admix
-
-
-def _process_lazy_loci(
-        loci: List[LazyFrame], fn: List[Dict[str, str]]
-) -> tuple[LazyFrame, Dict[str, int], int]:
-    """
-    Process a list of LazyFrames, concatenate them, and add an index column.
-
-    Args:
-    loci (List[LazyFrame]): List of LazyFrames to process
-    fn (List[Dict[str, str]]): List of dictionaries containing file information
-
-    Returns:
-    tuple[LazyFrame, Dict[str, int], int]:
-        - Combined LazyFrame with added 'i' column
-        - Dictionary of marker counts per file
-        - Total number of markers
-    """
-    import polars as pl
-    # Create a list to store marker count LazyFrames
-    marker_counts_lf = []
-    # Process each LazyFrame
-    for i, lf in enumerate(loci):
-        # Add file index and get marker count
-        lf_with_count = lf.with_columns([
-            pl.lit(i).alias("file_index"),
-            pl.len().alias("marker_count")
-        ])
-        marker_counts_lf.append(lf_with_count.select(["file_index",
-                                                      "marker_count"]))
-        loci[i] = lf_with_count  # Replace original LazyFrame with the updated
-    # Concatenate all LazyFrames
-    combined_lf = pl.concat(loci)
-    # Process marker counts
-    marker_counts = pl.concat(marker_counts_lf).collect()
-    nmarkers = {fn[row['file_index']]["fb.tsv"]: row['marker_count'] for row in marker_counts.iter_rows(named=True)}
-    total_markers = marker_counts["marker_count"].sum()
-    # Add the 'i' column
-    result_lf = combined_lf.with_columns([
-        (pl.col("marker_count").cumsum() - pl.col("marker_count") +
-         pl.arange(0, pl.col("marker_count"))).alias("i")
-    ]).drop(["file_index", "marker_count"])
-    return result_lf, nmarkers, total_markers
 
 
 def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:
@@ -185,37 +136,7 @@ def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:
     return data
 
 
-def _tsv_fallback(fn: str) -> DataFrame | LazyFrame:
-    from numpy import int32
-    from pandas import StringDtype
-    from polars import Utf8, Int64, scan_csv
-    try:
-        header = {"chromosome": StringDtype(), "physical_position": int32}
-        df = read_csv(
-            fn,
-            sep="\t",
-            header=0,
-            usecols=list(header.keys()),
-            dtype=header,
-            comment="#"
-        )
-        print("Using cuDF")
-        return df
-    except Exception as e:
-        header = {"chromosome": Utf8, "physical_position": Int64}
-        print(f"cuDF read_csv failed\n{e}")
-        print("Falling back to Polars scan_csv")
-        df = scan_csv(
-            fn,
-            separator="\t",
-            comment_prefix="#",
-            new_columns=list(header.keys()),
-            schema=header
-        ).select(header.keys())
-        return df
-
-
-def _read_tsv(fn: str) -> DataFrame | LazyFrame:
+def _read_tsv(fn: str) -> DataFrame:
     """
     Read a TSV file into a pandas DataFrame.
 
@@ -229,12 +150,18 @@ def _read_tsv(fn: str) -> DataFrame | LazyFrame:
     """
     from numpy import int32
     from pandas import StringDtype
-    from polars import Utf8, Int64, scan_csv
+    header = {"chromosome": StringDtype(), "physical_position": int32}
     try:
         if is_available():
-            df = _tsv_fallback(fn)
+            df = read_csv(
+                fn,
+                sep="\t",
+                header=0,
+                usecols=columns,
+                dtype=header,
+                comment="#"
+            )
         else:
-            header = {"chromosome": StringDtype(), "physical_position": int32}
             chunks = read_csv(
                 fn,
                 delim_whitespace=True,
@@ -260,7 +187,7 @@ def _read_tsv(fn: str) -> DataFrame | LazyFrame:
     return df
 
 
-def _read_loci(fn: str) -> DataFrame | LazyFrame:
+def _read_loci(fn: str) -> DataFrame:
     """
     Read loci information from a TSV file and add a sequential index column.
 
@@ -270,19 +197,15 @@ def _read_loci(fn: str) -> DataFrame | LazyFrame:
 
     Returns:
     -------
-    DataFrame: A DataFrame or LazyFrame containing the loci information with an
+    DataFrame: A DataFrame containing the loci information with an
                additional 'i' column for indexing.
     """
-    import polars as pl
     df = _read_tsv(fn)
-    if isinstance(df, LazyFrame):
-        df = df.with_columns(pl.arange(0, pl.len()).alias("i"))
-    else:
-        df["i"] = range(df.shape[0])
+    df["i"] = range(df.shape[0])
     return df
 
 
-def _read_csv(fn: str, header: dict) -> DataFrame | LazyFrame:
+def _read_csv(fn: str, header: dict) -> DataFrame:
     """
     Read a CSV file into a pandas DataFrame with specified data types.
 
