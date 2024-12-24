@@ -94,7 +94,7 @@ def _clean_prefixes(prefixes: list[str]):
         # Remove the file extensions from the base name
         base = base_name.split(".")[0]
         # Use regex to find patterns starting with "chr" or "_chr"
-        m = rsearch(r'_chr|chr)(\d+)', base)
+        m = rsearch(r'(_chr|chr)(\d+)', base)
         # If a match is found, construct the cleaned prefix
         if m:
             cleaned_prefix = join(dir_path, base)
@@ -167,17 +167,21 @@ def get_prefixes(file_prefix: str, verbose: bool = True):
     try:
         # Use glob to find files that contain "chr" or "_chr"
         file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("*[chr]*")])
+
         # If only one prefix is found, check for additional files
         if len(file_prefixes) == 1:
             file_prefixes = sorted(glob(join(file_prefix, "*")))
             if not file_prefixes:
                 raise FileNotFoundError()
+
         # Clean the prefixes
         file_prefixes = sorted(_clean_prefixes(file_prefixes))
+
         # Construct a list of directionaries mapping file types to paths
         fn = [{s: f"{fp}.{s}" for s in ["fb.tsv", "rfmix.Q"]} for fp in file_prefixes]
         if not fn:
             raise FileNotFoundError()
+
         # If multiple prefixes are found and verbose is True, print them
         if len(file_prefixes) > 1 and verbose:
             msg = "Multiple files read in this order:"
