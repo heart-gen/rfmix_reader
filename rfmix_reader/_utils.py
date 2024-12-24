@@ -2,6 +2,7 @@ from tqdm import tqdm
 from glob import glob
 from os import makedirs
 from pathlib import Path
+from re import search as rsearch
 from numpy import float32, array
 from multiprocessing import Pool, cpu_count
 from subprocess import run, CalledProcessError
@@ -91,9 +92,11 @@ def _clean_prefixes(prefixes: list[str]):
         dir_path = dirname(prefix)
         base_name = basename(prefix)
         # Remove the file extensions from the base name
-        base = base_name.split(".")[0]        
-        # Skip prefixes that end with ".logs"
-        if base.startswith("chr"):
+        base = base_name.split(".")[0]
+        # Use regex to find patterns starting with "chr" or "_chr"
+        m = rsearch(r'_chr|chr)(\d+)', base)
+        # If a match is found, construct the cleaned prefix
+        if m:
             cleaned_prefix = join(dir_path, base)
             cleaned_prefixes.append(cleaned_prefix)
 
@@ -123,13 +126,13 @@ def get_prefixes(file_prefix: str, verbose: bool = True):
     -------
     list of dict:
         A list of dictionaries where each dictionary maps file
-        types (e.g., "fb.tsv", "rfmix.Q") to their corresponding 
+        types (e.g., "fb.tsv", "rfmix.Q") to their corresponding
         file paths.
 
     Raises
     ------
     FileNotFoundError: If no files matching the given prefix are found.
-    
+
     Example
     -------
     Given a directory structure:
@@ -148,9 +151,9 @@ def get_prefixes(file_prefix: str, verbose: bool = True):
     Notes
     -----
     - This function assumes that the files follow a naming convention
-      where the prefix is followed by a file type extension associated 
+      where the prefix is followed by a file type extension associated
       with RFMix (e.g., ".fb.tsv", ".rfmix.Q").
-    - The function uses the `glob` module to search for files and the 
+    - The function uses the `glob` module to search for files and the
       `Path` class from the `pathlib` module for path manipulations.
 
     Dependencies
@@ -162,16 +165,20 @@ def get_prefixes(file_prefix: str, verbose: bool = True):
 
     """
     try:
-        file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("chr*")])
+        # Use glob to find files that contain "chr" or "_chr"
+        file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("*[chr]*")])
+        # If only one prefix is found, check for additional files
         if len(file_prefixes) == 1:
             file_prefixes = sorted(glob(join(file_prefix, "*")))
             if not file_prefixes:
                 raise FileNotFoundError()
-        
+        # Clean the prefixes
         file_prefixes = sorted(_clean_prefixes(file_prefixes))
+        # Construct a list of directionaries mapping file types to paths
         fn = [{s: f"{fp}.{s}" for s in ["fb.tsv", "rfmix.Q"]} for fp in file_prefixes]
         if not fn:
             raise FileNotFoundError()
+        # If multiple prefixes are found and verbose is True, print them
         if len(file_prefixes) > 1 and verbose:
             msg = "Multiple files read in this order:"
             print(f"{msg} {[basename(f) for f in file_prefixes]}")
@@ -205,16 +212,16 @@ def _text_to_binary(input_file: str, output_file: str):
         7 8 9 10 11.0 12.0
 
     The function will skip the first two header rows and process the
-    remaining lines, extracting data starting from the fifth column. 
-    The resulting binary file will contain the binary representation 
+    remaining lines, extracting data starting from the fifth column.
+    The resulting binary file will contain the binary representation
     of the following data:
         [5.0, 6.0]
         [11.0, 12.0]
 
     Note
     ----
-    Ensure that the input file exists and is formatted correctly. 
-    The function assumes that the data to be processed starts from 
+    Ensure that the input file exists and is formatted correctly.
+    The function assumes that the data to be processed starts from
     the fifth column of each line.
 
     Raises
@@ -246,9 +253,9 @@ def _process_file(args):
     Parameters
     ----------
     args (tuple): A tuple containing two elements:
-        - file_path (str): The path to the input text file to be 
+        - file_path (str): The path to the input text file to be
                            processed.
-        - temp_dir (str): The path to the temporary directory 
+        - temp_dir (str): The path to the temporary directory
                           where the output will be stored.
 
     Returns
@@ -257,16 +264,16 @@ def _process_file(args):
 
     Side Effects
     ------------
-    Creates a new binary file in the specified temporary directory. 
-    The output file name is derived from the input file name, with 
+    Creates a new binary file in the specified temporary directory.
+    The output file name is derived from the input file name, with
     the extension changed to '.bin'.
 
     Example
     -------
-    If args is ('/path/to/input/data.txt', '/tmp/processing/'), and 
+    If args is ('/path/to/input/data.txt', '/tmp/processing/'), and
     assuming _text_to_binary is properly implemented, this function will:
     1. Create an output file path: '/tmp/processing/data.bin'
-    2. Call _text_to_binary to convert '/path/to/input/data.txt' to 
+    2. Call _text_to_binary to convert '/path/to/input/data.txt' to
        '/tmp/processing/data.bin'
     """
     file_path, temp_dir = args
@@ -288,7 +295,7 @@ def _generate_binary_files(fb_files, binary_dir):
     ----------
     fb_files (list of str): A list of file paths to the FB files that
                             need to be converted.
-    binary_dir (str): The path to the binary directory where the 
+    binary_dir (str): The path to the binary directory where the
                     output binary files will be stored.
 
     Returns
@@ -298,7 +305,7 @@ def _generate_binary_files(fb_files, binary_dir):
     Performance
     -----------
     The function automatically determines the optimal number of CPU
-    cores to use for parallel processing, which is the minimum of 
+    cores to use for parallel processing, which is the minimum of
     available CPU cores and the number of input files.
 
     Example
@@ -309,8 +316,8 @@ def _generate_binary_files(fb_files, binary_dir):
     Notes
     -----
     - The function uses the tqdm library to display a progress bar.
-    - Any exceptions raised during the processing of individual files 
-      will be handled by the multiprocessing Pool and may interrupt 
+    - Any exceptions raised during the processing of individual files
+      will be handled by the multiprocessing Pool and may interrupt
       the entire process.
 
     Side Effects
@@ -431,7 +438,7 @@ def create_binaries(
         fn = get_prefixes(file_prefix, False)
         if not fn:
             raise FileNotFoundError(f"No files found with prefix: {file_prefix}")
-        
+
         fb_files = [f["fb.tsv"] for f in fn]
         makedirs(binary_dir, exist_ok=True)
         print(f"Created binary files at: {binary_dir}")
@@ -446,4 +453,3 @@ def create_binaries(
         print(f"Error during file conversion: {e}")
     except Exception as e:
         print(f"An unexpected error occurred: {e}")
-
