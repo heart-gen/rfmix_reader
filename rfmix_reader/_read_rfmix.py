@@ -250,15 +250,13 @@ def _read_tsv(fn: str) -> DataFrame | LazyFrame:
         raise FileNotFoundError(f"File {fn} not found.")
     except Exception as e:
         raise IOError(f"Error reading file {fn}: {e}")
-<<<<<<< HEAD
-=======
+
     # Validate that resulting DataFrame is correct type
     if not isinstance(df, DataFrame):
         raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
     # Ensure DataFrame contains correct columns
     if not all(column in df.columns for column in columns):
         raise ValueError(f"DataFrame does not contain expected columns: {columns}")
->>>>>>> 7b076eb (Fixes #3: revised code to handle both '_chr' and 'chr' input files)
     return df
 
 
