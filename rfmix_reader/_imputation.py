@@ -52,3 +52,17 @@ def testing():
                    .loc[:, ["chrom", "pos", "i"]]
     data_path = f"{basename}/local_ancestry_rfmix/_m/data"
     _expand_array(dx, admix, path)
+
+
+def _dev_binaries():
+    from rfmix_reader import create_binaries
+    file_path = "/projects/b1213/large_projects/brain_coloc_app/input/test_rfmix/"
+    binary_dir = f"{file_path}/binary_files"
+    create_binaries(file_path, binary_dir=binary_dir)
+
+
+def _issue_test():
+    from rfmix_reader import read_rfmix
+    file_path = "/projects/b1213/large_projects/brain_coloc_app/input/test_rfmix/"
+    binary_dir = f"{file_path}/binary_files"
+    loci, rf_q, admix = read_rfmix(file_path, binary_dir=binary_dir)
