@@ -35,27 +35,33 @@ def generate_tagore_bed(
         verbose: bool = True
 ) -> DataFrame:
     """
-    Generate a BED (Browser Extensible Data) file formatted for TAGORE visualization.
+    Generate a BED (Browser Extensible Data) file formatted for TAGORE
+    visualization.
 
     This function processes genomic data and creates a BED file suitable for
     visualization with TAGORE (https://github.com/jordanlab/tagore).
 
     Parameters:
         loci (DataFrame): A DataFrame containing genomic loci information.
-        rf_q (DataFrame): A DataFrame containing recombination fraction quantiles.
+        rf_q (DataFrame): A DataFrame containing recombination fraction
+                          quantiles.
         admix (Array): An array of admixture proportions.
         sample_num (int): The sample number to process.
-        verbose (bool, optional): If True, print progress information. Defaults to True.
+        verbose (bool, optional): If True, print progress information.
+                                  Defaults to True.
 
     Returns:
-        DataFrame: A DataFrame in BED format, annotated and ready for TAGORE 
+        DataFrame: A DataFrame in BED format, annotated and ready for TAGORE
                    visualization.
 
     Note:
         This function relies on several helper functions:
-        - admix_to_bed_chromosome: Converts admixture data to BED format for a specific chromosome.
-        - _string_to_int: Converts specific columns in the BED DataFrame to integer type (interal function).
-        - _annotate_tagore: Adds annotation columns required for TAGORE visualization (internal function).
+        - admix_to_bed_chromosome: Converts admixture data to BED format for a
+                                   specific chromosome.
+        - _string_to_int: Converts specific columns in the BED DataFrame to
+                          integer type (interal function).
+        - _annotate_tagore: Adds annotation columns required for TAGORE
+                            visualization (internal function).
     """
     # Convert admixture data to BED format for the specified sample
     bed = admix_to_bed_chromosome(loci, rf_q, admix, 0, verbose)
@@ -75,7 +81,7 @@ def _annotate_tagore(df: DataFrame, sample_name: str) -> DataFrame:
     Annotate a DataFrame with additional columns for visualization purposes.
 
     This function expands the input DataFrame, adds annotation columns such as
-    'feature', 'size', 'color', and 'chrCopy', and renames some columns for 
+    'feature', 'size', 'color', and 'chrCopy', and renames some columns for
     compatibility with visualization tools.
 
     Parameters:
@@ -103,11 +109,11 @@ def _annotate_tagore(df: DataFrame, sample_name: str) -> DataFrame:
 
     # Map the sample_name column to colors using the color_dict
     expanded_df["color"] = expanded_df[sample_name].map(color_dict)
-    
+
     # Generate a repeating sequence of 1 and 2
     repeating_sequence = cp.tile(cp.array([1, 2]),
                                  int(cp.ceil(len(expanded_df) / 2)))[:len(expanded_df)]
-    
+
     # Add the repeating sequence as a new column
     expanded_df['chrCopy'] = repeating_sequence
 
@@ -120,8 +126,8 @@ def _string_to_int(bed: DataFrame, sample_name: str) -> DataFrame:
     """
     Convert specific columns in a BED DataFrame from string to integer type.
 
-    This function converts the sample_name column and the 'start' and 'end' 
-    columns to integer type. If CUDA is available, it also converts the 
+    This function converts the sample_name column and the 'start' and 'end'
+    columns to integer type. If CUDA is available, it also converts the
     DataFrame to a cuDF DataFrame for GPU-accelerated processing.
 
     Parameters:
@@ -135,7 +141,7 @@ def _string_to_int(bed: DataFrame, sample_name: str) -> DataFrame:
     bed[sample_name] = bed[sample_name].astype(int)
     bed["start"] = bed["start"].astype(int)
     bed["end"] = bed["end"].astype(int)
-    
+
     # Check if CUDA is available
     if is_available():
         from cudf import from_pandas
@@ -146,21 +152,23 @@ def _string_to_int(bed: DataFrame, sample_name: str) -> DataFrame:
 
 def _expand_dataframe(df: DataFrame, sample_name: str) -> DataFrame:
     """
-    Expands a dataframe by duplicating rows based on a specified sample name column.
-    
-    For rows where the value in the sample name column is greater than 1, the 
+    Expands a dataframe by duplicating rows based on a specified sample name
+    column.
+
+    For rows where the value in the sample name column is greater than 1, the
     function creates two sets of rows:
     1. The original rows with the sample name value decremented by 1.
-    2. Rows with the sample name value set to either 1 or 0 based on the condition.
-    
-    The resulting dataframe is then sorted by 'chromosome', 'start', and the sample
-    name column.
-    
+    2. Rows with the sample name value set to either 1 or 0 based on the
+       condition.
+
+    The resulting dataframe is then sorted by 'chromosome', 'start', and the
+    sample name column.
+
     Parameters:
         df (DataFrame): The input dataframe to be expanded.
-        sample_name (str): The name of the column to be used for the expansion 
+        sample_name (str): The name of the column to be used for the expansion
                            condition.
-    
+
     Returns:
         DataFrame: The expanded and sorted dataframe.
     """
@@ -170,22 +178,22 @@ def _expand_dataframe(df: DataFrame, sample_name: str) -> DataFrame:
         import numpy as cp
     # Create a boolean mask for rows where sample_id > 1
     mask = df[sample_name] > 1
-    
+
     # Create the first set of rows:
     # - For rows where mask is True: decrease sample_id by 1
     # - For rows where mask is False: keep original sample_id
     df1 = df.copy()
     df1.loc[mask, sample_name] -= 1
-    
+
     # Create the second set of rows:
     # - For rows where mask is True: set sample_id to 1
     # - For rows where mask is False: set sample_id to 0
     df2 = df.copy()
     df2[sample_name] = cp.where(mask, 1, 0)
-    
+
     # Concatenate the two dataframes vertically
     expanded_df = concat([df1, df2], ignore_index=True)
-    
+
     # Sort the expanded DataFrame:
     # - First by 'chromosome' (ascending)
     # - Then by 'start' (ascending)
@@ -193,7 +201,7 @@ def _expand_dataframe(df: DataFrame, sample_name: str) -> DataFrame:
     # Reset the index after sorting
     return expanded_df.sort_values(by=['chromosome', 'start', sample_name],
                                    ascending=[True, True, False])\
-                      .reset_index(drop=True)    
+                      .reset_index(drop=True)
 
 
 def admix_to_bed_chromosome(
@@ -204,21 +212,21 @@ def admix_to_bed_chromosome(
     Returns loci and admixture data to a BED (Browser Extensible Data) file for
     a specific chromosome.
 
-    This function processes genetic loci data along with admixture proportions and 
-    returns BED format DataFrame for a specific chromosome. 
+    This function processes genetic loci data along with admixture proportions
+    and returns BED format DataFrame for a specific chromosome.
 
     Parameters
     ----------
     loci : DataFrame
-        A DataFrame containing genetic loci information. Expected to have columns 
-        for chromosome, position, and other relevant genetic markers.
+        A DataFrame containing genetic loci information. Expected to have
+        columns for chromosome, position, and other relevant genetic markers.
 
     rf_q : DataFrame
-        A DataFrame containing sample and population information. Used to derive 
+        A DataFrame containing sample and population information. Used to derive
         sample IDs and population names.
 
     admix : Array
-        A Dask Array containing admixture proportions. The shape should be 
+        A Dask Array containing admixture proportions. The shape should be
         compatible with the number of loci and populations.
 
     sample_num : int
@@ -236,9 +244,10 @@ def admix_to_bed_chromosome(
 
     Notes
     -----
-    - The function internally calls _generate_bed() to perform the actual BED formatting.
+    - The function internally calls _generate_bed() to perform the actual BED
+      formatting.
     - Column names in the output file are formatted as "{sample}_{population}".
-    - The output file includes data for all chromosomes present in the input 
+    - The output file includes data for all chromosomes present in the input
       loci DataFrame.
     - Large datasets may require significant processing time and disk space.
 
@@ -265,8 +274,8 @@ def _generate_bed(
     Generate BED records from loci and admixture data and subsets for specific
     chromosome.
 
-    This function processes genetic loci data along with admixture proportions and 
-    returns the results for a specific chromosome.
+    This function processes genetic loci data along with admixture proportions
+    and returns the results for a specific chromosome.
 
     Parameters
     ----------
@@ -274,7 +283,7 @@ def _generate_bed(
         A DataFrame containing genetic loci information from `read_rfmix`
 
     dask_matrix : Array
-        A Dask Array containing admixture proportions. The shape should be 
+        A Dask Array containing admixture proportions. The shape should be
         compatible with the number of loci and populations. This is from
         `read_rfmix`.
 
@@ -282,7 +291,7 @@ def _generate_bed(
         The number of populations in the admixture data.
 
     col_names : List[str]
-        A list of column names for the admixture data. These should be formatted 
+        A list of column names for the admixture data. These should be formatted
         as "{sample}_{population}".
 
     chrom : str
@@ -295,7 +304,8 @@ def _generate_bed(
 
     Notes
     -----
-    - The function internally calls _process_chromosome() to process each chromosome.
+    - The function internally calls _process_chromosome() to process each
+      chromosome.
     - Large datasets may require significant processing time and disk space.
     """
     # Check if the DataFrame and Dask array have the same number of rows
@@ -307,14 +317,14 @@ def _generate_bed(
         ddf = dd.from_pandas(df.to_pandas(), npartitions=parts)
     else:
         ddf = dd.from_pandas(df, npartitions=parts)
-    
+
     # Add each column of the Dask array to the DataFrame
     if isinstance(dask_matrix, ndarray):
         dask_matrix = from_array(dask_matrix, chunks="auto")
     dask_df = dd.from_dask_array(dask_matrix, columns=col_names)
     ddf = dd.concat([ddf, dask_df], axis=1)
     del dask_df
-    
+
     # Subset for chromosome
     results = []
     chromosomes = ddf["chromosome"].unique().compute()
@@ -352,7 +362,8 @@ def _process_chromosome(group: dd.DataFrame, sample_name: str) -> DataFrame:
     Notes
     -----
     - This function assumes that the input group is sorted by physical position.
-    - It uses the `_find_intervals` function to identify change points in ancestry.
+    - It uses the `_find_intervals` function to identify change points in
+      ancestry.
     - The output DataFrame includes one row for each interval where ancestry
       is constant.
 
@@ -376,8 +387,8 @@ def _process_chromosome(group: dd.DataFrame, sample_name: str) -> DataFrame:
     chromosome = group["chromosome"].unique()
     if len(chromosome) != 1:
         raise ValueError(f"Only one chromosome expected got: {len(chromosome)}")
-    
-    # Convert the data matrix to a Dask array, excluding 'chromosome' 
+
+    # Convert the data matrix to a Dask array, excluding 'chromosome'
     # and 'physical_position' columns
     data_matrix = group[sample_name].to_dask_array(lengths=True)
     # Find indices where genetic changes occur
@@ -395,9 +406,10 @@ def _create_bed_records(chrom_value, pos, data_matrix, idx):
     """
     Create BED records for a given chromosome.
 
-    This function generates BED (Browser Extensible Data) records for a specific chromosome
-    by processing the positions and admixture data. It returns a concatenated array containing
-    chromosome, start position, end position, and admixture data for each interval.
+    This function generates BED (Browser Extensible Data) records for a specific
+    chromosome by processing the positions and admixture data. It returns a
+    concatenated array containing chromosome, start position, end position, and a
+    dmixture data for each interval.
 
     Parameters
     ----------
@@ -408,23 +420,25 @@ def _create_bed_records(chrom_value, pos, data_matrix, idx):
         A dask array containing the positions of genetic loci.
 
     data_matrix : dask.array
-        A dask array containing admixture proportions. The shape should be compatible
-        with the number of loci and populations.
+        A dask array containing admixture proportions. The shape should be
+        compatible with the number of loci and populations.
 
     idx : dask.array
-        A dask array of indices indicating the change points in the positions array.
+        A dask array of indices indicating the change points in the positions
+        array.
 
     Returns
     -------
     dask.array
-        A concatenated dask array with columns for chromosome, start position, end position,
-        and admixture data for each interval. The shape of the array is (n_intervals, n_columns),
-        where n_columns = 3 + n_pops (chromosome, start, end, and admixture proportions).
+        A concatenated dask array with columns for chromosome, start position,
+        end position, and admixture data for each interval. The shape of the
+        array is (n_intervals, n_columns), where n_columns = 3 + n_pops
+        (chromosome, start, end, and admixture proportions).
 
     Notes
     -----
-    - The function assumes that the input arrays are properly aligned and that the indices
-      in `idx` are valid for the `pos` and `data_matrix` arrays.
+    - The function assumes that the input arrays are properly aligned and that
+      the indices in `idx` are valid for the `pos` and `data_matrix` arrays.
     - The last interval is handled separately to ensure all data is included.
     """
     # Create start indices
@@ -460,8 +474,8 @@ def _find_intervals(data_matrix: Array) -> List[int]:
     Parameters
     ----------
     data_matrix (dask.array.Array): A 2D Dask array representing genetic
-        ancestry data. Each row corresponds to a position along the 
-        chromosome, and each column (or group of columns for npops > 2) 
+        ancestry data. Each row corresponds to a position along the
+        chromosome, and each column (or group of columns for npops > 2)
         represents a sample.
 
     Returns
@@ -477,7 +491,7 @@ def _find_intervals(data_matrix: Array) -> List[int]:
 
     Example
     -------
-    Given a Dask matrix representing ancestry along a chromosome for 3 
+    Given a Dask matrix representing ancestry along a chromosome for 3
     samples and 2 populations:
         [[1, 0, 1, 0, 1, 0],
          [1, 0, 1, 0, 0, 1],
@@ -553,14 +567,14 @@ def _get_sample_names(rf_q: DataFrame):
 
     Example
     -------
-    If rf_q has a 'sample_id' column with values ['sample1', 'sample2', 
+    If rf_q has a 'sample_id' column with values ['sample1', 'sample2',
     'sample1', 'sample3'], this function will return a PyArrow array
     containing ['sample1', 'sample2', 'sample3'].
 
     Note
     ----
     This function assumes that the 'sample_id' column exists in the
-    input DataFrame. It uses PyArrow on GPU for efficient memory 
+    input DataFrame. It uses PyArrow on GPU for efficient memory
     management and interoperability with other data processing libraries.
     """
     if is_available() and isinstance(rf_q, DataFrame):
@@ -569,14 +583,8 @@ def _get_sample_names(rf_q: DataFrame):
         return rf_q.sample_id.unique()
 
 
-def _testing():
-    from rfmix_reader import read_rfmix, create_binaries
-    prefix_path = "/dcs05/lieber/hanlab/jbenjami/projects/"+\
-        "software_manuscripts/localQTL-software/local_ancestry_rfmix/_m/"
-    binary_dir = "/dcs05/lieber/hanlab/jbenjami/projects/"+\
-        "software_manuscripts/rfmix_reader-benchmarking/"+\
-        "real_data/gpu_version/_m/binary_files/"
-    loci, rf_q, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
+def _viz_dev():
+    loci, rf_q, admix = _dev_load_admix()
     bed = admix_to_bed_chromosome(loci, rf_q, admix, 0)
     sample_name = bed.columns[3]
     bed = string_to_int(bed, sample_name)
