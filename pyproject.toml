@@ -40,4 +40,4 @@ url = "https://download.pytorch.org/whl/cpu"
 priority = "explicit"
 
 [tool.poetry.scripts]
-create-binaries = "rfmix-reader._cli:main"
+create-binaries = "rfmix_reader._cli:main"
