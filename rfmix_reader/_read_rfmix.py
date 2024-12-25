@@ -182,7 +182,7 @@ def _read_tsv(fn: str) -> DataFrame:
     if not isinstance(df, DataFrame):
         raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
     # Ensure DataFrame contains correct columns
-    if not all(column in df.columns for column in columns):
+    if not all(column in df.columns for column in list(header.keys())):
         raise ValueError(f"DataFrame does not contain expected columns: {columns}")
     return df
 
