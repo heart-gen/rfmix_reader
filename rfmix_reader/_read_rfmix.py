@@ -85,7 +85,7 @@ def read_rfmix(
     loci = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
     pbar.close()
     # Adjust loci indices and concatenate
-    nmarkers = {}; total_markers = 0
+    nmarkers = {}; index_offset = 0
     for i, bi in enumerate(loci):
         nmarkers[fn[i]["fb.tsv"]] = bi.shape[0]
         bi["i"] += index_offset
