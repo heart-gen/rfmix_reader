@@ -65,4 +65,4 @@ def _issue_test():
     from rfmix_reader import read_rfmix
     file_path = "/projects/b1213/large_projects/brain_coloc_app/input/test_rfmix/"
     binary_dir = f"{file_path}/binary_files"
-    loci, rf_q, admix = read_rfmix(file_path, binary_dir=binary_dir)
+    return read_rfmix(file_path, binary_dir=binary_dir)
