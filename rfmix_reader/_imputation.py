@@ -98,5 +98,5 @@ def testing():
     dx = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"],
                           how="outer", indicator=True)\
                    .loc[:, ["chrom", "pos", "i"]]
-    data_path = f"{basename}/local_ancestry_rfmix/_m/data"
+    data_path = f"{basename}/local_ancestry_rfmix/_m"
     z = interpolate_array(dx, admix, data_path, chunk_size=10000)
