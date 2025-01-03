@@ -1,0 +1,31 @@
+name: Update Stable Docs
+
+on:
+  release:
+    types: [published]
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  update_stable_docs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # We need all commits to find docs/ changes
+
+      - name: Set up Git user
+        run: |
+          git config user.name "Automated"
+          git config user.email "actions@users.noreply.github.com"
+
+      - name: Create stable branch if it does not yet exist
+        run: |
+          if ! git ls-remote --heads origin stable | grep stable; then
+            git checkout -b stable
+          fi
