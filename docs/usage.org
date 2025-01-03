@@ -246,19 +246,50 @@ instead of by the sample.
 
 This is the correct order for the admix array data.
 
-# * BED format
+* Loci Imputation
+Imputing local ancestry loci information to genotype variant locations improves
+integration of the local ancestry information with genotype data. As such, we also
+provide the =interpolate_array= function to efficiently interpolate missing values
+when local ancestry loci information is converted to more variable genotype variant
+locations. It leverages the power of [[https://zarr.readthedocs.io/en/stable/index.html][=Zarr=]] arrays, making it suitable for handling
+substantial datasets while managing memory usage effectively.
 
-# In addition to the parsing function and helper function, there is
-# also a function to export the admix loci data as a BED format.
-# Because ancestry loci are often inherited in a block, this
-# function combines locations into these blocks and outputs them
-# as parquet files per chromosome.
+*Note*: Following imputation, =variant_df= will include genomic positions for
+both local ancestry and genotype data.
 
-# *Note:* You do not need to =compute()= before passing the =admix= 
-# dask array to this function.
+#+BEGIN_SRC python :results silent
+  def _load_genotypes(plink_prefix_path):
+      from tensorqtl import pgen
+      pgr = pgen.PgenReader(plink_prefix_path)
+      variant_df = pgr.variant_df
+      variant_df.loc[:, "chrom"] = "chr" + variant_df.chrom
+      return pgr.load_genotypes(), variant_df
 
-# #+begin_src python :results output
-#   from rfmix_reader import export_loci_admix_to_bed
-  
-#   export_loci_admix_to_bed(loci, rf_q, admix)
-# #+end_src
+  def _load_admix(prefix_path, binary_dir):
+      from rfmix_reader import read_rfmix
+      return read_rfmix(prefix_path, binary_dir=binary_dir)
+
+#+END_SRC
+
+#+BEGIN_SRC python :results silent
+  from rfmix_reader import interpolate_array
+  basename = "/projects/b1213/large_projects/brain_coloc_app/input"
+  # Local ancestry
+  prefix_path = f"{basename}/local_ancestry_rfmix/_m/"
+  binary_dir = f"{basename}/local_ancestry_rfmix/_m/binary_files/"
+  loci, _, admix = _load_admix(prefix_path, binary_dir)
+  loci.rename(columns={"chromosome": "chrom",
+		       "physical_position": "pos"},
+	      inplace=True)
+  # Variant data
+  plink_prefix = f"{basename}/genotypes/TOPMed_LIBD"
+  _, variant_df = _load_genotypes(plink_prefix)
+  variant_df = variant_df.drop_duplicates(subset=["chrom", "pos"],
+					  keep='first')
+  # Keep all locations for more accurate imputation
+  variant_loci_df = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"],
+				     how="outer", indicator=True)\
+			      .loc[:, ["chrom", "pos", "i", "_merge"]]
+  data_path = f"{basename}/local_ancestry_rfmix/_m"
+  z = interpolate_array(variant_loci_df, admix, data_path)
+#+END_SRC

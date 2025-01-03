@@ -180,7 +180,7 @@ These functions ensure accurate loading and formatting of variant and local ance
 data, streamlining subsequent analyses.
 
 ```python
- def _load_genotypes(plink_prefix_path):
+def _load_genotypes(plink_prefix_path):
     from tensorqtl import pgen
     pgr = pgen.PgenReader(plink_prefix_path)
     variant_df = pgr.variant_df
@@ -192,7 +192,7 @@ def _load_admix(prefix_path, binary_dir):
     return read_rfmix(prefix_path, binary_dir=binary_dir)
 
 def __testing__():
-    basename = "/projects/b1213/large_projects/brain_coloc_app/input"
+	basename = "/projects/b1213/large_projects/brain_coloc_app/input"
     # Local ancestry
     prefix_path = f"{basename}/local_ancestry_rfmix/_m/"
     binary_dir = f"{basename}/local_ancestry_rfmix/_m/binary_files/"

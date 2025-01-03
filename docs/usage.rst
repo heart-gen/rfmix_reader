@@ -50,8 +50,6 @@ First, we need to generate binary files. I suggest using
 
 .. raw:: org
 
-   #+RESULTS[20f284c23771c5bf268a8cb4a468752edf5b0410]:
-
 ::
 
    Created binary files at: ./binary_files
@@ -69,8 +67,6 @@ function ``read_rfmix``.
    loci, rf_q, admix = read_rfmix(prefix_path)
 
 .. raw:: org
-
-   #+RESULTS[894f008f7dfcb07d33816de2f9c4858756db92f6]:
 
 ::
 
@@ -99,8 +95,6 @@ Output
 
 .. raw:: org
 
-   #+RESULTS[217b70fa31fcce528d45f44213a25d1722e1309b]:
-
 ::
 
    (646287, 3)
@@ -110,8 +104,6 @@ Output
    loci
 
 .. raw:: org
-
-   #+RESULTS[bc9ff363ba2f5069d7ad629933ab8302c74b7f5c]:
 
 ::
 
@@ -147,8 +139,6 @@ individual. This is the ``*.rfmix.Q`` files combined into a single
 
 .. raw:: org
 
-   #+RESULTS[03374a9f07046dd7deeef0520f12f85217cf8c20]:
-
 ::
 
    (1500, 4)
@@ -158,8 +148,6 @@ individual. This is the ``*.rfmix.Q`` files combined into a single
    rf_q
 
 .. raw:: org
-
-   #+RESULTS[d52da46fcc3adf7aa1e9dfa5442db27cc50082af]:
 
 ::
 
@@ -187,8 +175,6 @@ this example dataset.
 
 .. raw:: org
 
-   #+RESULTS[d92e8d18e5bbb94760735575df8b58cf442f61c1]:
-
 ::
 
    chrom
@@ -207,8 +193,6 @@ be a regular ``pandas`` DataFrame.
 
 .. raw:: org
 
-   #+RESULTS[31f076edd1d8a293467b76d46381391573fd01ac]:
-
 ::
 
    <class 'cudf.core.dataframe.DataFrame'>
@@ -219,8 +203,6 @@ be a regular ``pandas`` DataFrame.
    len(sample_ids)
 
 .. raw:: org
-
-   #+RESULTS[d3e5cab41b367de4cab44d2d0450f1b958f4d098]:
 
 ::
 
@@ -234,8 +216,6 @@ We'll also get the unique populations.
    pops
 
 .. raw:: org
-
-   #+RESULTS[943d0f4206518c373fa852ab000059693e2b2897]:
 
 ::
 
@@ -255,8 +235,6 @@ This means instead of 0 and 1, you can get 0, 1, or 3.
 
 .. raw:: org
 
-   #+RESULTS[786d091553720e67cc5780ad7bbd2265492be434]:
-
 ::
 
    dask.array<concatenate, shape=(646287, 1000), dtype=float32, chunksize=(1024, 256), chunktype=numpy.ndarray>
@@ -269,8 +247,6 @@ exactly like ``pandas_plink`` BED data.
    admix.compute()
 
 .. raw:: org
-
-   #+RESULTS[070fc2065a660e8042230bf7713804fdb124fbba]:
 
 ::
 
@@ -288,8 +264,6 @@ exactly like ``pandas_plink`` BED data.
 
 .. raw:: org
 
-   #+RESULTS[19574afcca5d5cbc89e58eb226076e4ed3afeab7]:
-
 ::
 
    (646287, 1000)
@@ -301,8 +275,6 @@ The rows are the same as the ``loci`` data, in the sample order.
    loci.shape
 
 .. raw:: org
-
-   #+RESULTS[217b70fa31fcce528d45f44213a25d1722e1309b]:
 
 ::
 
@@ -319,8 +291,6 @@ sample.
 
 .. raw:: org
 
-   #+RESULTS[6d3b0a823d116490484f2500f47ebbb03fcd208c]:
-
 ::
 
    1000
@@ -330,8 +300,6 @@ sample.
    col_names[0:4]
 
 .. raw:: org
-
-   #+RESULTS[c8ca5d8c680865988858e9cafb571adceb27970d]:
 
 ::
 
@@ -343,10 +311,60 @@ sample.
 
 .. raw:: org
 
-   #+RESULTS[9889ae17959e0911178a53e41e70d58d7ce11224]:
-
 ::
 
    ['Sample_1_EUR', 'Sample_2_EUR', 'Sample_3_EUR', 'Sample_4_EUR']
 
 This is the correct order for the admix array data.
+
+Loci Imputation
+================
+
+Imputing local ancestry loci information to genotype variant locations
+improves integration of the local ancestry information with genotype
+data. As such, we also provide the `interpolate_array` function to
+efficiently interpolate missing values when local ancestry loci
+information is converted to more variable genotype variant locations.
+It leverages the power of
+`Zarr <https://zarr.readthedocs.io/en/stable/index.html>`_ arrays,
+making it suitable for handling substantial datasets while managing
+memory usage effectively.
+
+**Note**: Following imputation, `variant_df` will include genomic
+positions for both local ancestry and genotype data.
+
+.. code:: python
+
+   def _load_genotypes(plink_prefix_path):
+       from tensorqtl import pgen
+       pgr = pgen.PgenReader(plink_prefix_path)
+       variant_df = pgr.variant_df
+       variant_df.loc[:, "chrom"] = "chr" + variant_df.chrom
+       return pgr.load_genotypes(), variant_df
+
+   def _load_admix(prefix_path, binary_dir):
+       from rfmix_reader import read_rfmix
+       return read_rfmix(prefix_path, binary_dir=binary_dir)
+
+.. code:: python
+
+   from rfmix_reader import interpolate_array
+   basename = "/projects/b1213/large_projects/brain_coloc_app/input"
+   # Local ancestry
+   prefix_path = f"{basename}/local_ancestry_rfmix/_m/"
+   binary_dir = f"{basename}/local_ancestry_rfmix/_m/binary_files/"
+   loci, _, admix = _load_admix(prefix_path, binary_dir)
+   loci.rename(columns={"chromosome": "chrom",
+                        "physical_position": "pos"},
+               inplace=True)
+   # Variant data
+   plink_prefix = f"{basename}/genotypes/TOPMed_LIBD"
+   _, variant_df = _load_genotypes(plink_prefix)
+   variant_df = variant_df.drop_duplicates(subset=["chrom", "pos"],
+                                           keep='first')
+   # Keep all locations for more accurate imputation
+   variant_loci_df = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"],
+                                      how="outer", indicator=True)\
+                               .loc[:, ["chrom", "pos", "i", "_merge"]]
+   data_path = f"{basename}/local_ancestry_rfmix/_m"
+   z = interpolate_array(variant_loci_df, admix, data_path)
