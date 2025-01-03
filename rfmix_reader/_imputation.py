@@ -5,6 +5,7 @@ This is a time consuming process, but should only need to be done once.
 Loading the data becomes very fast because data is saved to a Zarr.
 """
 import zarr
+from tqdm import tqdm
 from time import strftime
 from pandas import DataFrame
 from dask.array import Array
@@ -17,9 +18,11 @@ except ModuleNotFoundError as e:
         return False
 
 if is_available():
-    from cupy import ndarray
+    import cupy as cp
+    array_module = cp
 else:
-    from numpy import ndarray
+    import numpy as np
+    array_module = np
 
 __all__ = [
     "interpolate_array",
@@ -84,26 +87,28 @@ def _expand_array(
     - The resulting Zarr array is saved to disk at the specified path.
     - Memory usage may be high when dealing with large datasets.
     """
-    import numpy as np
+    from numpy import array, nan, int32
     _print_logger("Generate empty Zarr!")
     z = zarr.open(f"{zarr_outdir}/local-ancestry.zarr", mode="w",
                   shape=(variant_loci_df.shape[0], admix.shape[1]),
-                  chunks=(10000, 1000), dtype='float32')
+                  chunks=(8000, 2000), dtype='float32')
+
     # Fill with NaNs
-    arr_nans = np.array(variant_loci_df.loc[variant_loci_df.isnull()\
-                                            .any(axis=1)].index, dtype=np.int32)
+    arr_nans = array(variant_loci_df.loc[variant_loci_df.isnull()\
+                                         .any(axis=1)].index, dtype=int32)
     _print_logger("Fill Zarr with NANs!")
-    z[arr_nans, :] = np.nan
+    z[arr_nans, :] = nan
     _print_logger("Remove NaN array!")
     del arr_nans
+
     # Fill with local ancestry
-    arr = np.array(variant_loci_df.dropna().index)
+    arr = array(variant_loci_df.dropna().index)
     _print_logger("Fill Zarr with data!")
     z[arr, :] = admix.compute()
     return z
 
 
-def _interpolate_col(col: ndarray) -> ndarray:
+def _interpolate_col(col: array_module.ndarray) -> array_module.ndarray:
     """
     Interpolate missing values in a column of data.
 
@@ -123,17 +128,12 @@ def _interpolate_col(col: ndarray) -> ndarray:
         A copy of the input array with NaN values interpolated and rounded to
         the nearest integer.
     """
-    if is_available():
-        import cupy as np
-    else:
-        import numpy as np
-
-    mask = np.isnan(col)
-    idx = np.arange(len(col))
+    mask = array_module.isnan(col)
+    idx = array_module.arange(len(col))
     valid = ~mask
 
-    if np.any(valid):
-        interpolated = np.round(np.interp(idx[mask], idx[valid], col[valid]))
+    if array_module.any(valid):
+        interpolated = array_module.round(array_module.interp(idx[mask], idx[valid], col[valid]))
         col = col.copy() # Avoid modifying the original array
         col[mask] = interpolated.astype(int)
     return col
@@ -184,12 +184,6 @@ def interpolate_array(
     >>> print(z.shape)
     (2, 3)
     """
-    from tqdm import tqdm
-    if is_available():
-        import cupy as np
-    else:
-        import numpy as np
-
     _print_logger("Starting expansion!")
     z = _expand_array(variant_loci_df, admix, zarr_outdir)
     total_rows, _ = z.shape
@@ -199,8 +193,8 @@ def interpolate_array(
     for i in tqdm(range(0, total_rows, chunk_size),
                   desc="Processing chunks", unit="chunk"):
         end = min(i + chunk_size, total_rows)
-        chunk = np.array(z[i:end, :])
-        interp_chunk = np.apply_along_axis(_interpolate_col, axis=0, arr=chunk)
+        chunk = array_module.array(z[i:end, :])
+        interp_chunk = array_module.apply_along_axis(_interpolate_col, axis=0, arr=chunk)
         z[i:end, :] = interp_chunk.get() if is_available() else interp_chunk
 
     return z
@@ -219,7 +213,7 @@ def _load_admix(prefix_path, binary_dir):
     return read_rfmix(prefix_path, binary_dir=binary_dir)
 
 
-def testing():
+def __testing__():
     basename = "/projects/b1213/large_projects/brain_coloc_app/input"
     # Local ancestry
     prefix_path = f"{basename}/local_ancestry_rfmix/_m/"
@@ -238,4 +232,4 @@ def testing():
                           how="outer", indicator=True)\
                    .loc[:, ["chrom", "pos", "i"]]
     data_path = f"{basename}/local_ancestry_rfmix/_m"
-    z = interpolate_array(variant_loci_df, admix, data_path, chunk_size=10000)
+    z = interpolate_array(variant_loci_df, admix, data_path)
