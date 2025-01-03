@@ -1,27 +1,3 @@
-.. raw:: org
-
-   #+PROPERTY:  header-args: :dir /dcs04/lieber/statsgen/jbenjami/tutorials/eqtl_analysis_tutorial
-
-.. raw:: org
-
-   #+PROPERTY:  header-args:R :cache yes :exports both :session *R* :eval never-export
-
-.. raw:: org
-
-   #+PROPERTY:  header-args:python :session *Python* :cache yes :exports both :eval never-export
-
-.. raw:: org
-
-   #+PROPERTY:  header-args:sh :cache yes :exports both :eval never-export
-
-.. raw:: org
-
-   #+STARTUP:   align fold nodlcheck hidestars oddeven lognotestate
-
-.. raw:: org
-
-   #+TAGS:      Write(w) Update(u) Fix(f) Check(c) noexport(n)
-
 Haplotypes
 ==========
 
@@ -47,8 +23,6 @@ First, we need to generate binary files. I suggest using
 
    prefix_path = "../examples/two_populations/out/"
    create_binaries(prefix_path)
-
-.. raw:: org
 
 ::
 
@@ -90,8 +64,6 @@ function ``read_rfmix``.
 
    loci, rf_q, admix = read_rfmix(prefix_path)
 
-.. raw:: org
-
 ::
 
    GPU 0: NVIDIA TITAN V
@@ -117,8 +89,6 @@ Output
 
    loci.shape
 
-.. raw:: org
-
 ::
 
    (646287, 3)
@@ -126,8 +96,6 @@ Output
 .. code:: python
 
    loci
-
-.. raw:: org
 
 ::
 
@@ -161,8 +129,6 @@ individual. This is the ``*.rfmix.Q`` files combined into a single
 
    rf_q.shape
 
-.. raw:: org
-
 ::
 
    (1500, 4)
@@ -170,8 +136,6 @@ individual. This is the ``*.rfmix.Q`` files combined into a single
 .. code:: python
 
    rf_q
-
-.. raw:: org
 
 ::
 
@@ -197,8 +161,6 @@ this example dataset.
 
    rf_q.groupby("chrom").size()
 
-.. raw:: org
-
 ::
 
    chrom
@@ -215,8 +177,6 @@ be a regular ``pandas`` DataFrame.
 
    type(rf_q)
 
-.. raw:: org
-
 ::
 
    <class 'cudf.core.dataframe.DataFrame'>
@@ -225,8 +185,6 @@ be a regular ``pandas`` DataFrame.
 
    sample_ids = rf_q.sample_id.unique().to_arrow()
    len(sample_ids)
-
-.. raw:: org
 
 ::
 
@@ -238,8 +196,6 @@ We'll also get the unique populations.
 
    pops = rf_q.drop(["sample_id", "chrom"], axis=1).columns.values
    pops
-
-.. raw:: org
 
 ::
 
@@ -257,8 +213,6 @@ This means instead of 0 and 1, you can get 0, 1, or 3.
 
    admix
 
-.. raw:: org
-
 ::
 
    dask.array<concatenate, shape=(646287, 1000), dtype=float32, chunksize=(1024, 256), chunktype=numpy.ndarray>
@@ -269,8 +223,6 @@ exactly like ``pandas_plink`` BED data.
 .. code:: python
 
    admix.compute()
-
-.. raw:: org
 
 ::
 
@@ -286,8 +238,6 @@ exactly like ``pandas_plink`` BED data.
 
    admix.shape
 
-.. raw:: org
-
 ::
 
    (646287, 1000)
@@ -297,8 +247,6 @@ The rows are the same as the ``loci`` data, in the sample order.
 .. code:: python
 
    loci.shape
-
-.. raw:: org
 
 ::
 
@@ -313,8 +261,6 @@ sample.
    col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
    len(col_names)
 
-.. raw:: org
-
 ::
 
    1000
@@ -323,8 +269,6 @@ sample.
 
    col_names[0:4]
 
-.. raw:: org
-
 ::
 
    ['Sample_1_AFR', 'Sample_2_AFR', 'Sample_3_AFR', 'Sample_4_AFR']
@@ -332,8 +276,6 @@ sample.
 .. code:: python
 
    col_names[500:504]
-
-.. raw:: org
 
 ::
 
