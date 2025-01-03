@@ -32,5 +32,15 @@ Admixture functions
 .. autosummary::
   :toctree: api/
 
+  admix_to_bed_chromosome   
   generate_tagore_bed
-  admix_to_bed_chromosome
+
+
+Loci imputation functions
+-------------------------
+
+.. autosummary::
+   :toctree: api/
+
+   interpolate_array
+   _expand_array
