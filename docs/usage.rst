@@ -57,6 +57,30 @@ First, we need to generate binary files. I suggest using
      0% 0/3 [00:00<?, ?it/s] 33% 1/3 [05:03<10:07, 303.82s/it]100% 3/3 [05:03<00:00, 101.27s/it]
    Successfully converted 3 files to binary format.
 
+As of **v0.1.20**, this can also be invoked via the command line.
+
+.. code:: shell
+
+   create-binaries -h
+
+.. note::
+
+   .. code-block:: text
+
+      usage: create-binaries [-h] [--version] [--binary_dir BINARY_DIR] file_prefix
+
+      Create binary files from RFMix *.fb.tsv files.
+
+      positional arguments:
+        file_prefix           The prefix used to identify the relevant FB TSV files.
+
+      options:
+        -h, --help            show this help message and exit
+        --version             Show the version of the program and exit.
+        --binary_dir BINARY_DIR
+                              The directory where the binary files will be stored.
+                              Defaults to './binary_files'.
+
 Once the binary files are created, we can read in the data with the main
 function ``read_rfmix``.
 
