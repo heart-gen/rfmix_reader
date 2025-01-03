@@ -18,11 +18,9 @@ except ModuleNotFoundError as e:
         return False
 
 if is_available():
-    import cupy as cp
-    array_module = cp
+    import cupy as arr_mod
 else:
-    import numpy as np
-    array_module = np
+    import numpy as arr_mod
 
 __all__ = [
     "interpolate_array",
@@ -72,7 +70,8 @@ def _expand_array(
         DataFrame containing the data to be expanded. Used to determine the
         shape of the output array and identify missing data.
     admix : dask.array.Array
-        Dask array containing the local ancestry data to be stored in the Zarr array.
+        Dask array containing the local ancestry data to be stored in the Zarr
+        array.
     zarr_outdir : str
         Directory path where the Zarr array will be saved.
 
@@ -108,7 +107,7 @@ def _expand_array(
     return z
 
 
-def _interpolate_col(col: array_module.ndarray) -> array_module.ndarray:
+def _interpolate_col(col: arr_mod.ndarray) -> arr_mod.ndarray:
     """
     Interpolate missing values in a column of data.
 
@@ -128,12 +127,13 @@ def _interpolate_col(col: array_module.ndarray) -> array_module.ndarray:
         A copy of the input array with NaN values interpolated and rounded to
         the nearest integer.
     """
-    mask = array_module.isnan(col)
-    idx = array_module.arange(len(col))
+    mask = arr_mod.isnan(col)
+    idx = arr_mod.arange(len(col))
     valid = ~mask
 
-    if array_module.any(valid):
-        interpolated = array_module.round(array_module.interp(idx[mask], idx[valid], col[valid]))
+    if arr_mod.any(valid):
+        interpolated = arr_mod.round(arr_mod.interp(idx[mask], idx[valid],
+                                                    col[valid]))
         col = col.copy() # Avoid modifying the original array
         col[mask] = interpolated.astype(int)
     return col
@@ -180,7 +180,8 @@ def interpolate_array(
     >>> import dask.array as da
     >>> variant_loci_df = pd.DataFrame({'chrom': ['1', '1'], 'pos': [100, 200]})
     >>> admix = da.random.random((2, 3))
-    >>> z = interpolate_array(variant_loci_df, admix, '/path/to/output', chunk_size=1)
+    >>> z = interpolate_array(variant_loci_df, admix, '/path/to/output',
+                              chunk_size=1)
     >>> print(z.shape)
     (2, 3)
     """
@@ -193,8 +194,9 @@ def interpolate_array(
     for i in tqdm(range(0, total_rows, chunk_size),
                   desc="Processing chunks", unit="chunk"):
         end = min(i + chunk_size, total_rows)
-        chunk = array_module.array(z[i:end, :])
-        interp_chunk = array_module.apply_along_axis(_interpolate_col, axis=0, arr=chunk)
+        chunk = arr_mod.array(z[i:end, :])
+        interp_chunk = arr_mod.apply_along_axis(_interpolate_col, axis=0,
+                                                arr=chunk)
         z[i:end, :] = interp_chunk.get() if is_available() else interp_chunk
 
     return z
