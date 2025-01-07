@@ -5,10 +5,9 @@ __author__ = "Kynon J Benjamin"
 
 import cudf as pd
 import numpy as np
-from rfmix_reader import read_rfmix
+from rfmix_reader import read_rfmix, interpolate_array
 
 ################### testing #############################
-
 
 def get_test_ids():
     test_ids = "../example/sample_id_to_brnum.tsv"
@@ -23,6 +22,7 @@ def test_data():
     loci, rf_q, admix = read_rfmix(
         prefix_path, verbose=True, binary_dir=binary_dir)
     rfr = RFMixReader(prefix_path, select_samples=select_samples)
+
 ########################################################
 
 

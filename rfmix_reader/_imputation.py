@@ -91,7 +91,6 @@ def _expand_array(
     z = zarr.open(f"{zarr_outdir}/local-ancestry.zarr", mode="w",
                   shape=(variant_loci_df.shape[0], admix.shape[1]),
                   chunks=(8000, 2000), dtype='float32')
-
     # Fill with NaNs
     arr_nans = array(variant_loci_df.loc[variant_loci_df.isnull()\
                                          .any(axis=1)].index, dtype=int32)
@@ -99,7 +98,6 @@ def _expand_array(
     z[arr_nans, :] = nan
     _print_logger("Remove NaN array!")
     del arr_nans
-
     # Fill with local ancestry
     arr = array(variant_loci_df.dropna().index)
     _print_logger("Fill Zarr with data!")
@@ -130,7 +128,6 @@ def _interpolate_col(col: arr_mod.ndarray) -> arr_mod.ndarray:
     mask = arr_mod.isnan(col)
     idx = arr_mod.arange(len(col))
     valid = ~mask
-
     if arr_mod.any(valid):
         interpolated = arr_mod.round(arr_mod.interp(idx[mask], idx[valid],
                                                     col[valid]))
@@ -188,7 +185,6 @@ def interpolate_array(
     _print_logger("Starting expansion!")
     z = _expand_array(variant_loci_df, admix, zarr_outdir)
     total_rows, _ = z.shape
-
     # Process the data in chunks
     _print_logger("Interpolating data!")
     for i in tqdm(range(0, total_rows, chunk_size),
@@ -198,40 +194,4 @@ def interpolate_array(
         interp_chunk = arr_mod.apply_along_axis(_interpolate_col, axis=0,
                                                 arr=chunk)
         z[i:end, :] = interp_chunk.get() if is_available() else interp_chunk
-
     return z
-
-# def _load_genotypes(plink_prefix_path):
-#     from tensorqtl import pgen
-#     pgr = pgen.PgenReader(plink_prefix_path)
-#     variant_df = pgr.variant_df
-#     variant_df.loc[:, "chrom"] = "chr" + variant_df.chrom
-#     return pgr.load_genotypes(), variant_df
-
-
-# def _load_admix(prefix_path, binary_dir):
-#     from rfmix_reader import read_rfmix
-#     return read_rfmix(prefix_path, binary_dir=binary_dir)
-
-
-# def __testing__():
-#     basename = "/projects/b1213/large_projects/brain_coloc_app/input"
-#     # Local ancestry
-#     prefix_path = f"{basename}/local_ancestry_rfmix/_m/"
-#     binary_dir = f"{basename}/local_ancestry_rfmix/_m/binary_files/"
-#     loci, _, admix = _load_admix(prefix_path, binary_dir)
-#     loci.rename(columns={"chromosome": "chrom",
-#                          "physical_position": "pos"},
-#                 inplace=True)
-#     # Variant data
-#     plink_prefix = f"{basename}/genotypes/TOPMed_LIBD"
-#     _, variant_df = _load_genotypes(plink_prefix)
-#     variant_df = variant_df.drop_duplicates(subset=["chrom", "pos"],
-#                                             keep='first')
-#     variant_loci_df = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"],
-#                                        how="outer", indicator=True)\
-#                                 .loc[:, ["chrom", "pos", "i", "_merge"]]
-#     data_path = f"{basename}/local_ancestry_rfmix/_m"
-#     z = interpolate_array(variant_loci_df, admix, data_path)
-#     arr_geno = arr_mod.array(variant_loci_df[~(variant_loci_df["_merge"] == "right_only")].index)
-#     new_admix = z[arr_geno.get(), :]
