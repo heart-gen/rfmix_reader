@@ -17,7 +17,7 @@ def __testing__():
     # Local ancestry
     prefix_path = f"{basename}/local_ancestry_rfmix/_m/"
     binary_dir = f"{basename}/local_ancestry_rfmix/_m/binary_files/"
-    loci, _, admix = _load_admix(prefix_path, binary_dir)
+    loci, rf_q, admix = _load_admix(prefix_path, binary_dir)
     loci.rename(columns={"chromosome": "chrom",
                          "physical_position": "pos"},
                 inplace=True)
