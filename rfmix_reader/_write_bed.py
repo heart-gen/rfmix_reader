@@ -70,7 +70,7 @@ def write_bed(loci: DataFrame, rf_q: DataFrame, admix: Array, outdir: str="./",
 
     Example:
     --------
-    >>> loci, rf_q, admix = _load_admix(prefix_path, binary_dir)
+    >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir)
     >>> write_bed(loci, rf_q, admix, outdir="./output", outfile="ancestry.bed")
     # This will create ./output/ancestry.bed with the processed data
 
@@ -143,7 +143,7 @@ def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
 
     Example:
     --------
-    >>> loci, rf_q, admix = _load_admix(prefix_path, binary_dir)
+    >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir)
     >>> loci.rename(columns={"chromosome": "chrom","physical_position": "pos"}, inplace=True)
     >>> variant_loci = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"],how="outer", indicator=True).loc[:, ["chrom", "pos", "i", "_merge"]]
     >>> z = interpolate_array(variant_loci, admix, data_path)
