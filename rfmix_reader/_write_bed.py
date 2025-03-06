@@ -108,10 +108,6 @@ def write_bed(loci: DataFrame, rf_q: DataFrame, admix: Array, outdir: str="./",
     # Apply function to all partitions using map_partitions
     with ProgressBar():
         _ = bed_ddf.map_partitions(process_partition, meta=bed_ddf._meta).compute()
-    # for ii in tqdm(range(bed_ddf.npartitions), desc="Processing Partitions"):
-    #     chunk = bed_ddf.get_partition(ii).compute()
-    #     chunk.to_csv(f"{outdir}/{outfile}", sep="\t", mode="a",
-    #                  index=False, header=(ii == 0))
 
 
 def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
