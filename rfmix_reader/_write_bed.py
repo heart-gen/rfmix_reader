@@ -4,6 +4,7 @@ Documentation generation assisted by AI.
 from typing import Tuple, List
 from zarr import Array as zArray
 from dask.array import Array, from_array
+from dask.diagnostics import ProgressBar
 from dask.dataframe import from_dask_array, concat
 from dask.dataframe import from_pandas as dd_from_pandas
 
@@ -79,20 +80,38 @@ def write_bed(loci: DataFrame, rf_q: DataFrame, admix: Array, outdir: str="./",
     chrom   pos   end   hap   sample1_ancestry1   sample2_ancestry1 ...
     chr1    1000  1001  chr1_1000   0   1 ...
     """
+    def process_partition(df, ii):
+        """Writes each partition to CSV without loading all data into memory."""
+        df.to_csv(f"{outdir}/{outfile}", sep="\t", mode="a", index=False,
+                  header=(ii == 0))
+        return df  # Return df to satisfy Dask's expected return format
+    # Convert Dask Array to Dask DataFrame
     admix_ddf = from_dask_array(admix, columns=_get_names(rf_q))
+    # Compute optimal number of partitions (targeting ~500k rows per partition)
+    npartitions = max(10, min(50, admix.shape[0] // 500_000))
+    # Re-partition data into chunks
+    admix_ddf = admix_ddf.repartition(npartitions=npartitions)
+    # Fix loci column names
     loci = _rename_loci_columns(loci)
     loci["end"] = loci["pos"] + 1
     loci["hap"] = loci['chrom'].astype(str)+'_'+loci['pos'].astype(str)
+    # Ensure loci is a Pandas DataFrame
     if is_available():
         loci = loci.to_pandas()
     else:
         loci.drop(["i"], axis=1, inplace=True)
+    # Convert Pandas DataFrame to Dask DataFrame
     loci_ddf = dd_from_pandas(loci, npartitions=admix_ddf.npartitions)
+    loci_ddf = loci_ddf.repartition(npartitions=admix_ddf.npartitions)
+    # Concatenate loci and admix DataFrames
     bed_ddf = concat([loci_ddf, admix_ddf], axis=1)
-    for ii in range(bed_ddf.npartitions):
-        chunk = bed_ddf.get_partition(ii).compute()
-        chunk.to_csv(f"{outdir}/{outfile}", sep="\t", mode="a",
-                     index=False, header=(ii == 0))
+    # Apply function to all partitions using map_partitions
+    with ProgressBar():
+        _ = bed_ddf.map_partitions(process_partition, meta=bed_ddf._meta).compute()
+    # for ii in tqdm(range(bed_ddf.npartitions), desc="Processing Partitions"):
+    #     chunk = bed_ddf.get_partition(ii).compute()
+    #     chunk.to_csv(f"{outdir}/{outfile}", sep="\t", mode="a",
+    #                  index=False, header=(ii == 0))
 
 
 def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
@@ -145,13 +164,14 @@ def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
     --------
     >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir)
     >>> loci.rename(columns={"chromosome": "chrom","physical_position": "pos"}, inplace=True)
-    >>> variant_loci = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"],how="outer", indicator=True).loc[:, ["chrom", "pos", "i", "_merge"]]
-    >>> z = interpolate_array(variant_loci, admix, data_path)
+    >>> variant_loci = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"], how="outer", indicator=True).loc[:, ["chrom", "pos", "i", "_merge"]]
+    >>> data_path = f"{basename}/local_ancestry_rfmix/_m"
+    >>> z = interpolate_array(variant_loci, admix, data_output_dir)
     >>> write_imputed(rf_q, admix, variant_loci, z, outdir="./output", outfile="imputed_ancestry.bed")
     # This will create ./output/imputed_ancestry.bed with the processed data
     """
-    loci, admix = _clean_data_imp(admix, variant_loci, z)
-    write_bed(loci, rf_q, admix, outfile)
+    loci_I, admix_I = _clean_data_imp(admix, variant_loci, z)
+    write_bed(loci_I, rf_q, admix_I, outdir, outfile)
 
 
 def _get_names(rf_q: DataFrame) -> List[str]:
