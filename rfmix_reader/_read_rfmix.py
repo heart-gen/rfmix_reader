@@ -50,9 +50,6 @@ def read_rfmix(
     verbose : bool, optional
         :const:`True` for progress information; :const:`False` otherwise.
         Default:`True`.
-    bed_format : bool, optional
-        :const:`True` for outputing BED format of haplotypes. Default is
-        `False`.
 
     Returns
     -------
@@ -162,6 +159,10 @@ def _read_tsv(fn: str) -> DataFrame:
                 comment="#"
             )
         else:
+            ## TODO: FutureWarning: The 'delim_whitespace' keyword in
+            ## pd.read_csv is deprecated and will be removed in a future
+            ## version. Use ``sep='\s+'`` instead.
+
             chunks = read_csv(
                 fn,
                 delim_whitespace=True,
