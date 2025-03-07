@@ -106,9 +106,10 @@ def write_bed(loci: DataFrame, rf_q: DataFrame, admix: Array, outdir: str="./",
     # Concatenate loci and admix DataFrames
     bed_ddf = concat([loci_ddf, admix_ddf], axis=1)
     # Apply function to all partitions using map_partitions
+    print(f"Processing {npartitions} partitions...")
     with ProgressBar():
-        _ = bed_ddf.map_partitions(process_partition, meta=bed_ddf._meta,
-                                   with_index=True).compute()
+        _ = bed_ddf.to_delayed()
+        _ = [process_partition(df.compute(), ii) for ii, df in enumerate(_)]
 
 
 def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
