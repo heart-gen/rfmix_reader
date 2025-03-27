@@ -152,9 +152,11 @@ variant_loci_df = pd.DataFrame({'chrom': ['1', '1', '1', '1'],
 admix = da.random.random((2, 3)) # Random data here
 
 # This expands the Dask array (admix) and interpolates missing data
-# Default chunk_size = 50000 assuming variant_loci_df 6-9M rows. 
+# Default chunk_size = 50,000 assuming variant_loci_df 6-9M rows.
+# Default batch_size = 10,000 assuming admix loci from 2-4M rows. 
 # Adjust this based on variant_loci_df size.
-z = interpolate_array(variant_loci_df, admix, '/path/to/output', chunk_size=1)
+z = interpolate_array(variant_loci_df, admix, '/path/to/output', chunk_size=100, 
+		      batch_size=100)
 
 # Check the shape of the resulting Zarr array, which should have the same
 # row numbers as variant_loci_df
