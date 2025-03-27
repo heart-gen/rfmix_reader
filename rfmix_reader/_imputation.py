@@ -54,8 +54,8 @@ def _print_logger(message: str) -> None:
 
 
 def _expand_array(
-        variant_loci_df: DataFrame, admix: Array, zarr_outdir: str
-) -> zarr.Array:
+        variant_loci_df: DataFrame, admix: Array, zarr_outdir: str,
+        batch_size: int = 10_000) -> zarr.Array:
     """
     Expand and fill a Zarr array with local ancestry data, handling missing
     values.
@@ -74,34 +74,42 @@ def _expand_array(
         array.
     zarr_outdir : str
         Directory path where the Zarr array will be saved.
+    batch_size : int
+        Batch size for processing local ancestry data. Default is 10,000.
 
     Returns
     -------
     zarr.Array
         The populated Zarr array containing the expanded local ancestry data
-        with NANs.
+        with NaNs.
 
     Notes
     -----
     - The resulting Zarr array is saved to disk at the specified path.
     - Memory usage may be high when dealing with large datasets.
     """
-    from numpy import array, nan, int32
-    _print_logger("Generate empty Zarr!")
+    from numpy import nan, int32
+    from numpy import any as nany
+    from numpy import where as nwhere
+    _print_logger("Generate empty Zarr.")
+    # Open Zarr array without loading into memory
     z = zarr.open(f"{zarr_outdir}/local-ancestry.zarr", mode="w",
                   shape=(variant_loci_df.shape[0], admix.shape[1]),
                   chunks=(8000, 2000), dtype='float32')
-    # Fill with NaNs
-    arr_nans = array(variant_loci_df.loc[variant_loci_df.isnull()\
-                                         .any(axis=1)].index, dtype=int32)
-    _print_logger("Fill Zarr with NANs!")
-    z[arr_nans, :] = nan
-    _print_logger("Remove NaN array!")
-    del arr_nans
-    # Fill with local ancestry
-    arr = array(variant_loci_df.dropna().index)
-    _print_logger("Fill Zarr with data!")
-    z[arr, :] = admix.compute()
+    # Get indices of NaN-containing rows
+    nan_rows_mask = variant_loci_df.isnull().any(axis=1).values
+    nan_indices = nwhere(nan_rows_mask)[0]
+    _print_logger(f"Filling Zarr ({len(nan_indices)} rows) with NaNs.")
+    # Batch processing for NaNs (vectorized)
+    if nan_indices.size > 0:
+        z[nan_indices, :] = nan
+    # Process `admix` in blocks
+    _print_logger("Filling Zarr with local ancestry data in batches.")
+    for start in range(0, admix.shape[0], batch_size):
+        end = min(start + batch_size, admix.shape[0])
+        if nany(~nan_rows_mask[start:end]): # Skip NaN rows
+            z[start:end, :] = admix[start:end].compute()
+    _print_logger("Zarr array successfully populated!")
     return z
 
 
@@ -138,7 +146,7 @@ def _interpolate_col(col: arr_mod.ndarray) -> arr_mod.ndarray:
 
 def interpolate_array(
         variant_loci_df: DataFrame, admix: Array, zarr_outdir: str,
-        chunk_size: int = 50000) -> zarr.Array:
+        chunk_size: int = 50_000, batch_size: int = 10_000) -> zarr.Array:
     """
     Interpolate missing values in a large array of genetic data.
 
@@ -154,7 +162,9 @@ def interpolate_array(
     zarr_outdir : str
         Directory path where the Zarr array will be saved.
     chunk_size : int, optional
-        Number of rows to process in each chunk. Default is 50000.
+        Number of rows to process in each chunk. Default is 50,000.
+    batch_size : int
+        Batch size for processing local ancestry data. Default is 10,000.
 
     Returns
     -------
