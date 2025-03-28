@@ -3,8 +3,8 @@ Documentation generation assisted by AI.
 """
 from tqdm import tqdm
 from pathlib import Path
-from typing import Tuple, List
 from zarr import Array as zArray
+from typing import Tuple, List, Dict
 from dask.array import Array, from_array
 from dask.diagnostics import ProgressBar
 from dask import config, delayed, compute
@@ -18,139 +18,146 @@ except ModuleNotFoundError as e:
     def is_available():
         return False
 
-
 if is_available():
     from dask_cudf import from_cudf
-    from cudf import DataFrame, from_pandas, Series, concat
+    from cudf import DataFrame, from_pandas, Series, concat, read_parquet
 else:
-    from pandas import DataFrame, Series
     from gc import collect as empty_cache
     from dask.dataframe import from_pandas, concat
+    from pandas import DataFrame, Series, read_parquet
 
-__all__ = ["write_bed", "write_imputed"]
+__all__ = ["write_data", "write_imputed"]
 
-
-def write_bed(loci: DataFrame, rf_q: DataFrame, admix: Array,
-              outdir: str = "./", outfile: str = "local-ancestry.bed") -> None:
+def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
+              target_rows: int = 100_000, outdir: str = "./output",
+              prefix: str = "local-ancestry") -> None:
     """
-    Write local ancestry data to a BED-format file.
+    Write local ancestry data to a Parquet file per chromosome.
 
     This function combines loci information with local ancestry data and writes
-    it to a BED-format file. The BED file includes chromosome, position, and
+    it to a Parquet files. The files includes chromosome, position, and
     ancestry haplotype information for each sample.
 
     Parameters:
     -----------
     loci : DataFrame (pandas or cuDF)
-        A DataFrame containing loci information with at least the following columns:
+        A DataFrame containing loci information with at least the following
+        columns:
         - 'chrom': Chromosome name or number.
         - 'pos': Position of the loci (1-based).
         Additional columns may include 'i' (used for filtering) or others.
 
     rf_q : DataFrame (pandas or cuDF)
-        A DataFrame containing sample IDs and ancestry information. This is used to
-        generate column names for the admixture data.
+        A DataFrame containing sample IDs and ancestry information. This is used
+        to generate column names for the admixture data.
 
     admix : dask.Array
-        A Dask array containing local ancestry haplotypes for each sample and locus.
+        A Dask array containing local ancestry haplotypes for each sample and
+        locus.
 
-    outdir : str, optional (default="./")
-        The directory where the output BED file will be saved.
+    target_rows : int, optional (default=100,000)
+        Controls how many rows each chunk (partition) of `admix` Dask array
+        should have when rechunked. This is used to control memory consumption.
+        Smaller chunks should be used to reduce memory.
 
-    outfile : str, optional (default="local-ancestry.bed")
-        The name of the output BED file.
+    outdir : str, optional (default="./output")
+        The directory where the output Parquet files will be saved.
+
+    prefix : str, optional (default="local-ancestry")
+        The file prefix for local ancestry data.
 
     Returns:
     --------
     None
-        Writes a BED-format file to the specified output directory.
+        Writes a Parquet files per chromosome to the specified output directory.
 
     Notes:
     ------
     - Updates columns names of loci if not already changed to ["chrom", "pos"].
-    - The function adds an 'end' column (BED format requires a start and end
-      position).
     - The function handles both cuDF and pandas DataFrames. If cuDF is available,
       it converts `loci` to pandas before processing.
-    - The BED file is written in chunks to handle large datasets efficiently.
-      The header is written only for the first chunk.
 
     Example:
     --------
     >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir)
-    >>> write_bed(loci, rf_q, admix, outdir="./output", outfile="ancestry.bed")
-    # This will create ./output/ancestry.bed with the processed data
-
-    Example Output Format:
-    ----------------------
-    chrom   pos   end   hap   sample1_ancestry1   sample2_ancestry1 ...
-    chr1    1000  1001  chr1_1000   0   1 ...
+    >>> write_data(loci, rf_q, admix, outdir="./output", prefix="ancestry")
+    # This will create ./output/ancestry.chr{1-22}.parquet files
     """
     from numpy import int32
+    from os import makedirs
+    from pyarrow import Table, concat_tables
+    from pyarrow.parquet import write_table, read_table
     # Memory optimization configuration
-    config.set({"array.chunk-size": "158 MiB"})
-    target_rows = 100_000  # Reduced partition size for memory efficiency
-    def write_partition(partition, path, loci_chunk, first=False):
-        """GPU-aware partitioned writing with reduced memory footprint"""
-        path = Path(path)
-        if is_available():
-            df = DataFrame.from_records(partition, columns=col_names)
-            df = concat([loci_chunk, df], axis=1)
-            df.to_pandas().to_csv(path, sep="\t", mode="a",
-                                header=first and not path.exists(), index=False)
+    config.set({"array.chunk-size": "256 MiB"})
+    def write_partition(partition, path, loci_chunk, first):
+        # Convert input partition to DataFrame
+        df = DataFrame.from_records(partition, columns=col_names)
+        df = concat([loci_chunk, df], axis=1)
+        # Convert DataFrame to PyArrow Table
+        table = Table.from_pandas(df.to_pandas() if is_available() else df)
+        del df # Remove DataFrame
+        if first or not path.exists():
+            write_table(table, path)
         else:
-            df = loci_chunk.join(DataFrame(partition, columns=col_names))
-            df.to_csv(path, sep="\t", mode="a",
-                      header=first and not path.exists(), index=False)
+            existing_table = read_table(path)
+            combined_table = concat_tables([existing_table, table])
+            write_table(combined_table, path)
+        empty_cache()
         return None
     # Column name processing
     col_names = _get_names(rf_q)
     loci = _rename_loci_columns(loci)
     loci["pos"] = loci["pos"].astype(int32)
-    loci["end"] = (loci["pos"] + 1).astype(int32)
     loci["hap"] = loci['chrom'].astype(str) + '_' + loci['pos'].astype(str)
     loci = loci.drop(columns=["i"], errors="ignore")
     # Memory-conscious rechunking
     admix = admix.rechunk((target_rows, *admix.chunksize[1:]))
-    # Align partitions between loci and admix data
-    divisions = admix.numblocks[0]
-    if is_available():
-        loci_ddf = from_cudf(loci, npartitions=divisions)
-    else:
-        loci_ddf = dd_from_pandas(loci, npartitions=divisions)
-    # Stream processing pipeline
-    output_path = f"{outdir}/{outfile}"
-    print(f"Processing {divisions} partitions...")
-    tasks = [
-        delayed(write_partition)(
-            admix.blocks[i].compute(),
-            output_path,
-            loci_ddf.partitions[i].compute(),
-            first=(i == 0)) for i in range(divisions)
-    ]
-    for i, task in enumerate(tqdm(tasks, desc="Processing tasks",
-                                  total=len(tasks))):
-        compute(task)
-        empty_cache()
+    # Split by chromosome
+    chrom_data = _split_by_chrom(loci, admix)
+    # Ensure output directory exists
+    makedirs(outdir, exist_ok=True)
+    # Processing each chromosome separately
+    for chrom, (loci_chrom, admix_chrom) in chrom_data.items():
+        output_path = Path(outdir) / f"{prefix}.{chrom}.parquet"
+        divisions = admix_chrom.numblocks[0] # Partition alignment
+        if is_available():
+            loci_ddf = from_cudf(loci_chrom, npartitions=divisions)
+        else:
+            loci_ddf = dd_from_pandas(loci_chrom, npartitions=divisions)
+        print(f"Processing chromosome {chrom} with {divisions} partitions...")
+        # Parallel processing per chromosome
+        tasks = [
+            delayed(write_partition)(
+                admix.blocks[i].compute(),
+                output_path,
+                loci_ddf.partitions[i].compute(),
+                first=(i == 0)
+            ) for i in range(divisions)
+        ]
+        with ProgressBar():
+            compute(*tasks) # Execute all tasks in parallel
 
 
 def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
-                  z: zArray, outdir: str = "./",
-                  outfile: str = "local-ancestry.imputed.bed") -> None:
+                  z: zArray, target_rows: int = 100_000, outdir: str = "./",
+                  prefix: str = "ancestry-imputed") -> None:
     """
-    Process and write imputed local ancestry data to a BED-format file.
+    Process and write imputed local ancestry data to a Parquet file per
+    chromosome.
 
-    This function cleans and aligns imputed local ancestry data with variant loci
-    information, then writes the result to a BED-format file.
+    This function first cleans and aligns imputed local ancestry data with
+    variant loci information, then writes the result to Parquet files per
+    chromosome.
 
     Parameters:
     -----------
     rf_q : DataFrame (pandas or cuDF)
-        A DataFrame containing sample IDs and ancestry information. Used to
-        generate column names for the admixture data.
+        A DataFrame containing sample IDs and ancestry information. This is used
+        to generate column names for the admixture data.
 
     admix : dask.Array
-        A Dask array containing local ancestry probabilities for each sample and locus.
+        A Dask array containing local ancestry haplotypes for each sample and
+        locus.
 
     variant_loci : DataFrame (pandas or cuDF)
         A DataFrame containing variant loci information. Must include columns for
@@ -160,38 +167,83 @@ def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
         An array used in the data cleaning process to align indices between
         admix and variant_loci.
 
-    outdir : str, optional (default="./")
-        The directory where the output BED file will be saved.
+    target_rows : int, optional (default=100,000)
+        Controls how many rows each chunk (partition) of `admix` Dask array
+        should have when rechunked. This is used to control memory consumption.
+        Smaller chunks should be used to reduce memory.
 
-    outfile : str, optional (default="local-ancestry.imputed.bed")
-        The name of the output BED file.
+    outdir : str, optional (default="./output")
+        The directory where the output Parquet files will be saved.
+
+    prefix : str, optional (default="ancestry-imputed")
+        The file prefix for imputed local ancestry data.
 
     Returns:
     --------
     None
-        Writes an imputed local ancestry BED-format file to the specified location.
+        Writes an imputed local ancestry Parquet files per chromosome.
 
     Notes:
     ------
     - Calls `_clean_data_imp` to process and align the input data.
-    - Uses `write_bed` to output the cleaned data in BED format.
-    - The resulting BED file includes chromosome, position, and ancestry
+    - Uses `write_data` to output the cleaned data to Parquet files.
+    - The resulting Parquet files includes chromosome, position, and ancestry
       probabilities for each sample at each locus.
-    - Ensure that `variant_loci` contains necessary columns for BED format
-      (typically 'chrom' and 'pos' or equivalent).
+    - Ensure that `variant_loci` contains necessary columns ('chrom' and 'pos').
 
     Example:
     --------
     >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir)
-    >>> loci.rename(columns={"chromosome": "chrom","physical_position": "pos"}, inplace=True)
-    >>> variant_loci = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"], how="outer", indicator=True).loc[:, ["chrom", "pos", "i", "_merge"]]
+    >>> loci.rename(columns={"chromosome": "chrom","physical_position": "pos"},
+        inplace=True)
+    >>> variant_loci = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"],
+        how="outer", indicator=True).loc[:, ["chrom", "pos", "i", "_merge"]]
     >>> data_path = f"{basename}/local_ancestry_rfmix/_m"
     >>> z = interpolate_array(variant_loci, admix, data_output_dir)
-    >>> write_imputed(rf_q, admix, variant_loci, z, outdir="./output", outfile="imputed_ancestry.bed")
-    # This will create ./output/imputed_ancestry.bed with the processed data
+    >>> write_imputed(rf_q, admix, variant_loci, z, outdir="./output",
+        prefix="imputed-ancestry")
+    # This will create ./output/imputed-ancestry.chr{1-22}.parquet files
     """
     loci_I, admix_I = _clean_data_imp(admix, variant_loci, z)
-    write_bed(loci_I, rf_q, admix_I, outdir, outfile)
+    write_data(loci_I, rf_q, admix_I, outdir, outfile)
+
+
+def _split_by_chrom(
+        loci: DataFrame, admix: Array) -> Dict[str, Tuple[DataFrame, Array]]:
+    """
+    Separates loci and admix by unique chromosome labels from 'chrom' column.
+
+    Parameters:
+    -----------
+    loci : DataFrame (pandas or cuDF)
+        DataFrame containing loci information with at least a 'chrom' column.
+
+    admix : dask.Array
+        A Dask array containing local ancestry haplotypes for each sample and
+        locus.
+
+    Returns:
+    --------
+    dict
+        A dictionary where keys are chromosome names and values are tuples:
+        { 'chromosome_label': (filtered_loci, filtered_admix) }
+    """
+    from collections import defaultdict
+    chrom_dict = defaultdict(tuple)
+    unique_chroms = loci["chrom"].unique().to_pandas() if is_available() else loci["chrom"].unique()
+
+    # Create dictionary by chromosome
+    for chrom in unique_chroms:
+        # Extract loci for this chromosome
+        loci_chrom = loci[loci["chrom"] == chrom]
+        # Get row indices for this chromosome
+        indices = loci_chrom.index.to_pandas() if is_available() else loci_chrom.index
+        # Extract corresponding rows from admix
+        admix_chrom = admix[indices.to_numpy()]
+        # Store in dictionary
+        chrom_dict[chrom] = (loci_chrom, admix_chrom)
+
+    return chrom_dict
 
 
 def _get_names(rf_q: DataFrame) -> List[str]:
@@ -218,6 +270,7 @@ def _get_names(rf_q: DataFrame) -> List[str]:
         sample_id = list(rf_q.sample_id.unique().to_pandas())
     else:
         sample_id = list(rf_q.sample_id.unique())
+
     ancestries = list(rf_q.drop(["sample_id", "chrom"], axis=1).columns.values)
     sample_names = [f"{sid}_{anc}" for anc in ancestries for sid in sample_id]
     return sample_names
@@ -252,10 +305,13 @@ def _rename_loci_columns(loci: DataFrame) -> DataFrame:
     rename_dict = {}
     if "chromosome" in loci.columns and "chrom" not in loci.columns:
         rename_dict["chromosome"] = "chrom"
+
     if "physical_position" in loci.columns and "pos" not in loci.columns:
         rename_dict["physical_position"] = "pos"
+
     if rename_dict:
         loci.rename(columns=rename_dict, inplace=True)
+
     return loci
 
 
