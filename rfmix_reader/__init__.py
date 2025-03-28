@@ -24,7 +24,8 @@ else:
 
 def get_version():
     """Read version dynamically from pyproject.toml"""
-    pyproject_path = Path("../pyproject.toml")
+    pyproject_path = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    #print(f"Searching for pyproject.toml at: {pyproject_path}")
     if pyproject_path.exists():
         with pyproject_path.open("rb") as f:
             return load(f)["tool"]["poetry"]["version"]
