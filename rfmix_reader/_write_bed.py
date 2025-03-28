@@ -1,15 +1,18 @@
 """
 Documentation generation assisted by AI.
 """
+from tqdm import tqdm
+from pathlib import Path
 from typing import Tuple, List
 from zarr import Array as zArray
 from dask.array import Array, from_array
 from dask.diagnostics import ProgressBar
-from dask.dataframe import from_dask_array, concat
+from dask import config, delayed, compute
+from dask.dataframe import from_dask_array
 from dask.dataframe import from_pandas as dd_from_pandas
 
 try:
-    from torch.cuda import is_available
+    from torch.cuda import is_available, empty_cache
 except ModuleNotFoundError as e:
     print("Warning: PyTorch is not installed. Using CPU!")
     def is_available():
@@ -17,12 +20,127 @@ except ModuleNotFoundError as e:
 
 
 if is_available():
-    from cudf import DataFrame, from_pandas, Series
+    from dask_cudf import from_cudf
+    from cudf import DataFrame, from_pandas, Series, concat
 else:
     from pandas import DataFrame, Series
-    from dask.dataframe import from_pandas
+    from gc import collect as empty_cache
+    from dask.dataframe import from_pandas, concat
 
 __all__ = ["write_bed", "write_imputed"]
+
+
+def write_bed(loci: DataFrame, rf_q: DataFrame, admix: Array,
+              outdir: str = "./", outfile: str = "local-ancestry.bed") -> None:
+    """
+    Write local ancestry data to a BED-format file.
+
+    This function combines loci information with local ancestry data and writes
+    it to a BED-format file. The BED file includes chromosome, position, and
+    ancestry haplotype information for each sample.
+
+    Parameters:
+    -----------
+    loci : DataFrame (pandas or cuDF)
+        A DataFrame containing loci information with at least the following columns:
+        - 'chrom': Chromosome name or number.
+        - 'pos': Position of the loci (1-based).
+        Additional columns may include 'i' (used for filtering) or others.
+
+    rf_q : DataFrame (pandas or cuDF)
+        A DataFrame containing sample IDs and ancestry information. This is used to
+        generate column names for the admixture data.
+
+    admix : dask.Array
+        A Dask array containing local ancestry haplotypes for each sample and locus.
+
+    outdir : str, optional (default="./")
+        The directory where the output BED file will be saved.
+
+    outfile : str, optional (default="local-ancestry.bed")
+        The name of the output BED file.
+
+    Returns:
+    --------
+    None
+        Writes a BED-format file to the specified output directory.
+
+    Notes:
+    ------
+    - Updates columns names of loci if not already changed to ["chrom", "pos"].
+    - The function adds an 'end' column (BED format requires a start and end
+      position).
+    - The function handles both cuDF and pandas DataFrames. If cuDF is available,
+      it converts `loci` to pandas before processing.
+    - The BED file is written in chunks to handle large datasets efficiently.
+      The header is written only for the first chunk.
+
+    Example:
+    --------
+    >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir)
+    >>> write_bed(loci, rf_q, admix, outdir="./output", outfile="ancestry.bed")
+    # This will create ./output/ancestry.bed with the processed data
+
+    Example Output Format:
+    ----------------------
+    chrom   pos   end   hap   sample1_ancestry1   sample2_ancestry1 ...
+    chr1    1000  1001  chr1_1000   0   1 ...
+    """
+    from numpy import int32
+    # Memory optimization configuration
+    config.set({"array.chunk-size": "158 MiB"})
+    target_rows = 100_000  # Reduced partition size for memory efficiency
+    def write_partition(partition, path, loci_chunk, first=False):
+        """GPU-aware partitioned writing with reduced memory footprint"""
+        path = Path(path)
+        if is_available():
+            df = DataFrame.from_records(partition, columns=col_names)
+            df = concat([loci_chunk, df], axis=1)
+            df.to_pandas().to_csv(path, sep="\t", mode="a",
+                                header=first and not path.exists(), index=False)
+        else:
+            df = loci_chunk.join(DataFrame(partition, columns=col_names))
+            df.to_csv(path, sep="\t", mode="a",
+                      header=first and not path.exists(), index=False)
+        return None
+    # Column name processing
+    col_names = _get_names(rf_q)
+    loci = _rename_loci_columns(loci)
+    loci["pos"] = loci["pos"].astype(int32)
+    loci["end"] = (loci["pos"] + 1).astype(int32)
+    loci["hap"] = loci['chrom'].astype(str) + '_' + loci['pos'].astype(str)
+    loci = loci.drop(columns=["i"], errors="ignore")
+    # Memory-conscious rechunking
+    admix = admix.rechunk((target_rows, *admix.chunksize[1:]))
+    # Align partitions between loci and admix data
+    divisions = admix.numblocks[0]
+    if is_available():
+        loci_ddf = from_cudf(loci, npartitions=divisions)
+    else:
+        loci_ddf = dd_from_pandas(loci, npartitions=divisions)
+    # Stream processing pipeline
+    output_path = f"{outdir}/{outfile}"
+    print(f"Processing {divisions} partitions...")
+    tasks = [
+        delayed(write_partition)(
+            admix.blocks[i].compute(),
+            output_path,
+            loci_ddf.partitions[i].compute(),
+            first=(i == 0)) for i in range(divisions)
+    ]
+    for i, task in enumerate(tqdm(tasks, desc="Processing tasks",
+                                  total=len(tasks))):
+        compute(task)
+        torch.cuda.empty_cache()
+    # mini_batch = 5
+    # total_batches = (len(tasks) + mini_batch - 1) // mini_batch
+    # with tqdm(total=total_batches, desc="Processing tasks") as pbar:
+    #     for i in range(0, len(tasks), mini_batch):
+    #         batch = tasks[i : i + mini_batch]
+    #         compute(*batch)
+    #         empty_cache()
+    #         pbar.update(1)
+
 
 def write_bed(loci: DataFrame, rf_q: DataFrame, admix: Array, outdir: str="./",
               outfile: str = "local-ancestry.bed") -> None:
@@ -80,36 +198,47 @@ def write_bed(loci: DataFrame, rf_q: DataFrame, admix: Array, outdir: str="./",
     chrom   pos   end   hap   sample1_ancestry1   sample2_ancestry1 ...
     chr1    1000  1001  chr1_1000   0   1 ...
     """
-    def process_partition(df, ii):
-        """Writes each partition to CSV without loading all data into memory."""
-        df.to_csv(f"{outdir}/{outfile}", sep="\t", mode="a", index=False,
-                  header=(ii == 0))
-        return df  # Return df to satisfy Dask's expected return format
+    def process_partition(df, file_path, first):
+        """Writes each partition efficiently."""
+        write_header = first and (not file_path.exists())
+        if is_available():
+            df.to_pandas().to_csv(file_path, sep="\t", mode="a", index=False,
+                                  header=write_header)
+        else:
+            df.to_csv(file_path, sep="\t", mode="a", index=False,
+                      header=write_header)
+        return None
     # Convert Dask Array to Dask DataFrame
-    admix_ddf = from_dask_array(admix, columns=_get_names(rf_q))
-    # Compute optimal number of partitions (targeting ~500k rows per partition)
-    npartitions = max(10, min(50, admix.shape[0] // 500_000))
-    # Re-partition data into chunks
-    admix_ddf = admix_ddf.repartition(npartitions=npartitions)
+    col_names = _get_names(rf_q)
+    admix_ddf = from_dask_array(admix, columns=col_names)
+    # Optimal number of partitions (targeting ~500k rows per partition)
+    target_rows_per_partition = 500_000
+    npartitions = max(10, min(50, admix.shape[0] // target_rows_per_partition))
+    ##admix_ddf = admix_ddf.repartition(npartitions=npartitions)
     # Fix loci column names
     loci = _rename_loci_columns(loci)
     loci["end"] = loci["pos"] + 1
     loci["hap"] = loci['chrom'].astype(str)+'_'+loci['pos'].astype(str)
-    # Ensure loci is a Pandas DataFrame
+    # Keep loci as Dask DataFrame
     if is_available():
-        loci = loci.to_pandas()
+        loci_ddf = from_cudf(loci, npartitions=npartitions)
+        admix_ddf = admix_ddf.map_partitions(lambda df: DataFrame(df))
     else:
-        loci.drop(["i"], axis=1, inplace=True)
-    # Convert Pandas DataFrame to Dask DataFrame
-    loci_ddf = dd_from_pandas(loci, npartitions=admix_ddf.npartitions)
-    loci_ddf = loci_ddf.repartition(npartitions=admix_ddf.npartitions)
+        loci.drop(columns=["i"], errors="ignore", inplace=True)
+        loci_ddf = dd_from_pandas(loci, npartitions=npartitions)
+    ##loci_ddf = loci_ddf.repartition(npartitions=admix_ddf.npartitions)
     # Concatenate loci and admix DataFrames
     bed_ddf = concat([loci_ddf, admix_ddf], axis=1)
-    # Apply function to all partitions using map_partitions
+    bed_ddf = bed_ddf.repartition(npartitions=npartitions)
+    meta = DataFrame(columns=bed_ddf.columns)
+    if is_available():
+        meta = meta.to_pandas()
+    # Write partitions efficiently
     print(f"Processing {npartitions} partitions...")
+    file_path = Path(f"{outdir}/{outfile}")
     with ProgressBar():
-        _ = bed_ddf.to_delayed()
-        _ = [process_partition(df.compute(), ii) for ii, df in enumerate(_)]
+        bed_ddf.map_partitions(process_partition, file_path, first=True,
+                               meta=meta).compute()
 
 
 def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
@@ -228,17 +357,14 @@ def _rename_loci_columns(loci: DataFrame) -> DataFrame:
     - The function modifies the DataFrame in-place and also returns it.
     """
     rename_dict = {}
-
     if "chromosome" in loci.columns and "chrom" not in loci.columns:
         rename_dict["chromosome"] = "chrom"
-
     if "physical_position" in loci.columns and "pos" not in loci.columns:
         rename_dict["physical_position"] = "pos"
-
     if rename_dict:
         loci.rename(columns=rename_dict, inplace=True)
-
     return loci
+
 
 def _clean_data_imp(admix: Array, variant_loci: DataFrame, z: zArray
                     ) -> Tuple[DataFrame, Array]:
