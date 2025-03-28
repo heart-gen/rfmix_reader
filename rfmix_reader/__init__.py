@@ -1,7 +1,7 @@
 from ._chunk import Chunk
 from ._fb_read import read_fb
 from ._read_rfmix import read_rfmix
-from ._write_bed import write_bed, write_imputed
+from ._write_data import write_data, write_imputed
 from ._errorhandling import BinaryFileNotFoundError
 from ._imputation import interpolate_array, _expand_array
 from ._loci_bed import (
@@ -19,7 +19,7 @@ __version__ = "0.1.22"
 __all__ = [
     "Chunk",
     "read_fb",
-    "write_bed",
+    "write_data",
     "read_rfmix",
     "__version__",
     "write_imputed",
