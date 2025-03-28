@@ -1,3 +1,6 @@
+from pathlib import Path
+from sys import version_info
+
 from ._chunk import Chunk
 from ._fb_read import read_fb
 from ._read_rfmix import read_rfmix
@@ -14,7 +17,20 @@ from ._utils import (
     get_prefixes, create_binaries
 )
 
-__version__ = "0.1.22"
+if version_info >= (3, 11):
+    from tomllib import load
+else:
+    from toml import load
+
+def get_version():
+    """Read version dynamically from pyproject.toml"""
+    pyproject_path = Path("../pyproject.toml")
+    if pyproject_path.exists():
+        with pyproject_path.open("rb") as f:
+            return load(f)["tool"]["poetry"]["version"]
+    return "0.0.0" # Default fallback
+
+__version__ = get_version()
 
 __all__ = [
     "Chunk",
