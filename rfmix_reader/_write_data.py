@@ -1,8 +1,9 @@
 """
 Documentation generation assisted by AI.
 """
-from tqdm import tqdm
+import sys
 from pathlib import Path
+from threading import Lock
 from zarr import Array as zArray
 from typing import Tuple, List, Dict
 from dask.array import Array, from_array
@@ -28,9 +29,12 @@ else:
 
 __all__ = ["write_data", "write_imputed"]
 
+## Global lock for thread safety
+write_lock = Lock()
+
 def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
-              target_rows: int = 100_000, outdir: str = "./output",
-              prefix: str = "local-ancestry") -> None:
+               target_rows: int = 100_000, outdir: str = "./output",
+               prefix: str = "local-ancestry", verbose: bool = False) -> None:
     """
     Write local ancestry data to a Parquet file per chromosome.
 
@@ -66,6 +70,9 @@ def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
     prefix : str, optional (default="local-ancestry")
         The file prefix for local ancestry data.
 
+    verbose : bool, optional (default=False)
+        Print out debugging information for partition shape and row matching.
+
     Returns:
     --------
     None
@@ -83,12 +90,12 @@ def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
     >>> write_data(loci, rf_q, admix, outdir="./output", prefix="ancestry")
     # This will create ./output/ancestry.chr{1-22}.parquet files
     """
-    from numpy import int32
     from os import makedirs
     from pyarrow import Table, concat_tables
     from pyarrow.parquet import write_table, read_table
     # Memory optimization configuration
     config.set({"array.chunk-size": "256 MiB"})
+
     def write_partition(partition, path, loci_chunk, first):
         # Convert input partition to DataFrame
         df = DataFrame.from_records(partition, columns=col_names)
@@ -96,39 +103,52 @@ def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
         # Convert DataFrame to PyArrow Table
         table = Table.from_pandas(df.to_pandas() if is_available() else df)
         del df # Remove DataFrame
-        if first or not path.exists():
-            write_table(table, path)
-        else:
-            existing_table = read_table(path)
-            combined_table = concat_tables([existing_table, table])
-            write_table(combined_table, path)
+        with write_lock:
+            if first or not path.exists():
+                write_table(table, path)
+            else:
+                existing_table = read_table(path).cast(table.schema)
+                combined_table = concat_tables([existing_table, table])
+                write_table(combined_table, path)
         empty_cache()
         return None
+
     # Column name processing
     col_names = _get_names(rf_q)
     loci = _rename_loci_columns(loci)
-    loci["pos"] = loci["pos"].astype(int32)
+    loci["pos"] = loci["pos"]
     loci["hap"] = loci['chrom'].astype(str) + '_' + loci['pos'].astype(str)
     loci = loci.drop(columns=["i"], errors="ignore")
+
     # Memory-conscious rechunking
     admix = admix.rechunk((target_rows, *admix.chunksize[1:]))
+
     # Split by chromosome
     chrom_data = _split_by_chrom(loci, admix)
+
     # Ensure output directory exists
     makedirs(outdir, exist_ok=True)
+
     # Processing each chromosome separately
     for chrom, (loci_chrom, admix_chrom) in chrom_data.items():
         output_path = Path(outdir) / f"{prefix}.{chrom}.parquet"
         divisions = admix_chrom.numblocks[0] # Partition alignment
+
         if is_available():
             loci_ddf = from_cudf(loci_chrom, npartitions=divisions)
         else:
             loci_ddf = dd_from_pandas(loci_chrom, npartitions=divisions)
+
+        # Rechunk to fix partition matching
+        part_rows = loci_ddf.partitions[0].compute().shape[0]
+        admix_chrom = admix_chrom.rechunk((part_rows, *admix_chrom.chunksize[1:]))
+        _debug_partition_alignment(admix_chrom, loci_ddf, verbose=verbose)
+
         print(f"Processing chromosome {chrom} with {divisions} partitions...")
         # Parallel processing per chromosome
         tasks = [
             delayed(write_partition)(
-                admix.blocks[i].compute(),
+                admix_chrom.blocks[i].compute(),
                 output_path,
                 loci_ddf.partitions[i].compute(),
                 first=(i == 0)
@@ -140,7 +160,7 @@ def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
 
 def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
                   z: zArray, target_rows: int = 100_000, outdir: str = "./",
-                  prefix: str = "ancestry-imputed") -> None:
+                  prefix: str = "ancestry-imputed", verbose: bool = False) -> None:
     """
     Process and write imputed local ancestry data to a Parquet file per
     chromosome.
@@ -178,6 +198,9 @@ def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
     prefix : str, optional (default="ancestry-imputed")
         The file prefix for imputed local ancestry data.
 
+    verbose : bool, optional (default=False)
+        Print out debugging information for partition shape and row matching.
+
     Returns:
     --------
     None
@@ -205,7 +228,7 @@ def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
     # This will create ./output/imputed-ancestry.chr{1-22}.parquet files
     """
     loci_I, admix_I = _clean_data_imp(admix, variant_loci, z)
-    write_data(loci_I, rf_q, admix_I, outdir, outfile)
+    write_data(loci_I, rf_q, admix_I, target_rows, outdir, prefix, verbose)
 
 
 def _split_by_chrom(
@@ -313,6 +336,40 @@ def _rename_loci_columns(loci: DataFrame) -> DataFrame:
         loci.rename(columns=rename_dict, inplace=True)
 
     return loci
+
+
+def _debug_partition_alignment(admix_arr, loci_ddf, verbose=False) -> None:
+    """
+    Debugging function to check partition alignment between admix_arr and
+    loci_ddf. Exits with an error if partitions do not match.
+
+    Parameters:
+        admix_arr: A Dask array or similar object with `.blocks`.
+        loci_ddf: A Dask DataFrame with `.partitions`.
+
+    Returns:
+        None. Exits the program if partitions do not align.
+    """
+    # Print rows of admix_arr partitions
+    admix_rows = [block.shape[0] for block in admix_arr.blocks]
+    if verbose:
+        print("Admix array partition rows:", admix_rows)
+    # Print rows of loci_ddf partitions
+    loci_rows = [part.compute().shape[0] for part in loci_ddf.partitions]
+    if verbose:
+        print("Loci Dask DataFrame partition rows:", loci_rows)
+    # Check if the number of partitions match
+    if admix_arr.numblocks[0] != loci_ddf.npartitions:
+        print("Error: Number of partitions do not match.")
+        sys.exit(1)
+    # Check if the rows of all corresponding partitions match
+    for i, (admix_row, loci_row) in enumerate(zip(admix_rows, loci_rows)):
+        if admix_row != loci_row:
+            print(f"Error: Mismatch in partition {i}:",
+                  f"Admix row = {admix_row}, Loci row = {loci_row}")
+            sys.exit(1)
+    if verbose:
+        print("Number of partitions and rows match.")
 
 
 def _clean_data_imp(admix: Array, variant_loci: DataFrame, z: zArray
