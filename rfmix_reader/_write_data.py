@@ -3,8 +3,8 @@ Documentation generation assisted by AI.
 """
 import sys
 from pathlib import Path
-from threading import Lock
 from zarr import Array as zArray
+from psutil import virtual_memory
 from typing import Tuple, List, Dict
 from dask.array import Array, from_array
 from dask.diagnostics import ProgressBar
@@ -29,11 +29,8 @@ else:
 
 __all__ = ["write_data", "write_imputed"]
 
-## Global lock for thread safety
-write_lock = Lock()
-
 def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
-               target_rows: int = 100_000, outdir: str = "./output",
+               base_rows: int = 100_000, outdir: str = "./output",
                prefix: str = "local-ancestry", verbose: bool = False) -> None:
     """
     Write local ancestry data to a Parquet file per chromosome.
@@ -59,7 +56,7 @@ def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
         A Dask array containing local ancestry haplotypes for each sample and
         locus.
 
-    target_rows : int, optional (default=100,000)
+    base_rows : int, optional (default=100,000)
         Controls how many rows each chunk (partition) of `admix` Dask array
         should have when rechunked. This is used to control memory consumption.
         Smaller chunks should be used to reduce memory.
@@ -91,25 +88,22 @@ def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
     # This will create ./output/ancestry.chr{1-22}.parquet files
     """
     from os import makedirs
-    from pyarrow import Table, concat_tables
-    from pyarrow.parquet import write_table, read_table
+    from pyarrow import Table
+    from pyarrow.parquet import write_table
     # Memory optimization configuration
     config.set({"array.chunk-size": "256 MiB"})
 
-    def write_partition(partition, path, loci_chunk, first):
+    def write_partition(partition, path_template, loci_chunk, partition_idx):
         # Convert input partition to DataFrame
+        output_path = str(path_template).format(partition_idx)
         df = DataFrame.from_records(partition, columns=col_names)
         df = concat([loci_chunk, df], axis=1)
-        # Convert DataFrame to PyArrow Table
-        table = Table.from_pandas(df.to_pandas() if is_available() else df)
-        del df # Remove DataFrame
-        with write_lock:
-            if first or not path.exists():
-                write_table(table, path)
-            else:
-                existing_table = read_table(path).cast(table.schema)
-                combined_table = concat_tables([existing_table, table])
-                write_table(combined_table, path)
+        if is_available():
+            # Leverage cuDF
+            df.to_parquet(output_path, index=False)
+        else:
+            # Convert DataFrame to PyArrow Table
+            write_table(Table.from_pandas(df), output_path)
         empty_cache()
         return None
 
@@ -120,7 +114,8 @@ def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
     loci["hap"] = loci['chrom'].astype(str) + '_' + loci['pos'].astype(str)
     loci = loci.drop(columns=["i"], errors="ignore")
 
-    # Memory-conscious rechunking
+    # Dynamic chunk sizing based on system memory
+    target_rows = _get_target_rows(admix, base_rows)
     admix = admix.rechunk((target_rows, *admix.chunksize[1:]))
 
     # Split by chromosome
@@ -131,7 +126,7 @@ def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
 
     # Processing each chromosome separately
     for chrom, (loci_chrom, admix_chrom) in chrom_data.items():
-        output_path = Path(outdir) / f"{prefix}.{chrom}.parquet"
+        out_template = Path(outdir) / f"{prefix}.{chrom}-{{}}.parquet"
         divisions = admix_chrom.numblocks[0] # Partition alignment
 
         if is_available():
@@ -148,10 +143,10 @@ def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
         # Parallel processing per chromosome
         tasks = [
             delayed(write_partition)(
-                admix_chrom.blocks[i].compute(),
-                output_path,
-                loci_ddf.partitions[i].compute(),
-                first=(i == 0)
+                admix_chrom.blocks[i],
+                out_template,
+                loci_ddf.partitions[i],
+                i
             ) for i in range(divisions)
         ]
         with ProgressBar():
@@ -159,7 +154,7 @@ def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
 
 
 def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
-                  z: zArray, target_rows: int = 100_000, outdir: str = "./",
+                  z: zArray, base_rows: int = 250_000, outdir: str = "./",
                   prefix: str = "ancestry-imputed", verbose: bool = False) -> None:
     """
     Process and write imputed local ancestry data to a Parquet file per
@@ -187,7 +182,7 @@ def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
         An array used in the data cleaning process to align indices between
         admix and variant_loci.
 
-    target_rows : int, optional (default=100,000)
+    base_rows : int, optional (default=250,000)
         Controls how many rows each chunk (partition) of `admix` Dask array
         should have when rechunked. This is used to control memory consumption.
         Smaller chunks should be used to reduce memory.
@@ -228,45 +223,7 @@ def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
     # This will create ./output/imputed-ancestry.chr{1-22}.parquet files
     """
     loci_I, admix_I = _clean_data_imp(admix, variant_loci, z)
-    write_data(loci_I, rf_q, admix_I, target_rows, outdir, prefix, verbose)
-
-
-def _split_by_chrom(
-        loci: DataFrame, admix: Array) -> Dict[str, Tuple[DataFrame, Array]]:
-    """
-    Separates loci and admix by unique chromosome labels from 'chrom' column.
-
-    Parameters:
-    -----------
-    loci : DataFrame (pandas or cuDF)
-        DataFrame containing loci information with at least a 'chrom' column.
-
-    admix : dask.Array
-        A Dask array containing local ancestry haplotypes for each sample and
-        locus.
-
-    Returns:
-    --------
-    dict
-        A dictionary where keys are chromosome names and values are tuples:
-        { 'chromosome_label': (filtered_loci, filtered_admix) }
-    """
-    from collections import defaultdict
-    chrom_dict = defaultdict(tuple)
-    unique_chroms = loci["chrom"].unique().to_pandas() if is_available() else loci["chrom"].unique()
-
-    # Create dictionary by chromosome
-    for chrom in unique_chroms:
-        # Extract loci for this chromosome
-        loci_chrom = loci[loci["chrom"] == chrom]
-        # Get row indices for this chromosome
-        indices = loci_chrom.index.to_pandas() if is_available() else loci_chrom.index
-        # Extract corresponding rows from admix
-        admix_chrom = admix[indices.to_numpy()]
-        # Store in dictionary
-        chrom_dict[chrom] = (loci_chrom, admix_chrom)
-
-    return chrom_dict
+    write_data(loci_I, rf_q, admix_I, base_rows, outdir, prefix, verbose)
 
 
 def _get_names(rf_q: DataFrame) -> List[str]:
@@ -293,7 +250,6 @@ def _get_names(rf_q: DataFrame) -> List[str]:
         sample_id = list(rf_q.sample_id.unique().to_pandas())
     else:
         sample_id = list(rf_q.sample_id.unique())
-
     ancestries = list(rf_q.drop(["sample_id", "chrom"], axis=1).columns.values)
     sample_names = [f"{sid}_{anc}" for anc in ancestries for sid in sample_id]
     return sample_names
@@ -328,14 +284,53 @@ def _rename_loci_columns(loci: DataFrame) -> DataFrame:
     rename_dict = {}
     if "chromosome" in loci.columns and "chrom" not in loci.columns:
         rename_dict["chromosome"] = "chrom"
-
     if "physical_position" in loci.columns and "pos" not in loci.columns:
         rename_dict["physical_position"] = "pos"
-
     if rename_dict:
         loci.rename(columns=rename_dict, inplace=True)
-
     return loci
+
+
+def _get_target_rows(admix: Array, base_rows: int = 100_000):
+    mem = virtual_memory().available
+    row_size = admix.dtype.itemsize * admix.shape[1]
+    return min(base_rows, int(mem * 0.5 / row_size)) # Use 50% of avail memory
+
+
+def _split_by_chrom(
+        loci: DataFrame, admix: Array) -> Dict[str, Tuple[DataFrame, Array]]:
+    """
+    Separates loci and admix by unique chromosome labels from 'chrom' column.
+
+    Parameters:
+    -----------
+    loci : DataFrame (pandas or cuDF)
+        DataFrame containing loci information with at least a 'chrom' column.
+
+    admix : dask.Array
+        A Dask array containing local ancestry haplotypes for each sample and
+        locus.
+
+    Returns:
+    --------
+    dict
+        A dictionary where keys are chromosome names and values are tuples:
+        { 'chromosome_label': (filtered_loci, filtered_admix) }
+    """
+    from collections import defaultdict
+    chrom_dict = defaultdict(tuple)
+    unique_chroms = loci["chrom"].unique().to_pandas() if is_available() else loci["chrom"].unique()
+    # Create dictionary by chromosome
+    for chrom in unique_chroms:
+        # Extract loci for this chromosome
+        loci_chrom = loci[loci["chrom"] == chrom]
+        # Get row indices for this chromosome
+        indices = loci_chrom.index.to_pandas() if is_available() else loci_chrom.index
+        # Extract corresponding rows from admix
+        admix_chrom = admix[indices.to_numpy()]
+        # Store in dictionary
+        chrom_dict[chrom] = (loci_chrom, admix_chrom)
+    return dict(sorted(chrom_dict.items(), key=lambda item: item[1][0].shape[0]))
 
 
 def _debug_partition_alignment(admix_arr, loci_ddf, verbose=False) -> None:
@@ -409,6 +404,6 @@ def _clean_data_imp(admix: Array, variant_loci: DataFrame, z: zArray
     mask.loc[idx_arr] = True
     if is_available():
         variant_loci = from_pandas(variant_loci)
-    loci_I = variant_loci[mask].drop(["i", "_merge"], axis=1)\
+    loci_I = variant_loci[mask].drop(["_merge"], axis=1)\
                                .reset_index(drop=True)
     return loci_I, admix_I
