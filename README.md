@@ -68,7 +68,7 @@ via the command line:
 `create-binaries [-h] [--version] [--binary_dir BINARY_DIR] file_path`.
 
 ```bash
-create-binaries examples/two_popuations/out/
+create-binaries two_pops/out/
 ```
 This will generate the binary files in a location './binary_files" as
 `--binary_dir` is an optional parameter.
@@ -77,7 +77,7 @@ This will generate the binary files in a location './binary_files" as
 from rfmix_reader import create_binaries
 
 # Generate binary files
-file_path = "examples/two_popuations/out/"
+file_path = "two_pops/out/"
 binary_dir = "./binary_files"
 create_binaries(file_path, binary_dir=binary_dir)
 ```
@@ -87,7 +87,7 @@ You can also do this on the fly.
 ```python
 from rfmix_reader import read_rfmix
 
-file_path = "examples/two_popuations/out/"
+file_path = "two_pops/out/"
 binary_dir = "./binary_files"
 loci, rf_q, admix = read_rfmix(file_path, binary_dir=binary_dir,
                                generate_binary=True)
@@ -105,7 +105,7 @@ to process the RFMix results. With GPU this takes less than
 ```python
 from rfmix_reader import read_rfmix
 
-file_path = "examples/two_popuations/out/"
+file_path = "two_pops/out/"
 loci, rf_q, admix = read_rfmix(file_path)
 ```
 **Note:** `./binary_files` is the default for `binary_dir`,
