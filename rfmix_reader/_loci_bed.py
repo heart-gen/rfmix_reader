@@ -57,7 +57,7 @@ def generate_tagore_bed(
     Note:
         This function relies on several helper functions:
         - admix_to_bed_chromosome: Converts admixture data to BED format for a
-                                   specific chromosome.
+                                   specific individual.
         - _string_to_int: Converts specific columns in the BED DataFrame to
                           integer type (interal function).
         - _annotate_tagore: Adds annotation columns required for TAGORE
