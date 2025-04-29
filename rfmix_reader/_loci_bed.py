@@ -1,24 +1,32 @@
 from tqdm import tqdm
+from dask import config
 from typing import List
 import dask.dataframe as dd
-from numpy import full, ndarray
+from numpy import ndarray, full
 from multiprocessing import cpu_count
 from dask.array import (
     diff,
     Array,
     array,
-    from_array
+    asarray,
+    from_array,
+    concatenate,
+    expand_dims
 )
 
 try:
     import cupy as cp
     from cudf import DataFrame, concat
+    config.set({"dataframe.backend": "cudf"})
+    config.set({"array.backend": "cupy"})
     def is_available():
         return True
 except ImportError:
     print("Warning: Using CPU!")
     import numpy as cp
     from pandas import DataFrame, concat
+    config.set({"dataframe.backend": "pandas"})
+    config.set({"array.backend": "numpy"})
     def is_available():
         return False
 
@@ -123,7 +131,6 @@ def _string_to_int(bed: DataFrame, sample_name: str) -> DataFrame:
     bed[sample_name] = bed[sample_name].astype(int)
     bed["start"] = bed["start"].astype(int)
     bed["end"] = bed["end"].astype(int)
-
     # Check if CUDA is available
     if is_available():
         from cudf import from_pandas
@@ -299,10 +306,11 @@ def _generate_bed(
     del dask_df
     # Subset for chromosome
     results = []
-    chromosomes = ddf["chromosome"].unique().compute()
+    chromosomes = ddf["chromosome"].drop_duplicates().compute()
     for chrom in tqdm(sorted(chromosomes), desc="Processing Chromosomes",
                       disable=not verbose):
         chrom_group = ddf[ddf['chromosome'] == chrom]
+        chrom_group = chrom_group.repartition(npartitions=parts)
         results.append(_process_chromosome(chrom_group, sample_name))
     return dd.concat(results, axis=0)
 
@@ -312,185 +320,169 @@ def _process_chromosome(group: dd.DataFrame, sample_name: str) -> DataFrame:
     Process genetic data for a single chromosome to identify ancestry
     intervals.
 
-    This function takes a Dask DataFrame representing genetic data for
-    a single chromosome, identifies intervals where ancestry changes,
-    and creates a BED-like format DataFrame with these intervals.
+    Converts genetic positions into BED-like intervals with constant ancestry,
+    detecting change points where ancestry composition shifts.
 
     Parameters
     ----------
-    group (dd.DataFrame): A Dask DataFrame containing genetic data for
-                          a single chromosome.
-    sample_name (str): Name of ancestry data column to keep.
+    group : dd.DataFrame
+        Dask DataFrame containing genetic data for a single chromosome.
+        Must contain columns: chromosome, physical_position, and [sample_name].
+        Must be sorted by physical position.
+    sample_name : str
+        Name of the ancestry data column to preserve in output.
 
     Returns
     -------
-    DataFrame: A DataFrame (pandas or cudf) in BED-like format with columns:
-        'chromosome', 'start', 'end', and ancestry data column.
+    DataFrame
+        BED-formatted DataFrame with columns:
+        - chromosome (str/int): Chromosome identifier
+        - start (int): Interval start position
+        - end (int): Interval end position
+        - [sample_name] (float): Ancestry proportion value
 
     Raises
     ------
-    ValueError: If the input group contains data for more than one chromosome.
+    ValueError
+        If input contains data for multiple chromosomes
+        If physical positions are not sorted
 
     Notes
     -----
-    - This function assumes that the input group is sorted by physical position.
-    - It uses the `_find_intervals` function to identify change points in
-      ancestry.
-    - The output DataFrame includes one row for each interval where ancestry
-      is constant.
+    Processing Workflow:
+    1. Validates single-chromosome input
+    2. Converts positions and ancestry data to Dask arrays
+    3. Detects ancestry change points using _find_intervals
+    4. Generates BED records for constant-ancestry intervals
+    5. Returns formatted results as Dask DataFrame
 
     Example
     -------
-    Input group (simplified):
-    chromosome | physical_position | pop1 | pop2
-    1          | 100               | 1    | 0
-    1          | 200               | 1    | 0
-    1          | 300               | 0    | 1
-    1          | 400               | 0    | 1
-
-    Output Dask DataFrame:
-    chromosome | start | end | pop1 | pop2
-    1          | 100   | 200 | 1    | 0
-    1          | 300   | 400 | 0    | 1
+    >>> group = dd.from_pandas(pd.DataFrame({
+    ...     'chromosome': [1,1,1,1],
+    ...     'physical_position': [100,200,300,400],
+    ...     'pop1': [1,1,0,0]
+    ... }), npartitions=1)
+    >>> _process_chromosome(group, 'pop1').compute()
+      chromosome  start  end  pop1
+    0          1    100  200     1
+    1          1    300  400     0
     """
-    # Convert 'physical_position' column to a Dask array
-    positions = group['physical_position'].to_dask_array()
-    # Ensure the DataFrame contains data for only one chromosome
-    chromosome = group["chromosome"].unique()
-    if len(chromosome) != 1:
-        raise ValueError(f"Only one chromosome expected got: {len(chromosome)}")
-    # Convert the data matrix to a Dask array, excluding 'chromosome'
-    # and 'physical_position' columns
+    # Fetch chromosome
+    chrom_val = group["chromosome"].drop_duplicates().compute()
+    if len(chrom_val) != 1:
+        raise ValueError(f"Only one chromosome expected got: {len(chrom_val)}")
+    chrom_val = chrom_val.values[0]
+    # Convert to a Dask array
+    positions = group['physical_position'].to_dask_array(lengths=True)
     data_matrix = group[sample_name].to_dask_array(lengths=True)
-    # Find indices where genetic changes occur
-    change_indices = array(_find_intervals(data_matrix))
-    # Compute chromosome value once
-    chromosome_value = chromosome.compute()[0]
-    # Create Dask DataFrame
-    bed_records = _create_bed_records(chromosome_value, positions,
-                                      data_matrix, change_indices)
+    # Detect changes
+    change_indices = _find_intervals(data_matrix)
+    # Create BED records
+    chrom_col, numeric_data = _create_bed_records(chrom_val, positions,
+                                                  data_matrix, change_indices)
     cnames = ['chromosome', 'start', 'end'] + [sample_name]
-    return dd.from_dask_array(bed_records, columns=cnames)
-
-
-def _create_bed_records(chrom_value, pos, data_matrix, idx):
-    """
-    Create BED records for a given chromosome.
-
-    This function generates BED (Browser Extensible Data) records for a specific
-    chromosome by processing the positions and admixture data. It returns a
-    concatenated array containing chromosome, start position, end position, and a
-    dmixture data for each interval.
-
-    Parameters
-    ----------
-    chrom_value : int or str
-        The chromosome identifier (e.g., chromosome number or name).
-
-    pos : dask.array
-        A dask array containing the positions of genetic loci.
-
-    data_matrix : dask.array
-        A dask array containing admixture proportions. The shape should be
-        compatible with the number of loci and populations.
-
-    idx : dask.array
-        A dask array of indices indicating the change points in the positions
-        array.
-
-    Returns
-    -------
-    dask.array
-        A concatenated dask array with columns for chromosome, start position,
-        end position, and admixture data for each interval. The shape of the
-        array is (n_intervals, n_columns), where n_columns = 3 + n_pops
-        (chromosome, start, end, and admixture proportions).
-
-    Notes
-    -----
-    - The function assumes that the input arrays are properly aligned and that
-      the indices in `idx` are valid for the `pos` and `data_matrix` arrays.
-    - The last interval is handled separately to ensure all data is included.
-    """
-    # Indices as a sorted list
-    idx = cp.asarray(idx)
-    # Build columns
-    chrom_col = cp.full((idx.shape[0]+1,), chrom_value)
-    start_indices = cp.concatenate([cp.array([0]), idx[:-1] + 1])
-    start_col = pos[start_indices]
-    end_col = pos[idx]
-    data_cols = data_matrix[idx]
-    # Last interval
-    last_start = pos[idx[-1] + 1]
-    last_end = pos[-1]
-    last_data = data_matrix[-1]
-    # Concatenate all data
-    start_col = cp.concatenate([start_col, cp.array([last_start])])
-    end_col = cp.concatenate([end_col, cp.array([last_end])])
-    data_cols = cp.concatenate([data_cols, cp.expand_dims(last_data, axis=0)])
-    # Combine all columns
-    bed_matrix = cp.stack([chrom_col, start_col, end_col] + [data_cols], axis=1)
-    return from_array(bed_matrix)
+    df_numeric = dd.from_dask_array(numeric_data, columns=cnames[1:])
+    return df_numeric.assign(chromosome=chrom_val)[cnames]
 
 
 def _find_intervals(data_matrix: Array) -> List[int]:
     """
-    Find the indices where changes occur in a Dask array representing
-    genetic data.
+    Detect ancestry change points in genetic data matrix.
 
-    This function identifies positions where the genetic ancestry changes
-    across samples for a single chromosome. It processes the data column
-    by column and aggregates all unique change positions.
+    Identifies positions where ancestry composition changes across samples
+    using column-wise differential analysis.
 
     Parameters
     ----------
-    data_matrix (dask.array.Array): A 2D Dask array representing genetic
-        ancestry data. Each row corresponds to a position along the
-        chromosome, and each column (or group of columns for npops > 2)
-        represents a sample.
+    data_matrix : dask.array.Array
+        2D array (positions × samples) of ancestry proportions
+        dtype: numeric (float/int)
 
     Returns
     -------
-    List[int]: A sorted list of indices where changes in genetic ancestry occur.
+    List[int]
+        Sorted indices of ancestry change points (0-based)
 
     Notes
     -----
-    - For npops == 2, we drop half as they should be 1-pop. This is to
-      speed up computation.
-    - For npops > 2, each column is treated independently (conservative).
-    - The function uses Dask for efficient processing of large datasets.
+    Key Operations:
+    1. Computes first-order differences across positions
+    2. Identifies non-zero differentials (ancestry changes)
+    3. Aggregates changes across all samples
+    4. Returns sorted unique change points
 
-    Example
-    -------
-    Given a Dask matrix representing ancestry along a chromosome for 3
-    samples and 2 populations:
-        [[1, 0, 1, 0, 1, 0],
-         [1, 0, 1, 0, 0, 1],
-         [1, 0, 0, 1, 0, 1],
-         [0, 1, 0, 1, 0, 1]]
-
-    _find_intervals(data_matrix, npops=2) might return [1, 2]
-
-    Raises
-    ------
-    ValueError: If the input matrix dimensions are inconsistent with npops.
-
-    Performance Considerations
-    --------------------------
-    - This function may be computationally intensive for large matrices.
-    - It performs computations lazily until the final `compute()` call.
+    Performance Notes
+    ----------------
+    - Uses CuPy for GPU acceleration when available
+    - Operates lazily until final compute() call
+    - Memory efficient for large genomic datasets
     """
     # Vectorized diff operation across all relevant columns
+    data_matrix = data_matrix.map_blocks(cp.asarray)
     diffs = diff(data_matrix, axis=0)
     # Find non-zero elements across all columns at once
     changes = diffs.map_blocks(lambda block: cp.where(block != 0)[0], dtype=int)
     # Compute chunks of indices
     change_indices = changes.compute()
     # Flatten and sort
-    unique_changes = set()
-    for block in change_indices:
-        unique_changes.update(block.tolist())
+    unique_changes = set(change_indices.tolist())
     return sorted(unique_changes)
+
+
+def _create_bed_records(chrom_value, pos, data_matrix, idx):
+    """
+    Generate BED records from genetic intervals and ancestry data.
+
+    Parameters
+    ----------
+    chrom_value : int or str
+        Chromosome identifier for all records
+    pos : dask.array.Array
+        1D array of physical positions (int)
+    data_matrix : dask.array.Array
+        2D array of ancestry proportions (positions × samples)
+    idx : Array
+        Array of change point indices from _find_intervals
+
+    Returns
+    -------
+    Tuple[Array, Array]
+        (chromosome_col, numeric_data) where:
+        - chromosome_col: Dask array of chromosome identifiers
+        - numeric_data: Dask array with columns [start, end, sample_data]
+
+    Notes
+    -----
+    Interval Construction Rules:
+    - First interval starts at position 0
+    - Subsequent intervals start at previous change point +1
+    - Final interval ends at last physical position
+    - Ancestry values taken from interval end points
+    """
+    idx = cp.asarray(idx)
+    # Start and end index arrays
+    start_indices = cp.concatenate([cp.array([0]), idx[:-1] + 1])
+    end_indices = idx
+    # Position slices
+    start_col = pos[start_indices]; end_col = pos[end_indices]
+    data_cols = data_matrix[end_indices]
+    # Add last interval
+    last_start = pos[int(end_indices[-1] + 1)]
+    last_end = pos[int(end_indices[-1])]
+    last_data = data_matrix[-1]
+    start_col = concatenate([start_col, array([last_start])])
+    end_col = concatenate([end_col, array([last_end])])
+    data_cols = concatenate([data_cols, expand_dims(last_data, axis=0)])
+    # Stack numeric columns: start, end, data_cols
+    numeric_cols = cp.stack([cp.array(start_col.compute()),
+                             cp.array(end_col.compute())] +
+                            [cp.array(data_cols.compute())], axis=1)
+    # Create string column using NumPy (CPU, safe for strings)
+    chrom_col = from_array(full((numeric_cols.shape[0],), chrom_value)[:, None])
+    # Convert numeric to Dask, then attach string column later
+    numeric_data = from_array(numeric_cols)
+    return chrom_col, numeric_data
 
 
 def _get_pops(rf_q: DataFrame):
