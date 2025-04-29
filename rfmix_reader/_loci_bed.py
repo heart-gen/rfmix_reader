@@ -5,25 +5,22 @@ from numpy import full, ndarray
 from multiprocessing import cpu_count
 from dask.array import (
     diff,
-    where,
     Array,
     array,
-    from_array,
-    concatenate
+    from_array
 )
 
 try:
-    from torch.cuda import is_available
-except ModuleNotFoundError as e:
-    print("Warning: PyTorch is not installed. Using CPU!")
+    import cupy as cp
+    from cudf import DataFrame, concat
+    def is_available():
+        return True
+except ImportError:
+    print("Warning: Using CPU!")
+    import numpy as cp
+    from pandas import DataFrame, concat
     def is_available():
         return False
-
-
-if is_available():
-    from cudf import DataFrame, concat
-else:
-    from pandas import DataFrame, concat
 
 __all__ = [
     "generate_tagore_bed",
@@ -65,13 +62,10 @@ def generate_tagore_bed(
     """
     # Convert admixture data to BED format for the specified sample
     bed = admix_to_bed_chromosome(loci, rf_q, admix, 0, verbose)
-
     # Get the name of the sample column (assumed to be the 4th column)
     sample_name = bed.columns[3]
-
     # Convert string columns to integer type
     bed = _string_to_int(bed, sample_name)
-
     # Annotate the BED file for TAGORE visualization
     return _annotate_tagore(bed, sample_name)
 
@@ -91,32 +85,20 @@ def _annotate_tagore(df: DataFrame, sample_name: str) -> DataFrame:
     Returns:
         DataFrame: The annotated DataFrame with additional columns.
     """
-    # Import cupy if CUDA is available, otherwise import numpy
-    if is_available():
-        import cupy as cp
-    else:
-        import numpy as cp
-
     # Define a color dictionary to map sample values to colors
     color_dict = {1:"#E64B35FF", 0:"#4DBBD5FF"}
-
     # Expand the DataFrame using the _expand_dataframe function
     expanded_df = _expand_dataframe(df, sample_name)
-
     # Initialize columns for feature and size
     expanded_df["feature"] = 0
     expanded_df["size"] = 1
-
     # Map the sample_name column to colors using the color_dict
     expanded_df["color"] = expanded_df[sample_name].map(color_dict)
-
     # Generate a repeating sequence of 1 and 2
     repeating_sequence = cp.tile(cp.array([1, 2]),
                                  int(cp.ceil(len(expanded_df) / 2)))[:len(expanded_df)]
-
     # Add the repeating sequence as a new column
     expanded_df['chrCopy'] = repeating_sequence
-
     # Drop the sample_name column and rename columns for compatibility
     return expanded_df.drop([sample_name], axis=1)\
                       .rename(columns={"chromosome": "#chr", "end": "stop"})
@@ -172,28 +154,20 @@ def _expand_dataframe(df: DataFrame, sample_name: str) -> DataFrame:
     Returns:
         DataFrame: The expanded and sorted dataframe.
     """
-    if is_available():
-        import cupy as cp # Import cupy for GPU-accelerated operations
-    else:
-        import numpy as cp
     # Create a boolean mask for rows where sample_id > 1
     mask = df[sample_name] > 1
-
     # Create the first set of rows:
     # - For rows where mask is True: decrease sample_id by 1
     # - For rows where mask is False: keep original sample_id
     df1 = df.copy()
     df1.loc[mask, sample_name] -= 1
-
     # Create the second set of rows:
     # - For rows where mask is True: set sample_id to 1
     # - For rows where mask is False: set sample_id to 0
     df2 = df.copy()
     df2[sample_name] = cp.where(mask, 1, 0)
-
     # Concatenate the two dataframes vertically
     expanded_df = concat([df1, df2], ignore_index=True)
-
     # Sort the expanded DataFrame:
     # - First by 'chromosome' (ascending)
     # - Then by 'start' (ascending)
@@ -317,14 +291,12 @@ def _generate_bed(
         ddf = dd.from_pandas(df.to_pandas(), npartitions=parts)
     else:
         ddf = dd.from_pandas(df, npartitions=parts)
-
     # Add each column of the Dask array to the DataFrame
     if isinstance(dask_matrix, ndarray):
         dask_matrix = from_array(dask_matrix, chunks="auto")
     dask_df = dd.from_dask_array(dask_matrix, columns=col_names)
     ddf = dd.concat([ddf, dask_df], axis=1)
     del dask_df
-
     # Subset for chromosome
     results = []
     chromosomes = ddf["chromosome"].unique().compute()
@@ -380,14 +352,13 @@ def _process_chromosome(group: dd.DataFrame, sample_name: str) -> DataFrame:
     chromosome | start | end | pop1 | pop2
     1          | 100   | 200 | 1    | 0
     1          | 300   | 400 | 0    | 1
-    """ #L57
+    """
     # Convert 'physical_position' column to a Dask array
-    positions = group['physical_position'].to_dask_array(lengths=True)
+    positions = group['physical_position'].to_dask_array()
     # Ensure the DataFrame contains data for only one chromosome
     chromosome = group["chromosome"].unique()
     if len(chromosome) != 1:
         raise ValueError(f"Only one chromosome expected got: {len(chromosome)}")
-
     # Convert the data matrix to a Dask array, excluding 'chromosome'
     # and 'physical_position' columns
     data_matrix = group[sample_name].to_dask_array(lengths=True)
@@ -441,25 +412,25 @@ def _create_bed_records(chrom_value, pos, data_matrix, idx):
       the indices in `idx` are valid for the `pos` and `data_matrix` arrays.
     - The last interval is handled separately to ensure all data is included.
     """
-    # Create start indices
-    start_indices = concatenate([array([0]), idx[:-1] + 1])
-    # Create arrays for each column
-    chrom_col = full(idx.shape, chrom_value)
+    # Indices as a sorted list
+    idx = cp.asarray(idx)
+    # Build columns
+    chrom_col = cp.full((idx.shape[0]+1,), chrom_value)
+    start_indices = cp.concatenate([cp.array([0]), idx[:-1] + 1])
     start_col = pos[start_indices]
     end_col = pos[idx]
     data_cols = data_matrix[idx]
-    # Add the last interval
+    # Last interval
     last_start = pos[idx[-1] + 1]
     last_end = pos[-1]
     last_data = data_matrix[-1]
     # Concatenate all data
-    chrom_col = concatenate([chrom_col, array([chrom_value])])
-    start_col = concatenate([start_col, array([last_start])])
-    end_col = concatenate([end_col, array([last_end])])
-    data_cols = concatenate([data_cols, array([last_data])])
+    start_col = cp.concatenate([start_col, cp.array([last_start])])
+    end_col = cp.concatenate([end_col, cp.array([last_end])])
+    data_cols = cp.concatenate([data_cols, cp.expand_dims(last_data, axis=0)])
     # Combine all columns
-    return concatenate([chrom_col[:, None], start_col[:, None],
-                        end_col[:, None], data_cols[:, None]], axis=1)
+    bed_matrix = cp.stack([chrom_col, start_col, end_col] + [data_cols], axis=1)
+    return from_array(bed_matrix)
 
 
 def _find_intervals(data_matrix: Array) -> List[int]:
@@ -512,9 +483,14 @@ def _find_intervals(data_matrix: Array) -> List[int]:
     # Vectorized diff operation across all relevant columns
     diffs = diff(data_matrix, axis=0)
     # Find non-zero elements across all columns at once
-    changes = where(diffs != 0)
-    # Compute only once and convert to set for faster operations
-    return sorted(set(changes[0].compute()))
+    changes = diffs.map_blocks(lambda block: cp.where(block != 0)[0], dtype=int)
+    # Compute chunks of indices
+    change_indices = changes.compute()
+    # Flatten and sort
+    unique_changes = set()
+    for block in change_indices:
+        unique_changes.update(block.tolist())
+    return sorted(unique_changes)
 
 
 def _get_pops(rf_q: DataFrame):
@@ -583,8 +559,16 @@ def _get_sample_names(rf_q: DataFrame):
         return rf_q.sample_id.unique()
 
 
+def _load_admix():
+    from rfmix_reader import read_rfmix
+    basename = "/projects/b1213/resources/processed-data/local-ancestry"
+    prefix_path = f"{basename}/rfmix-version/_m/"
+    binary_dir = f"{basename}/rfmix-version/_m/binary_files/"
+    return read_rfmix(prefix_path, binary_dir=binary_dir)
+
+
 def _viz_dev():
-    loci, rf_q, admix = _dev_load_admix()
+    loci, rf_q, admix = _load_admix()
     bed = admix_to_bed_chromosome(loci, rf_q, admix, 0)
     sample_name = bed.columns[3]
     bed = string_to_int(bed, sample_name)
