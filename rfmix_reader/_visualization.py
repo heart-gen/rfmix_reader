@@ -344,7 +344,7 @@ def _load_simu_data(pop=2):
 
 def _viz_dev():
     loci, rf_q, admix = _load_simu_data(3)
-    bed = admix_to_bed_individual(loci, rf_q, admix, 0)
-    sample_name = bed.columns[3]
-    bed_df = annotate_tagore(bed, sample_name)
+    bed = admix_to_bed_individual(loci, rf_q, admix, 13)
+    sample_cols = bed.columns[3:]
+    bed_df = annotate_tagore(bed, sample_cols)
     return None

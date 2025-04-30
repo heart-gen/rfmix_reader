@@ -92,12 +92,12 @@ def admix_to_bed_individual(
     col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
     sample_name = f"{sample_ids[sample_num]}"
     # Generate BED dataframe
-    ddf = _generate_bed(loci, admix, len(pops), col_names, sample_name, verbose)
+    ddf = _generate_bed(loci, admix, pops, col_names, sample_name, verbose)
     return ddf.compute()
 
 
 def _generate_bed(
-        df: DataFrame, dask_matrix: Array, npops: int,
+        df: DataFrame, dask_matrix: Array, pops: List[str],
         col_names: List[str], sample_name: str, verbose: bool
 ) -> DataFrame:
     """
@@ -117,8 +117,8 @@ def _generate_bed(
         compatible with the number of loci and populations. This is from
         `read_rfmix`.
 
-    npops : int
-        The number of populations in the admixture data.
+    pops : List[str]
+        A list of admixtured genetic populations
 
     col_names : List[str]
         A list of column names for the admixture data. These should be formatted
@@ -181,8 +181,8 @@ def _process_chromosome(
         Must be sorted by physical position.
     sample_name : str
         Name of the ancestry data column to preserve in output.
-    npops : int
-        The number of populations in the admixture data.
+    pops : List[str]
+        A list of admixtured populations
 
     Returns
     -------
@@ -231,7 +231,7 @@ def _process_chromosome(
     sample_cols = [col for col in group.columns if col in target_samples]
     data_matrix = group[sample_cols].to_dask_array(lengths=True)
     # Detect changes
-    change_indices = _find_intervals(data_matrix, npops)
+    change_indices = _find_intervals(data_matrix, len(pops))
     # Create BED records
     chrom_col, numeric_data = _create_bed_records(chrom_val, positions,
                                                   data_matrix, change_indices,
@@ -445,9 +445,11 @@ def _load_simu_data(pop=2):
                           generate_binary=True)
 
 
-def _viz_dev():
-    loci, rf_q, admix = _load_simu_data(3)
-    bed = admix_to_bed_individual(loci, rf_q, admix, 0)
-    sample_name = bed.columns[3]
-    bed_df = annotate_tagore(bed, sample_name)
-    return None
+def _testing_simulation(pop_num, sample_num):
+    loci, rf_q, admix = _load_simu_data(pop_num)
+    return admix_to_bed_individual(loci, rf_q, admix, sample_num)
+
+
+def _testing_real(sample_num):
+    loci, rf_q, admix = _load_real_data()
+    return admix_to_bed_individual(loci, rf_q, admix, sample_num)
