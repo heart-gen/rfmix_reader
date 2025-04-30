@@ -8,6 +8,12 @@ from multiprocessing import Pool, cpu_count
 from subprocess import run, CalledProcessError
 from os.path import basename, dirname, join, exists
 
+try:
+    from cudf import DataFrame
+except ImportError:
+    print("Warning: Using CPU!")
+    from pandas import DataFrame
+
 __all__ = [
     "get_pops",
     "get_sample_names",
@@ -452,7 +458,7 @@ def get_sample_names(rf_q: DataFrame):
     input DataFrame. It uses PyArrow on GPU for efficient memory
     management and interoperability with other data processing libraries.
     """
-    if is_available() and isinstance(rf_q, DataFrame):
+    if hasattr(rf_q, "to_pandas"):
         return rf_q.sample_id.unique().to_arrow()
     else:
         return rf_q.sample_id.unique()

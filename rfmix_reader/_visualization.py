@@ -314,10 +314,11 @@ def _expand_dataframe(df, sample_cols: List[str]):
 
 
 def _load_real_data():
+    from pathlib import Path
     from rfmix_reader import read_rfmix
     basename = "/projects/b1213/resources/processed-data/local-ancestry"
-    prefix_path = f"{basename}/rfmix-version/_m/"
-    binary_dir = f"{basename}/rfmix-version/_m/binary_files/"
+    prefix_path = Path(basename) / "rfmix-version/_m/"
+    binary_dir = Path(prefix_path) / "binary_files/"
     return read_rfmix(prefix_path, binary_dir=binary_dir)
 
 
