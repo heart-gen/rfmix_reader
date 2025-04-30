@@ -4,17 +4,21 @@ from sys import version_info
 from ._chunk import Chunk
 from ._fb_read import read_fb
 from ._read_rfmix import read_rfmix
+from ._loci_bed import admix_to_bed_chromosome
 from ._write_data import write_data, write_imputed
 from ._errorhandling import BinaryFileNotFoundError
 from ._imputation import interpolate_array, _expand_array
-from ._loci_bed import (
-    generate_tagore_bed,
-    admix_to_bed_chromosome,
-)
 from ._utils import (
+    get_prefixes,
+    create_binaries,
     set_gpu_environment,
-    delete_files_or_directories,
-    get_prefixes, create_binaries
+    delete_files_or_directories
+)
+from ._visualization import (
+    save_multi_format,
+    generate_tagore_bed,
+    plot_global_ancestry,
+    plot_ancestry_by_chromosome,
 )
 
 if version_info >= (3, 11):
@@ -39,12 +43,17 @@ __all__ = [
     "write_data",
     "read_rfmix",
     "__version__",
+    "get_prefixes",
+    "_expand_array",
     "write_imputed",
+    "create_binaries",
+    "save_multi_format",
+    "interpolate_array",
     "set_gpu_environment",
     "generate_tagore_bed",
+    "plot_global_ancestry",
     "BinaryFileNotFoundError",
     "admix_to_bed_chromosome",
+    "plot_ancestry_by_chromosome",
     "delete_files_or_directories",
-    "get_prefixes", "create_binaries",
-    "interpolate_array", "_expand_array",
 ]
