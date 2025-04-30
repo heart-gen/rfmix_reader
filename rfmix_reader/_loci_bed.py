@@ -160,12 +160,12 @@ def _generate_bed(
                       disable=not verbose):
         chrom_group = ddf[ddf['chromosome'] == chrom]
         chrom_group = chrom_group.repartition(npartitions=parts)
-        results.append(_process_chromosome(chrom_group, sample_name, npops))
+        results.append(_process_chromosome(chrom_group, sample_name, pops))
     return dd.concat(results, axis=0)
 
 
 def _process_chromosome(
-        group: dd.DataFrame, sample_name: str, npops: int) -> DataFrame:
+        group: dd.DataFrame, sample_name: str, pops: List[str]) -> DataFrame:
     """
     Process genetic data for a single chromosome to identify ancestry
     intervals.
@@ -227,15 +227,16 @@ def _process_chromosome(
     chrom_val = chrom_val.values[0]
     # Convert to a Dask array
     positions = group['physical_position'].to_dask_array(lengths=True)
-    sample_cols = [col for col in group.columns if col.startswith(sample_name)]
+    target_samples = [f"{sample_name}_{pop}" for pop in pops]
+    sample_cols = [col for col in group.columns if col in target_samples]
     data_matrix = group[sample_cols].to_dask_array(lengths=True)
     # Detect changes
     change_indices = _find_intervals(data_matrix, npops)
     # Create BED records
     chrom_col, numeric_data = _create_bed_records(chrom_val, positions,
                                                   data_matrix, change_indices,
-                                                  npops)
-    cnames = ['chromosome', 'start', 'end'] + [sample_name]
+                                                  len(pops))
+    cnames = ['chromosome', 'start', 'end'] + sample_cols
     df_numeric = dd.from_dask_array(numeric_data, columns=cnames[1:])
     return df_numeric.assign(chromosome=chrom_val)[cnames]
 
@@ -332,19 +333,23 @@ def _create_bed_records(
     if npops == 2:
         ancestry_col = data_matrix[end_idx, 0]
     else:
-        ancestry_vector = argmax(data_matrix, axis=1)
-        ancestry_col = ancestry_vector[end_idx]
+        ancestry_col = data_matrix[end_idx, :]
     # Add last interval
     last_start = pos[int(end_idx[-1] + 1)]
     last_end = pos[int(end_idx[-1])]
-    last_ancestry = argmax(data_matrix, axis=1)[-1] if npops > 2 else data_matrix[-1, 0]
+    last_ancestry = data_matrix[-1, :] if npops > 2 else data_matrix[-1, 0]
     start_col = concatenate([start_col, array([last_start])])
     end_col = concatenate([end_col, array([last_end])])
-    ancestry_col = concatenate([ancestry_col, expand_dims(last_ancestry, axis=0)])
+    ancestry_col = concatenate([ancestry_col,expand_dims(last_ancestry,axis=0)])
     # Stack numeric columns: start, end, ancestry_cols
-    numeric_cols = cp.stack([cp.array(start_col.compute()),
-                             cp.array(end_col.compute())] +
-                            [cp.array(ancestry_col.compute())], axis=1)
+    if npops == 2:
+        numeric_cols = cp.stack([cp.array(start_col.compute()),
+                                 cp.array(end_col.compute())] +
+                                [cp.array(ancestry_col.compute())], axis=1)
+    else:
+        numeric_cols = cp.hstack([cp.array(start_col.compute().reshape(-1, 1)),
+                                  cp.array(end_col.compute().reshape(-1, 1))] +
+                                 [cp.array(ancestry_col.compute())])
     # Create string column using NumPy (CPU, safe for strings)
     chrom_col = from_array(full((numeric_cols.shape[0],), chrom_value)[:, None])
     # Convert numeric to Dask, then attach string column later
