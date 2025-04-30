@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from typing import Tuple, Union, List, Optional
 
+from ._utils import get_pops
 from ._loci_bed import admix_to_bed_individual
 
 try:
@@ -165,7 +166,7 @@ def save_multi_format(filename: str, formats: Tuple[str, ...] = ('png', 'pdf'),
 
 
 def generate_tagore_bed(
-        bed: DataFrame, rf_q: DataFrame, admix: Array, sample_num: int,
+        loci: DataFrame, rf_q: DataFrame, admix: Array, sample_num: int,
         verbose: bool = True
 ) -> DataFrame:
     """
@@ -197,14 +198,16 @@ def generate_tagore_bed(
         - _annotate_tagore: Adds annotation columns required for TAGORE
                             visualization (internal function).
     """
-    # Convert admixture data to BED format for the specified sample
-    bed = admix_to_bed_individual(loci, rf_q, admix, 0, verbose)
-    # Get the name of the sample column (assumed to be the 4th column)
-    sample_name = bed.columns[3]
-    # Convert string columns to integer type
-    bed = _string_to_int(bed, sample_name)
-    # Annotate the BED file for TAGORE visualization
+    pops = get_pops(rf_q)
+    bed = admix_to_bed_individual(loci, rf_q, admix,
+                                  sample_num, verbose=verbose)
+    sample_cols = bed.columns[3:]
     return _annotate_tagore(bed, sample_name)
+
+
+def write_to_tagore_format(loci, rf_q, admix, sample_num, outfile):
+    bed_df = generate_tagore_bed(loci, rf_q, admix, sample_num)
+    bed_df.to_csv(outfile, sep="\t", index=False)
 
 
 def _get_global_ancestry(rf_q: DataFrame) -> DataFrame:
@@ -224,7 +227,7 @@ def _get_global_ancestry(rf_q: DataFrame) -> DataFrame:
     return rf_q.drop(columns=['chrom']).groupby('sample_id').mean()
 
 
-def _annotate_tagore(df: DataFrame, sample_name: str, pops,
+def _annotate_tagore(df: DataFrame, sample_cols: List[str], pops: List[str],
                      colors: str = "tab10") -> DataFrame:
     """
     Annotate a DataFrame with additional columns for visualization purposes.
@@ -235,7 +238,7 @@ def _annotate_tagore(df: DataFrame, sample_name: str, pops,
 
     Parameters:
         df (DataFrame): The input DataFrame to be annotated.
-        sample_name (str): The name of the column containing sample data.
+        sample_cols List(str): The name of the column containing sample data.
 
     Returns:
         DataFrame: The annotated DataFrame with additional columns.
@@ -244,23 +247,22 @@ def _annotate_tagore(df: DataFrame, sample_name: str, pops,
     colormap = plt.get_cmap(colors) # Can updated or user defined
     color_dict = {pop: mcolors.to_hex(colormap(i % 10)) for i, pop in enumerate(pops)}
     # Expand the DataFrame using the _expand_dataframe function
-    expanded_df = _expand_dataframe(df, sample_name)
+    expanded_df = _expand_dataframe(df, sample_cols)
     # Initialize columns for feature and size
-    expanded_df["feature"] = 0
-    expanded_df["size"] = 1
-    # Map the sample_name column to colors using the color_dict
-    expanded_df["color"] = expanded_df[sample_name].map(color_dict) ## Needs fixing
+    expanded_df["feature"] = 0; expanded_df["size"] = 1
+    # Map the sample_cols column to colors using the color_dict
+    expanded_df["color"] = expanded_df["sample"].map(color_dict)
     # Generate a repeating sequence of 1 and 2
-    repeating_sequence = cp.tile(cp.array([1, 2]), ## Check this
+    repeating_sequence = cp.tile(cp.array([1, 2]),
                                  int(cp.ceil(len(expanded_df) / 2)))[:len(expanded_df)]
     # Add the repeating sequence as a new column
     expanded_df['chrCopy'] = repeating_sequence
-    # Drop the sample_name column and rename columns for compatibility
-    return expanded_df.drop([sample_name], axis=1)\
+    # Drop the sample_cols column and rename columns for compatibility
+    return expanded_df.drop(["sample"], axis=1)\
                       .rename(columns={"chromosome": "#chr", "end": "stop"})
 
 
-def _expand_dataframe(df: DataFrame, sample_name: str) -> DataFrame:
+def _expand_dataframe(df, sample_cols: List[str]):
     """
     Expands a dataframe by duplicating rows based on a specified sample name
     column.
@@ -284,40 +286,31 @@ def _expand_dataframe(df: DataFrame, sample_name: str) -> DataFrame:
     -------
         DataFrame: The expanded and sorted dataframe.
     """
-    # Get all columns matching the sample_name prefix
-    ancestry_cols = [col for col in df.columns if col.startswith(sample_name)]
-    expanded_rows = []
-    for _, row in df.iterrows():
-        # Process each ancestry column separately
-        row_copies = []
-        for col in ancestry_cols:
-            pop_value = row[col]
-            if isinstance(pop_value, int) and pop_value > 1:
-                for _ in range(pop_value):
-                    row_copy = row.copy()
-                    row_copy[col] = 1  # Reduce to single copy
-                    row_copies.append(row_copy)
-            elif isinstance(pop_value, (list, tuple)):
-                for p in pop_value:
-                    row_copy = row.copy()
-                    row_copy[col] = p
-                    row_copies.append(row_copy)
-            elif isinstance(pop_value, dict):
-                for p, count in pop_value.items():
-                    for _ in range(count):
-                        row_copy = row.copy()
-                        row_copy[col] = p
-                        row_copies.append(row_copy)
-            else:
-                row_copies.append(row.copy())
-        # Combine all copies from all ancestry columns
-        expanded_rows.extend(row_copies)
-        # Create DataFrame and sort
-    expanded_df = pd.DataFrame(expanded_rows)
-    return expanded_df.sort_values(
-        by=['chromosome', 'start'] + ancestry_cols,
-        ascending=[True, True] + [True]*len(ancestry_cols)
-    ).reset_index(drop=True)
+    expanded_dfs = []
+    # Process each sample column separately
+    for sample_col in sample_cols:
+        temp_df = df.copy()
+        # Extract ancestry code from column name
+        ancestry_code = sample_col.split('_')[-1]
+        # Create mask where this population contributes >0
+        mask = temp_df[sample_col] > 0
+        # Create first entry: contribution of 1 if any exists, else 0
+        df1 = temp_df.copy()
+        df1['sample'] = ancestry_code
+        df1['value'] = cp.where(mask, 1, 0)
+        # Create second entry: additional 1 if count was 2
+        df2 = temp_df[mask & (temp_df[sample_col] == 2)].copy()
+        df2['sample'] = ancestry_code
+        df2['value'] = 1
+        expanded_dfs.extend([df1, df2])
+    # Combine all results
+    result = concat(expanded_dfs, ignore_index=True)
+    # Filter to only rows with actual contributions (value > 0)
+    result = result[result['value'] > 0][['chromosome', 'start', 'end', 'sample']]
+    # Sort by genomic coordinates and sample name
+    return result.sort_values(by=['chromosome', 'start', 'sample'],
+                              ascending=[True, True, True])\
+                 .reset_index(drop=True)
 
 
 def _load_real_data():
@@ -344,16 +337,18 @@ def _load_simu_data(pop=2):
 
 def _testing_simulation(pop_num, sample_num):
     loci, rf_q, admix = _load_simu_data(pop_num)
-    return admix_to_bed_individual(loci, rf_q, admix, sample_num)
+    pops = get_pops(rf_q)
+    return admix_to_bed_individual(loci, rf_q, admix, sample_num), pops
 
 
 def _testing_real(sample_num):
     loci, rf_q, admix = _load_real_data()
-    return admix_to_bed_individual(loci, rf_q, admix, sample_num)
+    pops = get_pops(rf_q)
+    return admix_to_bed_individual(loci, rf_q, admix, sample_num), pops
 
 
 def _viz_dev():
-    bed = _testing_simulation(3, 13)
+    bed, pops = _testing_simulation(3, 12)
     sample_cols = bed.columns[3:]
-    bed_df = _annotate_tagore(bed, sample_cols)
+    bed_df = _annotate_tagore(bed, sample_cols, pops)
     return None
