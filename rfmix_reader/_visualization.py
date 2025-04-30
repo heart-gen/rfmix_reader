@@ -164,25 +164,8 @@ def save_multi_format(filename: str, formats: Tuple[str, ...] = ('png', 'pdf'),
         plt.savefig(f"{filename}.{fmt}", format=fmt, **kwargs)
 
 
-def _get_global_ancestry(rf_q: DataFrame) -> DataFrame:
-    """
-    Process raw ancestry data into global proportions.
-
-    Parameters:
-    -----------
-    rf_q : DataFrame
-
-    Returns:
-    --------
-    DataFrame
-        Processed data with individuals as rows and ancestry proportions as columns
-    """
-    # Remove chromosome column and group by sample
-    return rf_q.drop(columns=['chrom']).groupby('sample_id').mean()
-
-
 def generate_tagore_bed(
-        loci: DataFrame, rf_q: DataFrame, admix: Array, sample_num: int,
+        bed: DataFrame, rf_q: DataFrame, admix: Array, sample_num: int,
         verbose: bool = True
 ) -> DataFrame:
     """
@@ -222,6 +205,23 @@ def generate_tagore_bed(
     bed = _string_to_int(bed, sample_name)
     # Annotate the BED file for TAGORE visualization
     return _annotate_tagore(bed, sample_name)
+
+
+def _get_global_ancestry(rf_q: DataFrame) -> DataFrame:
+    """
+    Process raw ancestry data into global proportions.
+
+    Parameters:
+    -----------
+    rf_q : DataFrame
+
+    Returns:
+    --------
+    DataFrame
+        Processed data with individuals as rows and ancestry proportions as columns
+    """
+    # Remove chromosome column and group by sample
+    return rf_q.drop(columns=['chrom']).groupby('sample_id').mean()
 
 
 def _annotate_tagore(df: DataFrame, sample_name: str, pops,
@@ -342,9 +342,18 @@ def _load_simu_data(pop=2):
                           generate_binary=True)
 
 
+def _testing_simulation(pop_num, sample_num):
+    loci, rf_q, admix = _load_simu_data(pop_num)
+    return admix_to_bed_individual(loci, rf_q, admix, sample_num)
+
+
+def _testing_real(sample_num):
+    loci, rf_q, admix = _load_real_data()
+    return admix_to_bed_individual(loci, rf_q, admix, sample_num)
+
+
 def _viz_dev():
-    loci, rf_q, admix = _load_simu_data(3)
-    bed = admix_to_bed_individual(loci, rf_q, admix, 13)
+    bed = _testing_simulation(3, 13)
     sample_cols = bed.columns[3:]
-    bed_df = annotate_tagore(bed, sample_cols)
+    bed_df = _annotate_tagore(bed, sample_cols)
     return None
