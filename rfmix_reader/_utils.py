@@ -9,6 +9,8 @@ from subprocess import run, CalledProcessError
 from os.path import basename, dirname, join, exists
 
 __all__ = [
+    "get_pops",
+    "get_sample_names",
     "set_gpu_environment",
     "delete_files_or_directories",
     "get_prefixes", "create_binaries"
@@ -388,6 +390,72 @@ def delete_files_or_directories(path_patterns):
                     print(f"Error deleting {path}: {e}")
             else:
                 print(f"Path does not exist: {path}")
+
+
+def get_pops(rf_q: DataFrame):
+    """
+    Extract population names from an RFMix Q-matrix DataFrame.
+
+    This function removes the 'sample_id' and 'chrom' columns from
+    the input DataFrame and returns the remaining column names, which
+    represent population names.
+
+    Parameters
+    ----------
+    rf_q (pd.DataFrame): A DataFrame containing RFMix Q-matrix data.
+        Expected to have 'sample_id' and 'chrom' columns, along with
+        population columns.
+
+    Returns
+    -------
+    np.ndarray: An array of population names extracted from the column names.
+
+    Example
+    -------
+    If rf_q has columns ['sample_id', 'chrom', 'pop1', 'pop2', 'pop3'],
+    this function will return ['pop1', 'pop2', 'pop3'].
+
+    Note
+    ----
+    This function assumes that all columns other than 'sample_id' and 'chrom'
+    represent population names.
+    """
+    return rf_q.drop(["sample_id", "chrom"], axis=1).columns.values
+
+
+def get_sample_names(rf_q: DataFrame):
+    """
+    Extract unique sample IDs from an RFMix Q-matrix DataFrame and
+    convert to Arrow array.
+
+    This function retrieves unique values from the 'sample_id' column
+    of the input DataFrame and converts them to a PyArrow array.
+
+    Parameters
+    ----------
+    rf_q (pd.DataFrame): A DataFrame containing RFMix Q-matrix data.
+        Expected to have a 'sample_id' column.
+
+    Returns
+    -------
+    pa.Array: A PyArrow array containing unique sample IDs.
+
+    Example
+    -------
+    If rf_q has a 'sample_id' column with values ['sample1', 'sample2',
+    'sample1', 'sample3'], this function will return a PyArrow array
+    containing ['sample1', 'sample2', 'sample3'].
+
+    Note
+    ----
+    This function assumes that the 'sample_id' column exists in the
+    input DataFrame. It uses PyArrow on GPU for efficient memory
+    management and interoperability with other data processing libraries.
+    """
+    if is_available() and isinstance(rf_q, DataFrame):
+        return rf_q.sample_id.unique().to_arrow()
+    else:
+        return rf_q.sample_id.unique()
 
 
 def create_binaries(

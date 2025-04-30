@@ -14,6 +14,8 @@ from dask.array import (
     expand_dims
 )
 
+from ._utils import get_pops, get_sample_names
+
 try:
     import cupy as cp
     from cudf import DataFrame, concat
@@ -87,8 +89,8 @@ def admix_to_bed_individual(
     >>> admix_to_bed_individual(loci_df, rf_q_df, admix_array, "chr22")
     """
     # Column annotations
-    pops = _get_pops(rf_q)
-    sample_ids = _get_sample_names(rf_q)
+    pops = get_pops(rf_q)
+    sample_ids = get_sample_names(rf_q)
     col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
     sample_name = f"{sample_ids[sample_num]}"
     # Generate BED dataframe
@@ -355,72 +357,6 @@ def _create_bed_records(
     # Convert numeric to Dask, then attach string column later
     numeric_data = from_array(numeric_cols)
     return chrom_col, numeric_data
-
-
-def _get_pops(rf_q: DataFrame):
-    """
-    Extract population names from an RFMix Q-matrix DataFrame.
-
-    This function removes the 'sample_id' and 'chrom' columns from
-    the input DataFrame and returns the remaining column names, which
-    represent population names.
-
-    Parameters
-    ----------
-    rf_q (pd.DataFrame): A DataFrame containing RFMix Q-matrix data.
-        Expected to have 'sample_id' and 'chrom' columns, along with
-        population columns.
-
-    Returns
-    -------
-    np.ndarray: An array of population names extracted from the column names.
-
-    Example
-    -------
-    If rf_q has columns ['sample_id', 'chrom', 'pop1', 'pop2', 'pop3'],
-    this function will return ['pop1', 'pop2', 'pop3'].
-
-    Note
-    ----
-    This function assumes that all columns other than 'sample_id' and 'chrom'
-    represent population names.
-    """
-    return rf_q.drop(["sample_id", "chrom"], axis=1).columns.values
-
-
-def _get_sample_names(rf_q: DataFrame):
-    """
-    Extract unique sample IDs from an RFMix Q-matrix DataFrame and
-    convert to Arrow array.
-
-    This function retrieves unique values from the 'sample_id' column
-    of the input DataFrame and converts them to a PyArrow array.
-
-    Parameters
-    ----------
-    rf_q (pd.DataFrame): A DataFrame containing RFMix Q-matrix data.
-        Expected to have a 'sample_id' column.
-
-    Returns
-    -------
-    pa.Array: A PyArrow array containing unique sample IDs.
-
-    Example
-    -------
-    If rf_q has a 'sample_id' column with values ['sample1', 'sample2',
-    'sample1', 'sample3'], this function will return a PyArrow array
-    containing ['sample1', 'sample2', 'sample3'].
-
-    Note
-    ----
-    This function assumes that the 'sample_id' column exists in the
-    input DataFrame. It uses PyArrow on GPU for efficient memory
-    management and interoperability with other data processing libraries.
-    """
-    if is_available() and isinstance(rf_q, DataFrame):
-        return rf_q.sample_id.unique().to_arrow()
-    else:
-        return rf_q.sample_id.unique()
 
 
 def _load_real_data():
