@@ -1,9 +1,9 @@
 import seaborn as sns
 from dask import config
-from typing import Tuple
 from dask.array import Array
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from typing import Tuple, Union, List, Optional
 
 from ._loci_bed import admix_to_bed_individual
 
@@ -12,16 +12,13 @@ try:
     from cudf import DataFrame, concat
     config.set({"dataframe.backend": "cudf"})
     config.set({"array.backend": "cupy"})
-    def is_available():
-        return True
 except ImportError:
     print("Warning: Using CPU!")
     import numpy as cp
     from pandas import DataFrame, concat
     config.set({"dataframe.backend": "pandas"})
     config.set({"array.backend": "numpy"})
-    def is_available():
-        return False
+
 
 __all__ = [
     "save_multi_format",
@@ -30,22 +27,50 @@ __all__ = [
     "plot_ancestry_by_chromosome",
 ]
 
-def plot_global_ancestry(rf_q: DataFrame, title="Global Ancestry Proportions",
-                         palette='tab20', figsize=(16,6),
-                         save_path="global_ancestry", show_labels=False,
-                         sort_by=None, **kwargs) -> None:
+def plot_global_ancestry(
+        rf_q: DataFrame, title: str = "Global Ancestry Proportions",
+        palette: Union[str,List[str]] = 'tab20', figsize: Tuple[int,int] = (16,6),
+        save_path: Optional[str] = "global_ancestry",
+        show_labels: bool = False, sort_by: Optional[str] = None, **kwargs
+) -> None:
     """
+    Plot global ancestry proportions across all individuals.
+
     Parameters:
-    - rf_q: DataFrame with sample_id, chrom, and ancestry columns
-    - title: Plot title
-    - palette: Colormap name or list of colors
-    - figsize: Figure size
-    - save_path: Base filename to save in multiple formats (optional)
-    - show_labels: Whether to show x-axis sample labels (default: False)
-    - sort_by: Optional ancestry column to sort individuals by
+    -----------
+    rf_q : DataFrame
+
+    title : str, optional
+        Plot title (default: "Global Ancestry Proportions")
+
+    palette : Union[str, List[str]], optional
+        Colormap name (matplotlib colormap) or list of color codes (default: 'tab20')
+
+    figsize : Tuple[int, int], optional
+        Figure dimensions in inches (width, height) (default: (16, 6))
+
+    save_path : Optional[str], optional
+        Base filename for saving plots (without extension). If None, shows interactive plot.
+        (default: "global_ancestry")
+
+    show_labels : bool, optional
+        Display individual IDs on x-axis (default: False)
+
+    sort_by : Optional[str], optional
+        Ancestry column name to sort individuals by (default: None)
+
+    **kwargs : dict
+        Additional arguments passed to save_multi_format()
+
+    Example:
+    -------
+    >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
+    >>> plot_global_ancestry(rf_q, dpi=300, bbox_inches="tight")
     """
     from pandas import Series
     ancestry_df = _get_global_ancestry(rf_q)
+    if hasattr(ancestry_df, "to_pandas"):
+        ancestry_df = ancestry_df.to_pandas()
     if sort_by and sort_by in ancestry_df.columns:
         ancestry_df = ancestry_df.sort_values(by=sort_by, ascending=False)
     colors = plt.get_cmap(palette).colors if isinstance(palette, str) else palette
@@ -74,18 +99,37 @@ def plot_global_ancestry(rf_q: DataFrame, title="Global Ancestry Proportions",
 
 
 def plot_ancestry_by_chromosome(
-        rf_q: DataFrame, figsize: Tuple[int, int]=(14, 6), palette: str='Set2',
-        save_path: str = "chromosome_summary", **kwargs) -> None:
+        rf_q: DataFrame, figsize: Tuple[int,int] = (14,6), palette: str = 'Set2',
+        save_path: Optional[str] = "chromosome_summary", **kwargs) -> None:
     """
-    Plots variation of ancestry proportions across chromosomes per ancestry group.
+    Plot chromosome-wise ancestry distribution using boxplots.
 
     Parameters:
-        rf_q: DataFrame with columns
+    -----------
+    rf_q : DataFrame
+
+    figsize : Tuple[int, int], optional
+        Figure dimensions in inches (width, height) (default: (14, 6))
+
+    palette : str, optional
+        Seaborn color palette name (default: 'Set2')
+
+    save_path : Optional[str], optional
+        Base filename for saving plots (without extension). If None, shows
+        interactive plot. (default: "chromosome_summary")
+
+    **kwargs : dict
+        Additional arguments passed to save_multi_format()
+
+    Example:
+    --------
+    >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
+    >>> plot_ancestry_by_chromosome(rf_q, dpi=300, bbox_inches="tight")
     """
     # Melt to long-form for Seaborn
     df_long = rf_q.melt(id_vars=['sample_id', 'chrom'], var_name='Ancestry',
                         value_name='Proportion')
-    df_long = df_long.to_pandas() if is_available() else df_long
+    df_long = df_long.to_pandas() if hasattr(df_long, "to_pandas") else df_long
     plt.figure(figsize=figsize)
     sns.boxplot(data=df_long, x='chrom', y='Proportion', hue='Ancestry',
                 palette=palette)
@@ -94,19 +138,27 @@ def plot_ancestry_by_chromosome(
     plt.xlabel('Chromosome')
     plt.legend(title='Ancestry', bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
-    plt.show()
     if save_path:
         save_multi_format(save_path, **kwargs)
+    else:
+        plt.show()
 
 
-def save_multi_format(filename, formats=('png', 'pdf'), **kwargs):
+def save_multi_format(filename: str, formats: Tuple[str, ...] = ('png', 'pdf'),
+                      **kwargs) -> None:
     """
-    Save figure in multiple formats with single call
+    Save current figure to multiple file formats.
 
     Parameters:
-    filename : Base filename without extension
-    formats : Tuple of file extensions (default: ('png', 'pdf'))
-    **kwargs : Passed to plt.savefig()
+    -----------
+    filename : str
+        Base filename without extension
+
+    formats : Tuple[str, ...], optional
+        File extensions to save (default: ('png', 'pdf'))
+
+    **kwargs : dict
+        Additional arguments passed to plt.savefig()
     """
     for fmt in formats:
         plt.savefig(f"{filename}.{fmt}", format=fmt, **kwargs)
@@ -114,15 +166,19 @@ def save_multi_format(filename, formats=('png', 'pdf'), **kwargs):
 
 def _get_global_ancestry(rf_q: DataFrame) -> DataFrame:
     """
+    Process raw ancestry data into global proportions.
+
     Parameters:
-    rf_q : DataFrame with sample_id, ancestry columns, and 'chrom' column
+    -----------
+    rf_q : DataFrame
 
     Returns:
-    global_df : DataFrame (individuals x ancestries)
+    --------
+    DataFrame
+        Processed data with individuals as rows and ancestry proportions as columns
     """
     # Remove chromosome column and group by sample
-    global_df = rf_q.drop(columns=['chrom']).groupby('sample_id').mean()
-    return global_df.to_pandas() if hasattr(global_df,"to_pandas") else global_df
+    return rf_q.drop(columns=['chrom']).groupby('sample_id').mean()
 
 
 def generate_tagore_bed(
