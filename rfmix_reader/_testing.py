@@ -1,4 +1,45 @@
+from pathlib import Path
 from rfmix_reader import read_rfmix, interpolate_array
+
+from _utils import get_pops
+from _loci_bed import admix_to_bed_individual
+
+def _load_real_data():
+    basename = "/projects/b1213/resources/processed-data/local-ancestry"
+    prefix_path = Path(basename) / "rfmix-version/_m/"
+    binary_dir = Path(prefix_path) / "binary_files/"
+    return read_rfmix(prefix_path, binary_dir=binary_dir)
+
+
+def _load_simu_data(pop=2):
+    basename = "/projects/p32505/projects/rfmix_reader-benchmarking/input/simulations"
+    pop_loc = "two_populations" if pop == 2 else "three_populations"
+    prefix_path = Path(basename) / pop_loc / "_m/rfmix-out/"
+    binary_dir = prefix_path / "binary_files"
+    if binary_dir.exists():
+        return read_rfmix(prefix_path, binary_dir=binary_dir)
+    else:
+        return read_rfmix(prefix_path, binary_dir=binary_dir,
+                          generate_binary=True)
+
+
+def _testing_simulation(pop_num, sample_num):
+    loci, rf_q, admix = _load_simu_data(pop_num)
+    pops = get_pops(rf_q)
+    return admix_to_bed_individual(loci, rf_q, admix, sample_num), pops
+
+
+def _testing_real(sample_num):
+    loci, rf_q, admix = _load_real_data()
+    pops = get_pops(rf_q)
+    return admix_to_bed_individual(loci, rf_q, admix, sample_num), pops
+
+
+def _viz_dev():
+    bed, pops = _testing_simulation(3, 12)
+    sample_cols = bed.columns[3:]
+    bed_df = _annotate_tagore(bed, sample_cols, pops)
+    return None
 
 def _load_genotypes(plink_prefix_path):
     from tensorqtl import pgen
