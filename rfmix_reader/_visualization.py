@@ -73,31 +73,36 @@ def plot_global_ancestry(
     >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
     >>> plot_global_ancestry(rf_q, dpi=300, bbox_inches="tight")
     """
-    from pandas import Series
     ancestry_df = _get_global_ancestry(rf_q)
     if hasattr(ancestry_df, "to_pandas"):
         ancestry_df = ancestry_df.to_pandas()
+
     if sort_by and sort_by in ancestry_df.columns:
         ancestry_df = ancestry_df.sort_values(by=sort_by, ascending=False)
-    colors = plt.get_cmap(palette).colors if isinstance(palette, str) else palette
-    fig, ax = plt.subplots(figsize=figsize)
-    bottom = Series([0] * len(ancestry_df), index=ancestry_df.index)
-    for i, col in enumerate(ancestry_df.columns):
-        ax.bar(ancestry_df.index, ancestry_df[col], bottom=bottom,
-               color=colors[i % len(colors)], label=col)
-        bottom += ancestry_df[col]
-    ax = ancestry_df.plot(kind='bar', stacked=True, colormap=palette,
-                          width=0.85 if len(ancestry_df) < 500 else 1.0)
+
+    ancestry_df = ancestry_df.reset_index()
+    new_df = ancestry_df.melt(id_vars='sample_id', var_name='Ancestry',
+                              value_name='Proportion')
+
+    plt.figure(figsize=figsize)
+    sns.set_style("whitegrid")
+    ax = sns.barplot(
+        data=new_df, x='sample_id', y='Proportion', hue='Ancestry',
+        palette=palette, dodge=False
+    )
+
     ax.set_title(title, fontsize=14)
     ax.set_ylabel("Ancestry Proportion", fontsize=12)
     ax.set_xlabel("Individuals", fontsize=12)
+
     if not show_labels:
         ax.set_xticks([])
     else:
-        ax.set_xticks(range(len(ancestry_df)))
-        ax.set_xticklabels(ancestry_df.index, rotation=90, fontsize=6)
+        ax.set_xticklabels(ancestry_df['sample_id'], rotation=90, fontsize=6)
+
     ax.legend(bbox_to_anchor=(1.01, 1), loc='upper left', title='Ancestry')
     plt.tight_layout()
+
     if save_path:
         save_multi_format(save_path, **kwargs)
     else:
