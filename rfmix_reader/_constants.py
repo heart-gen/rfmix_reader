@@ -13,7 +13,7 @@ __all__ = [
 ]
 
 # List of (chrom, cx, cy, ht, width)
-_COORDINATE_DATA: List[Tuple[str, float, float, float, float]] = [
+_COORDINATE: List[Tuple[str, float, float, float, float]] = [
     ("1", 128.6, 1.5, 1654.5, 118.6),
     ("2", 301.4, 43.6, 1612.4, 118.6),
     ("3", 477.6, 341.4, 1314.7, 118.6),
@@ -71,7 +71,7 @@ class ChromosomeCoordinates:
         (cx, cy, ht, width).
     """
     _data: List[Tuple[str, float, float, float, float]] = field(
-        default_factory=lambda: _COORDINATE_DATA,
+        default_factory=lambda: _COORDINATE,
         init=False,  # Data is provided internally
         repr=False,
         compare=False
@@ -97,8 +97,8 @@ class ChromosomeSizes:
     hg38 : Dict[str, int]
         Chromosome sizes for the hg38 assembly.
     """
-    hg37: Dict[str, int] = field(default_factory=lambda: dict(_HG37_SIZES_DATA), init=False)
-    hg38: Dict[str, int] = field(default_factory=lambda: dict(_HG38_SIZES_DATA), init=False)
+    hg37: Dict[str, int] = field(default_factory=lambda: dict(_HG37_SIZES), init=False)
+    hg38: Dict[str, int] = field(default_factory=lambda: dict(_HG38_SIZES), init=False)
 
     _all_sizes: Dict[str, Dict[str, int]] = field(init=False, repr=False, compare=False)
 
