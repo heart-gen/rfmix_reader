@@ -93,6 +93,7 @@ def admix_to_bed_individual(
     sample_ids = get_sample_names(rf_q)
     col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
     sample_name = f"{sample_ids[sample_num]}"
+
     # Generate BED dataframe
     ddf = _generate_bed(loci, admix, pops, col_names, sample_name, verbose)
     return ddf.compute()
@@ -142,19 +143,24 @@ def _generate_bed(
     """
     # Check if the DataFrame and Dask array have the same number of rows
     assert df.shape[0] == dask_matrix.shape[0], "DataFrame and Dask array must have the same number of rows"
+
     # Convert the DataFrame to a Dask DataFrame
     parts = cpu_count()
     ncols = dask_matrix.shape[1]
+
     if is_available() and isinstance(df, DataFrame):
         ddf = dd.from_pandas(df.to_pandas(), npartitions=parts)
     else:
         ddf = dd.from_pandas(df, npartitions=parts)
+
     # Add each column of the Dask array to the DataFrame
     if isinstance(dask_matrix, ndarray):
         dask_matrix = from_array(dask_matrix, chunks="auto")
+
     dask_df = dd.from_dask_array(dask_matrix, columns=col_names)
     ddf = dd.concat([ddf, dask_df], axis=1)
     del dask_df
+
     # Subset for chromosome
     results = []
     chromosomes = ddf["chromosome"].drop_duplicates().compute()
@@ -163,6 +169,7 @@ def _generate_bed(
         chrom_group = ddf[ddf['chromosome'] == chrom]
         chrom_group = chrom_group.repartition(npartitions=parts)
         results.append(_process_chromosome(chrom_group, sample_name, pops))
+
     return dd.concat(results, axis=0)
 
 
@@ -224,16 +231,21 @@ def _process_chromosome(
     """
     # Fetch chromosome
     chrom_val = group["chromosome"].drop_duplicates().compute()
+
     if len(chrom_val) != 1:
         raise ValueError(f"Only one chromosome expected got: {len(chrom_val)}")
+
     chrom_val = chrom_val.values[0]
+
     # Convert to a Dask array
     positions = group['physical_position'].to_dask_array(lengths=True)
     target_samples = [f"{sample_name}_{pop}" for pop in pops]
     sample_cols = [col for col in group.columns if col in target_samples]
     data_matrix = group[sample_cols].to_dask_array(lengths=True)
+
     # Detect changes
     change_indices = _find_intervals(data_matrix, len(pops))
+
     # Create BED records
     chrom_col, numeric_data = _create_bed_records(chrom_val, positions,
                                                   data_matrix, change_indices,
@@ -282,14 +294,17 @@ def _find_intervals(data_matrix: Array, npops: int) -> List[int]:
         ancestry_vector = data_matrix[:, 0] # Select just one pop
     else:
         ancestry_vector = argmax(data_matrix, axis=1)
+
     ancestry_vector = ancestry_vector.map_blocks(cp.asarray, dtype=cp.int32)
     diffs = diff(ancestry_vector, axis=0)
+
     # Find non-zero elements across all columns at once
     changes = diffs.map_blocks(lambda block: cp.where(block != 0)[0], dtype=int)
+
     # Compute chunks of indices
     raw_indices = changes.compute()
-    # Flatten and sort
-    return sorted(set(raw_indices.tolist()))
+
+    return sorted(set(raw_indices.tolist())) # Flatten and sort
 
 
 def _create_bed_records(
@@ -327,34 +342,61 @@ def _create_bed_records(
     - Ancestry values taken from interval end points
     """
     idx = cp.asarray(idx)
+
+    if len(idx) == 0:
+        ancestry = data_matrix[-1, 0] if npops == 2 else data_matrix[-1, :]
+        start_col = pos[0]; end_col = pos[-1]
+        chrom_col = from_array(full((1,), chrom_value)[:, None])
+        ancestry_col = ancestry.compute().reshape(1, -1) if npops > 2 else [ancestry.compute()]
+        numeric_cols = cp.hstack([
+            cp.array([start_col.compute()]).reshape(-1, 1),
+            cp.array([end_col.compute()]).reshape(-1, 1),
+            cp.array(ancestry_col).reshape(1, -1)
+        ])
+        return chrom_col, from_array(numeric_cols)
+
+    # Check if last interval has room for extension
+    max_idx = len(pos) - 1
+    final_idx = int(idx[-1])
+    next_idx = final_idx + 1 if final_idx + 1 <= max_idx else final_idx
+
     # Start and end index arrays
     start_idx = cp.concatenate([cp.array([0]), idx[:-1] + 1])
     end_idx = idx
+
     # Position slices
     start_col = pos[start_idx]; end_col = pos[end_idx]
+
     if npops == 2:
         ancestry_col = data_matrix[end_idx, 0]
+        last_ancestry = data_matrix[max_idx, 0]
     else:
         ancestry_col = data_matrix[end_idx, :]
-    # Add last interval
+        last_ancestry = data_matrix[max_idx, :]
+
+    # Add final interval
     last_start = pos[int(end_idx[-1] + 1)]
     last_end = pos[int(end_idx[-1])]
-    last_ancestry = data_matrix[-1, :] if npops > 2 else data_matrix[-1, 0]
+
     start_col = concatenate([start_col, array([last_start])])
     end_col = concatenate([end_col, array([last_end])])
     ancestry_col = concatenate([ancestry_col,expand_dims(last_ancestry,axis=0)])
+
     # Stack numeric columns: start, end, ancestry_cols
     if npops == 2:
-        numeric_cols = cp.stack([cp.array(start_col.compute()),
-                                 cp.array(end_col.compute())] +
-                                [cp.array(ancestry_col.compute())], axis=1)
+        numeric_cols = cp.stack([
+            cp.array(start_col.compute()),
+            cp.array(end_col.compute()),
+            cp.array(ancestry_col.compute())
+        ], axis=1)
     else:
-        numeric_cols = cp.hstack([cp.array(start_col.compute().reshape(-1, 1)),
-                                  cp.array(end_col.compute().reshape(-1, 1))] +
-                                 [cp.array(ancestry_col.compute())])
-    # Create string column using NumPy (CPU, safe for strings)
+        numeric_cols = cp.hstack([
+            cp.array(start_col.compute().reshape(-1, 1)),
+            cp.array(end_col.compute().reshape(-1, 1)),
+            cp.array(ancestry_col.compute())
+        ])
+
     chrom_col = from_array(full((numeric_cols.shape[0],), chrom_value)[:, None])
-    # Convert numeric to Dask, then attach string column later
     numeric_data = from_array(numeric_cols)
     return chrom_col, numeric_data
 
