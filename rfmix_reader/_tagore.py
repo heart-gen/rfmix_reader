@@ -188,19 +188,25 @@ def plot_local_ancestry_tagore(
     """
     if build not in ["hg37", "hg38"]:
         raise ValueError(f"\033[91mBuild must be 'hg37' or 'hg38', got '{build}'\033[0m")
-    if which("rsvg-convert", mode=X_OK) is None and which("rsvg", mode=X_OK) is None:
-        raise RuntimeError("\033[91mCould not find `rsvg` or `rsvg-convert` in PATH.\033[0m")
-    is_rsvg_installed = which("rsvg") is not None
     if oformat not in ["png", "pdf"]:
         print(f"\033[93m{oformat} is not supported. Using PNG instead.\033[0m")
         oformat = "png"
+    # Draw local ancestry SVG file
     with open_binary("rfmix_reader", "base.svg.p") as f: ## From tagore
         svg_pkl_data = f.read()
     svg_header, svg_footer = loads(svg_pkl_data)
     _printif("\033[94mDrawing chromosome ideogram\033[0m", verbose)
-    if path.exists(f"{prefix}.svg") and not force:
-        raise FileExistsError(f"\033[93m'{prefix}.svg' already exists. Use `force=True` to overwrite.\033[0m")
-    _draw_local_ancestry(bed_df, prefix, build, svg_header, svg_footer, verbose)
+    if path.exists(f"{prefix}.svg") and force:
+        _draw_local_ancestry(bed_df, prefix, build, svg_header, svg_footer, verbose)
+    elif not path.exists(f"{prefix}.svg"):
+        _draw_local_ancestry(bed_df, prefix, build, svg_header, svg_footer, verbose)
+    else:
+        _printif(f"\033[93m{prefix}.svg exists. Skipping drawing. Use `force=True` to overwrite.\033[0m",
+                 verbose)
+    # Convert SVG to PNG or PDF
+    if which("rsvg-convert", mode=X_OK) is None and which("rsvg", mode=X_OK) is None:
+        raise RuntimeError("\033[91mCould not find `rsvg` or `rsvg-convert` in PATH.\033[0m")
+    is_rsvg_installed = which("rsvg") is not None
     _printif(
         f"\033[94mConverting {prefix}.svg -> {prefix}.{oformat}\033[0m", verbose
     )
