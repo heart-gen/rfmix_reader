@@ -3,9 +3,9 @@ Adapted from `main.py` script in the `tagore` package.
 Source: https://github.com/jordanlab/tagore/blob/master/src/tagore/main.py
 """
 import re
-from shutil import which
 from pickle import loads
 from os import X_OK, path
+from cairosvg import svg2png, svg2pdf
 from importlib.resources import open_binary
 from subprocess import check_output, CalledProcessError
 
@@ -179,8 +179,6 @@ def plot_local_ancestry_tagore(
     -------
     ValueError
         If the build is not 'hg37' or 'hg38'.
-    RuntimeError
-        If rsvg or rsvg-convert is not found in PATH.
     FileExistsError
         If the output SVG file already exists and force is False.
     CalledProcessError
@@ -188,37 +186,41 @@ def plot_local_ancestry_tagore(
     """
     if build not in ["hg37", "hg38"]:
         raise ValueError(f"\033[91mBuild must be 'hg37' or 'hg38', got '{build}'\033[0m")
-    if oformat not in ["png", "pdf"]:
+
+    if oformat.lower() not in ["png", "pdf"]:
         print(f"\033[93m{oformat} is not supported. Using PNG instead.\033[0m")
         oformat = "png"
+
     # Draw local ancestry SVG file
     with open_binary("rfmix_reader", "base.svg.p") as f: ## From tagore
         svg_pkl_data = f.read()
+
+    if not svg_pkl_data:
+        raise RuntimeError("\033[91mFailed to load embedded SVG template data.\033[0m")
+
     svg_header, svg_footer = loads(svg_pkl_data)
     _printif("\033[94mDrawing chromosome ideogram\033[0m", verbose)
-    if path.exists(f"{prefix}.svg") and force:
+
+    svg_path = f"{prefix}.svg"
+    if path.exists(svg_path) and force:
         _draw_local_ancestry(bed_df, prefix, build, svg_header, svg_footer, verbose)
-    elif not path.exists(f"{prefix}.svg"):
+    elif not path.exists(svg_path):
         _draw_local_ancestry(bed_df, prefix, build, svg_header, svg_footer, verbose)
     else:
-        _printif(f"\033[93m{prefix}.svg exists. Skipping drawing. Use `force=True` to overwrite.\033[0m",
+        _printif(f"\033[93m{svg_path} exists. Skipping drawing. Use `force=True` to overwrite.\033[0m",
                  verbose)
+
+    printif(f"\033[94mConverting {svg_path} -> {prefix}.{oformat}\033[0m",
+            verbose)
+
     # Convert SVG to PNG or PDF
-    if which("rsvg-convert", mode=X_OK) is None and which("rsvg", mode=X_OK) is None:
-        raise RuntimeError("\033[91mCould not find `rsvg` or `rsvg-convert` in PATH.\033[0m")
-    is_rsvg_installed = which("rsvg") is not None
-    _printif(
-        f"\033[94mConverting {prefix}.svg -> {prefix}.{oformat}\033[0m", verbose
-    )
     try:
-        if is_rsvg_installed:
-            check_output(f"rsvg {prefix}.svg {prefix}.{oformat}", shell=True)
+        if oformat.lower() == "png":
+            svg2png(url=svg_path, write_to=f'{prefix}.png')
         else:
-            check_output(f"rsvg-convert -o {prefix}.{oformat} -f {oformat} {prefix}.svg",
-                         shell=True)
-    except CalledProcessError as rsvg_e:
-        _printif("\033[91mFailed SVG to PNG conversion...\033[0m", verbose)
-        raise rsvg_e
-    finally:
-        _printif(f"\033[92mSuccessfully converted SVG to {oformat.upper()}\033[0m",
-                verbose)
+            svg2pdf(url=svg_path, write_to=f'{prefix}.pdf')
+    except Exception as convert_err:
+        printif("\033[91mFailed SVG conversion with CairoSVG.\033[0m", verbose)
+        raise RuntimeError("SVG conversion failed.") from convert_err
+    else:
+        printif(f"\033[92mSuccessfully converted SVG to {oformat.upper()}\033[0m", verbose)
