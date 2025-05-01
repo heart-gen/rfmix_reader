@@ -23,6 +23,8 @@ dask = ">=2025.1"
 tqdm = ">=4.66"
 numpy = ">=2.0"
 zarr = ">=2.0"
+seaborn = "^0.13.2"
+matplotlib = "^3.10.1"
 
 [tool.poetry.scripts]
 create-binaries = "rfmix_reader._cli:main"
@@ -34,8 +36,8 @@ pytest = "^8.2"
 sphinx = "^7.3.7"
 sphinx-rtd-theme = "^2.0.0"
 sphinx-autodoc-typehints = "^2.1.0"
-torch = {version = "^2.3+cpu", source = "pytorch_cpu"}
-torchvision = {version = "^0.18.1+cpu", source = "pytorch_cpu"}
+torch = {version = "^2.6+cpu", source = "pytorch_cpu"}
+torchvision = {version = "^0.21+cpu", source = "pytorch_cpu"}
 
 [[tool.poetry.source]]
 name = "pytorch_cpu"
