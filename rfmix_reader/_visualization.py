@@ -74,6 +74,7 @@ def plot_global_ancestry(
     >>> plot_global_ancestry(rf_q, dpi=300, bbox_inches="tight")
     """
     from numpy import linspace
+    from pandas import Series
     ancestry_df = _get_global_ancestry(rf_q)
     if hasattr(ancestry_df, "to_pandas"):
         ancestry_df = ancestry_df.to_pandas()
@@ -93,7 +94,7 @@ def plot_global_ancestry(
         colors = palette # Use provided list
 
     fig, ax = plt.subplots(figsize=figsize)
-    bottom = pd.Series([0] * len(ancestry_df), index=ancestry_df.index)
+    bottom = Series([0] * len(ancestry_df), index=ancestry_df.index)
 
     for i, ancestry in enumerate(ancestry_df.columns):
         ax.bar(ancestry_df.index, ancestry_df[ancestry],
