@@ -229,7 +229,7 @@ def generate_tagore_bed(
     bed = admix_to_bed_individual(loci, rf_q, admix,
                                   sample_num, verbose=verbose)
     sample_cols = bed.columns[3:]
-    return _annotate_tagore(bed, sample_name, pops, palette)
+    return _annotate_tagore(bed, sample_cols, pops, palette)
 
 
 def save_multi_format(filename: str, formats: Tuple[str, ...] = ('png', 'pdf'),
