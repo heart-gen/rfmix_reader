@@ -35,7 +35,7 @@ __all__ = [
 
 def plot_global_ancestry(
         rf_q: DataFrame, title: str = "Global Ancestry Proportions",
-        palette: Union[str,List[str]] = 'tab20', figsize: Tuple[int,int] = (16,6),
+        palette: Union[str,List[str]] = 'tab10', figsize: Tuple[int,int] = (16,6),
         save_path: Optional[str] = "global_ancestry",
         show_labels: bool = False, sort_by: Optional[str] = None, **kwargs
 ) -> None:
@@ -50,7 +50,7 @@ def plot_global_ancestry(
         Plot title (default: "Global Ancestry Proportions")
 
     palette : Union[str, List[str]], optional
-        Colormap name (matplotlib colormap) or list of color codes (default: 'tab20')
+        Colormap name (matplotlib colormap) or list of color codes (default: 'tab10')
 
     figsize : Tuple[int, int], optional
         Figure dimensions in inches (width, height) (default: (16, 6))
@@ -105,7 +105,7 @@ def plot_global_ancestry(
 
 
 def plot_ancestry_by_chromosome(
-        rf_q: DataFrame, figsize: Tuple[int,int] = (14,6), palette: str = 'Set2',
+        rf_q: DataFrame, figsize: Tuple[int,int] = (14,6), palette: str = 'Set1',
         save_path: Optional[str] = "chromosome_summary", **kwargs) -> None:
     """
     Plot chromosome-wise ancestry distribution using boxplots.
@@ -118,7 +118,7 @@ def plot_ancestry_by_chromosome(
         Figure dimensions in inches (width, height) (default: (14, 6))
 
     palette : str, optional
-        Seaborn color palette name (default: 'Set2')
+        Seaborn color palette name (default: 'Set1')
 
     save_path : Optional[str], optional
         Base filename for saving plots (without extension). If None, shows
