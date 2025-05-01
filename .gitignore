@@ -162,3 +162,4 @@ cython_debug/
 # Project specific
 *.msp.tsv
 *.sis.tsv
+rfmix_reader/_version.py
