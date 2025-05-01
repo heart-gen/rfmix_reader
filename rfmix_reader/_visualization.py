@@ -73,8 +73,9 @@ def plot_global_ancestry(
     >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
     >>> plot_global_ancestry(rf_q, dpi=300, bbox_inches="tight")
     """
-    from numpy import linspace
     from pandas import Series
+    from numpy import linspace, arange
+
     ancestry_df = _get_global_ancestry(rf_q)
     if hasattr(ancestry_df, "to_pandas"):
         ancestry_df = ancestry_df.to_pandas()
@@ -82,8 +83,12 @@ def plot_global_ancestry(
     if sort_by and sort_by in ancestry_df.columns:
         ancestry_df = ancestry_df.sort_values(by=sort_by, ascending=False)
 
-    plt.figure(figsize=figsize)
+    plt.close('all')  # Clear previous figures
     sns.set_style("whitegrid")
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Dynamic width adjustment
+    bar_width = 0.8 if len(ancestry_df) < 500 else 1.0
 
     # Universe color extractor method
     npop = len(ancestry_df.columns)
@@ -93,29 +98,42 @@ def plot_global_ancestry(
     else:
         colors = palette # Use provided list
 
-    fig, ax = plt.subplots(figsize=figsize)
+    # Stacked bars with optimized drawing
     bottom = Series([0] * len(ancestry_df), index=ancestry_df.index)
+    x = arange(len(ancestry_df))
 
     for i, ancestry in enumerate(ancestry_df.columns):
-        ax.bar(ancestry_df.index, ancestry_df[ancestry],
-               bottom=bottom, color=colors[i % len(colors)], label=ancestry)
+        ax.bar(x, ancestry_df[ancestry], bottom=bottom,
+               color=colors[i % len(colors)], label=ancestry,
+               width=bar_width, edgecolor="none")
         bottom += ancestry_df[ancestry]
 
+    # Axis formatting
     ax.set_title(title, fontsize=14)
     ax.set_ylabel("Ancestry Proportion", fontsize=12)
     ax.set_xlabel("Individuals", fontsize=12)
 
+    # X-axis label handling
     if not show_labels:
         ax.set_xticks([])
     else:
-        ax.set_xticks(range(len(ancestry_df)))
-        ax.set_xticklabels(ancestry_df.index, rotation=90, fontsize=6)
+        ax.set_xticks(x[::max(1, len(ancestry_df)//100)]) # Show every Nth label
+        ax.set_xticklabels(
+            ancestry_df.index[::max(1, len(ancestry_df)//100)],
+            rotation=90, fontsize=6
+        )
 
-    ax.legend(bbox_to_anchor=(1.01, 1), loc='upper left', title='Ancestry')
+    # Legend placement
+    ax.legend(bbox_to_anchor=(1.01, 1), loc='upper left',
+              title='Ancestry', frameon=False)
+
+    # Layout adjustment
     plt.tight_layout()
 
+    # Save/show handling
     if save_path:
         save_multi_format(save_path, **kwargs)
+        plt.close("all")
     else:
         plt.show()
 
