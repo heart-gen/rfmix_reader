@@ -2,7 +2,7 @@ from ._chunk import Chunk
 from ._fb_read import read_fb
 from ._write_data import write_data
 from ._read_rfmix import read_rfmix
-from ._loci_bed import admix_to_bed_chromosome
+from ._loci_bed import admix_to_bed_individual
 from ._tagore import plot_local_ancestry_tagore
 from ._constants import CHROM_SIZES, COORDINATES
 from ._errorhandling import BinaryFileNotFoundError
@@ -46,7 +46,7 @@ __all__ = [
     "generate_tagore_bed",
     "plot_global_ancestry",
     "BinaryFileNotFoundError",
-    "admix_to_bed_chromosome",
+    "admix_to_bed_individual",
     "plot_local_ancestry_tagore",
     "plot_ancestry_by_chromosome",
     "delete_files_or_directories",
