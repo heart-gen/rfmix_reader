@@ -1,8 +1,21 @@
 from pathlib import Path
-from rfmix_reader import read_rfmix, interpolate_array
+from rfmix_reader import (
+    read_rfmix,
+    interpolate_array,
+    generate_tagore_bed
+)
 
-from _utils import get_pops
-from _loci_bed import admix_to_bed_individual
+def _load_genotypes(plink_prefix_path):
+    from tensorqtl import pgen
+    pgr = pgen.PgenReader(plink_prefix_path)
+    variant_df = pgr.variant_df
+    variant_df.loc[:, "chrom"] = "chr" + variant_df.chrom
+    return pgr.load_genotypes(), variant_df
+
+
+def _load_admix(prefix_path, binary_dir):
+    return read_rfmix(prefix_path, binary_dir=binary_dir)
+
 
 def _load_real_data():
     basename = "/projects/b1213/resources/processed-data/local-ancestry"
@@ -23,34 +36,14 @@ def _load_simu_data(pop=2):
                           generate_binary=True)
 
 
-def _testing_simulation(pop_num, sample_num):
+def _testing_simu_viz(pop_num, sample_num):
     loci, rf_q, admix = _load_simu_data(pop_num)
-    pops = get_pops(rf_q)
-    return admix_to_bed_individual(loci, rf_q, admix, sample_num), pops
+    return generate_tagore_bed(loci, rf_q, admix, sample_num)
 
 
-def _testing_real(sample_num):
+def _testing_real_viz(sample_num):
     loci, rf_q, admix = _load_real_data()
-    pops = get_pops(rf_q)
-    return admix_to_bed_individual(loci, rf_q, admix, sample_num), pops
-
-
-def _viz_dev():
-    bed, pops = _testing_simulation(3, 12)
-    sample_cols = bed.columns[3:]
-    bed_df = _annotate_tagore(bed, sample_cols, pops)
-    return None
-
-def _load_genotypes(plink_prefix_path):
-    from tensorqtl import pgen
-    pgr = pgen.PgenReader(plink_prefix_path)
-    variant_df = pgr.variant_df
-    variant_df.loc[:, "chrom"] = "chr" + variant_df.chrom
-    return pgr.load_genotypes(), variant_df
-
-
-def _load_admix(prefix_path, binary_dir):
-    return read_rfmix(prefix_path, binary_dir=binary_dir)
+    return generate_tagore_bed(loci, rf_q, admix, sample_num)
 
 
 def __testing__():
