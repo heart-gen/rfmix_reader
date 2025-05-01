@@ -389,7 +389,11 @@ def _create_bed_records(
         last_ancestry = data_matrix[max_idx, :]
 
     # Add final interval
-    last_start = pos[int(end_idx[-1] + 1)]
+    last_end_index = int(end_idx[-1])
+    if last_end_index + 1 < len(pos):
+        last_start = pos[last_end_index + 1]
+    else:
+        last_start = pos[last_end_index]
     last_end = pos[int(end_idx[-1])]
 
     start_col = concatenate([start_col, array([last_start])])
