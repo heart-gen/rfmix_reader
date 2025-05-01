@@ -9,17 +9,22 @@ from ._utils import get_pops
 from ._loci_bed import admix_to_bed_individual
 
 try:
+    from torch.cuda import is_available
+except ModuleNotFoundError as e:
+    print("Warning: PyTorch is not installed. Using CPU!")
+    def is_available():
+        return False
+
+if is_available():
     import cupy as cp
     from cudf import DataFrame, concat
     config.set({"dataframe.backend": "cudf"})
     config.set({"array.backend": "cupy"})
-except ImportError:
-    print("Warning: Using CPU!")
+else:
     import numpy as cp
     from pandas import DataFrame, concat
     config.set({"dataframe.backend": "pandas"})
     config.set({"array.backend": "numpy"})
-
 
 __all__ = [
     "save_multi_format",

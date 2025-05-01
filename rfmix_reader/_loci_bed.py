@@ -17,20 +17,22 @@ from dask.array import (
 from ._utils import get_pops, get_sample_names
 
 try:
-    import cupy as cp
-    from cudf import DataFrame, concat
-    config.set({"dataframe.backend": "cudf"})
-    config.set({"array.backend": "cupy"})
-    def is_available():
-        return True
-except ImportError:
-    print("Warning: Using CPU!")
-    import numpy as cp
-    from pandas import DataFrame, concat
-    config.set({"dataframe.backend": "pandas"})
-    config.set({"array.backend": "numpy"})
+    from torch.cuda import is_available
+except ModuleNotFoundError as e:
+    print("Warning: PyTorch is not installed. Using CPU!")
     def is_available():
         return False
+
+if is_available():
+    import cupy as cp
+    from cudf import DataFrame
+    config.set({"dataframe.backend": "cudf"})
+    config.set({"array.backend": "cupy"})
+else:
+    import numpy as cp
+    from pandas import DataFrame
+    config.set({"dataframe.backend": "pandas"})
+    config.set({"array.backend": "numpy"})
 
 __all__ = [
     "admix_to_bed_individual"
