@@ -73,6 +73,7 @@ def plot_global_ancestry(
     >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
     >>> plot_global_ancestry(rf_q, dpi=300, bbox_inches="tight")
     """
+    from numpy import linspace
     ancestry_df = _get_global_ancestry(rf_q)
     if hasattr(ancestry_df, "to_pandas"):
         ancestry_df = ancestry_df.to_pandas()
@@ -80,16 +81,24 @@ def plot_global_ancestry(
     if sort_by and sort_by in ancestry_df.columns:
         ancestry_df = ancestry_df.sort_values(by=sort_by, ascending=False)
 
-    ancestry_df = ancestry_df.reset_index()
-    new_df = ancestry_df.melt(id_vars='sample_id', var_name='Ancestry',
-                              value_name='Proportion')
-
     plt.figure(figsize=figsize)
     sns.set_style("whitegrid")
-    ax = sns.barplot(
-        data=new_df, x='sample_id', y='Proportion', hue='Ancestry',
-        palette=palette, dodge=False
-    )
+
+    # Universe color extractor method
+    npop = len(ancestry_df.columns)
+    if isinstance(palette, str):
+        cmap = plt.get_cmap(palette)
+        colors = cmap(linspace(0, 1, npop))
+    else:
+        colors = palette # Use provided list
+
+    fig, ax = plt.subplots(figsize=figsize)
+    bottom = pd.Series([0] * len(ancestry_df), index=ancestry_df.index)
+
+    for i, ancestry in enumerate(ancestry_df.columns):
+        ax.bar(ancestry_df.index, ancestry_df[ancestry],
+               bottom=bottom, color=colors[i % len(colors)], label=ancestry)
+        bottom += ancestry_df[ancestry]
 
     ax.set_title(title, fontsize=14)
     ax.set_ylabel("Ancestry Proportion", fontsize=12)
@@ -98,7 +107,8 @@ def plot_global_ancestry(
     if not show_labels:
         ax.set_xticks([])
     else:
-        ax.set_xticklabels(ancestry_df['sample_id'], rotation=90, fontsize=6)
+        ax.set_xticks(range(len(ancestry_df)))
+        ax.set_xticklabels(ancestry_df.index, rotation=90, fontsize=6)
 
     ax.legend(bbox_to_anchor=(1.01, 1), loc='upper left', title='Ancestry')
     plt.tight_layout()
