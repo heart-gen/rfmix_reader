@@ -74,7 +74,7 @@ def plot_global_ancestry(
     >>> plot_global_ancestry(rf_q, dpi=300, bbox_inches="tight")
     """
     from pandas import Series
-    from numpy import linspace, arange
+    from numpy import arange
 
     ancestry_df = _get_global_ancestry(rf_q)
     if hasattr(ancestry_df, "to_pandas"):
@@ -94,7 +94,7 @@ def plot_global_ancestry(
     npop = len(ancestry_df.columns)
     if isinstance(palette, str):
         cmap = plt.get_cmap(palette)
-        colors = cmap(linspace(0, 1, npop))
+        colors = cmap.colors[:npop]
     else:
         colors = palette # Use provided list
 
