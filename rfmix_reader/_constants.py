@@ -5,12 +5,7 @@ Source: https://github.com/jordanlab/tagore/blob/master/src/tagore/main.py
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional
 
-__all__ = [
-    "CHROM_SIZES",
-    "COORDINATES",
-    "ChromosomeSizes",
-    "ChromosomeCoordinates"
-]
+__all__ = ["CHROM_SIZES", "COORDINATES"]
 
 # List of (chrom, cx, cy, ht, width)
 _COORDINATE: List[Tuple[str, float, float, float, float]] = [

@@ -300,11 +300,23 @@ def _find_intervals(data_matrix: Array, npops: int) -> List[int]:
 
     # Find non-zero elements across all columns at once
     changes = diffs.map_blocks(lambda block: cp.where(block != 0)[0], dtype=int)
-
-    # Compute chunks of indices
     raw_indices = changes.compute()
 
-    return sorted(set(raw_indices.tolist())) # Flatten and sort
+    # Adjust for diff() offset
+    adjusted = [i + 1 for i in raw_indices.tolist()]
+
+    # Always include first and last row
+    full_length = data_matrix.shape[0]
+    if isinstance(full_length, tuple):
+        full_length = full_length[0]
+
+    final_index = int(full_length) - 1
+
+    # Ensure inclusion of 0 and final index
+    adjusted = set(adjusted)
+    adjusted.add(0)
+    adjusted.add(final_index)
+    return sorted(adjusted)
 
 
 def _create_bed_records(

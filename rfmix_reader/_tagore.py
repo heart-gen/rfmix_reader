@@ -54,7 +54,7 @@ def _draw_local_ancestry(bed_df, prefix, build, svg_header, svg_footer, verbose=
     if not all(col in bed_df.columns for col in required_cols):
         raise ValueError(f"Input DataFrame must contain columns: {required_cols}")
     # Process each row in the DataFrame
-    bed_df = bed_df.pandas() if hasattr(bed_df, "to_pandas") else bed_df
+    bed_df = bed_df.to_pandas() if hasattr(bed_df, "to_pandas") else bed_df
     for line_num, row in bed_df.iterrows():
         chrm = str(row['#chr']).replace("chr", "")
         start = int(row['start'])

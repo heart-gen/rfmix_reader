@@ -1,16 +1,17 @@
-from pathlib import Path
-from sys import version_info
-
 from ._chunk import Chunk
 from ._fb_read import read_fb
+from ._write_data import write_data
 from ._read_rfmix import read_rfmix
 from ._loci_bed import admix_to_bed_chromosome
-from ._write_data import write_data, write_imputed
+from ._tagore import plot_local_ancestry_tagore
+from ._constants import CHROM_SIZES, COORDINATES
 from ._errorhandling import BinaryFileNotFoundError
 from ._imputation import interpolate_array, _expand_array
 from ._utils import (
+    get_pops,
     get_prefixes,
     create_binaries,
+    get_sample_names,
     set_gpu_environment,
     delete_files_or_directories
 )
@@ -21,32 +22,24 @@ from ._visualization import (
     plot_ancestry_by_chromosome,
 )
 
-if version_info >= (3, 11):
-    from tomllib import load
-else:
-    from toml import load
-
-def get_version():
-    """Read version dynamically from pyproject.toml"""
-    pyproject_path = Path(__file__).resolve().parent.parent / "pyproject.toml"
-    #print(f"Searching for pyproject.toml at: {pyproject_path}")
-    if pyproject_path.exists():
-        with pyproject_path.open("rb") as f:
-            return load(f)["tool"]["poetry"]["version"]
-    return "0.0.0" # Default fallback
-
-__version__ = get_version()
+try:
+    from ._version import __version__
+except ImportError:
+    __version__ = "0.0.0"
 
 __all__ = [
     "Chunk",
     "read_fb",
+    "get_pops",
     "write_data",
     "read_rfmix",
+    "CHROM_SIZES",
+    "COORDINATES",
     "__version__",
     "get_prefixes",
     "_expand_array",
-    "write_imputed",
     "create_binaries",
+    "get_sample_names",
     "save_multi_format",
     "interpolate_array",
     "set_gpu_environment",
@@ -54,6 +47,7 @@ __all__ = [
     "plot_global_ancestry",
     "BinaryFileNotFoundError",
     "admix_to_bed_chromosome",
+    "plot_local_ancestry_tagore",
     "plot_ancestry_by_chromosome",
     "delete_files_or_directories",
 ]
