@@ -166,6 +166,54 @@ def plot_ancestry_by_chromosome(
         plt.show()
 
 
+def generate_tagore_bed(
+        loci: DataFrame, rf_q: DataFrame, admix: Array, sample_num: int,
+        palette: str = "tab10", verbose: bool = True
+) -> DataFrame:
+    """
+    Generate a BED (Browser Extensible Data) file formatted for TAGORE
+    visualization.
+
+    This function processes genomic data and creates a BED file suitable for
+    visualization with TAGORE (https://github.com/jordanlab/tagore).
+
+    Parameters:
+    -----------
+    loci : DataFrame
+        A DataFrame containing genomic loci information.
+    rf_q : DataFrame
+        A DataFrame containing recombination fraction quantiles.
+    admix : dask.Array
+        An array of admixture proportions.
+    sample_num : int
+        The sample number to process.
+    palette : str, optional
+        Colormap name (matplotlib colormap) Default: 'tab10'.
+    verbose : bool, optional
+        If True, print progress information. Defaults to True.
+
+    Returns:
+    --------
+    DataFrame: A DataFrame in BED format, annotated and ready for TAGORE
+               visualization.
+
+    Note:
+    -----
+        This function relies on several helper functions:
+        - admix_to_bed_individual: Converts admixture data to BED format for a
+                                   specific individual.
+        - _string_to_int: Converts specific columns in the BED DataFrame to
+                          integer type (interal function).
+        - _annotate_tagore: Adds annotation columns required for TAGORE
+                            visualization (internal function).
+    """
+    pops = get_pops(rf_q)
+    bed = admix_to_bed_individual(loci, rf_q, admix,
+                                  sample_num, verbose=verbose)
+    sample_cols = bed.columns[3:]
+    return _annotate_tagore(bed, sample_name, pops, palette)
+
+
 def save_multi_format(filename: str, formats: Tuple[str, ...] = ('png', 'pdf'),
                       **kwargs) -> None:
     """
@@ -186,51 +234,6 @@ def save_multi_format(filename: str, formats: Tuple[str, ...] = ('png', 'pdf'),
         plt.savefig(f"{filename}.{fmt}", format=fmt, **kwargs)
 
 
-def generate_tagore_bed(
-        loci: DataFrame, rf_q: DataFrame, admix: Array, sample_num: int,
-        verbose: bool = True
-) -> DataFrame:
-    """
-    Generate a BED (Browser Extensible Data) file formatted for TAGORE
-    visualization.
-
-    This function processes genomic data and creates a BED file suitable for
-    visualization with TAGORE (https://github.com/jordanlab/tagore).
-
-    Parameters:
-        loci (DataFrame): A DataFrame containing genomic loci information.
-        rf_q (DataFrame): A DataFrame containing recombination fraction
-                          quantiles.
-        admix (Array): An array of admixture proportions.
-        sample_num (int): The sample number to process.
-        verbose (bool, optional): If True, print progress information.
-                                  Defaults to True.
-
-    Returns:
-        DataFrame: A DataFrame in BED format, annotated and ready for TAGORE
-                   visualization.
-
-    Note:
-        This function relies on several helper functions:
-        - admix_to_bed_individual: Converts admixture data to BED format for a
-                                   specific individual.
-        - _string_to_int: Converts specific columns in the BED DataFrame to
-                          integer type (interal function).
-        - _annotate_tagore: Adds annotation columns required for TAGORE
-                            visualization (internal function).
-    """
-    pops = get_pops(rf_q)
-    bed = admix_to_bed_individual(loci, rf_q, admix,
-                                  sample_num, verbose=verbose)
-    sample_cols = bed.columns[3:]
-    return _annotate_tagore(bed, sample_name)
-
-
-def write_to_tagore_format(loci, rf_q, admix, sample_num, outfile):
-    bed_df = generate_tagore_bed(loci, rf_q, admix, sample_num)
-    bed_df.to_csv(outfile, sep="\t", index=False)
-
-
 def _get_global_ancestry(rf_q: DataFrame) -> DataFrame:
     """
     Process raw ancestry data into global proportions.
@@ -249,7 +252,7 @@ def _get_global_ancestry(rf_q: DataFrame) -> DataFrame:
 
 
 def _annotate_tagore(df: DataFrame, sample_cols: List[str], pops: List[str],
-                     colors: str = "tab10") -> DataFrame:
+                     palette: str = "tab10") -> DataFrame:
     """
     Annotate a DataFrame with additional columns for visualization purposes.
 
@@ -258,14 +261,22 @@ def _annotate_tagore(df: DataFrame, sample_cols: List[str], pops: List[str],
     compatibility with visualization tools.
 
     Parameters:
-        df (DataFrame): The input DataFrame to be annotated.
-        sample_cols List(str): The name of the column containing sample data.
+    -----------
+    df : DataFrame
+        The input DataFrame to be annotated.
+    sample_cols : List(str)
+        The name of the column containing sample data.
+    pops : List(str)
+        List of admixed populations
+    palette : str, optional
+        Colormap name (matplotlib colormap) Default: 'tab10'.
 
     Returns:
-        DataFrame: The annotated DataFrame with additional columns.
+    --------
+    DataFrame: The annotated DataFrame with additional columns.
     """
-    # Define a color dictionary to map sample values to colors
-    colormap = plt.get_cmap(colors) # Can updated or user defined
+    # Define a color dictionary to map sample values to palette
+    colormap = plt.get_cmap(palette) # Can updated or user defined
     color_dict = {pop: mcolors.to_hex(colormap(i % 10)) for i, pop in enumerate(pops)}
     # Expand the DataFrame using the _expand_dataframe function
     expanded_df = _expand_dataframe(df, sample_cols)
