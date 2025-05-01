@@ -292,11 +292,7 @@ def _find_intervals(data_matrix: Array, npops: int) -> List[int]:
     - Memory efficient for large genomic datasets
     """
     # Vectorized diff operation across all relevant columns
-    if npops == 2:
-        ancestry_vector = data_matrix[:, 0] # Select just one pop
-    else:
-        ancestry_vector = argmax(data_matrix, axis=1)
-
+    ancestry_vector = argmax(data_matrix, axis=1)
     ancestry_vector = ancestry_vector.map_blocks(cp.asarray, dtype=cp.int32)
     diffs = diff(ancestry_vector, axis=0)
 
@@ -381,12 +377,8 @@ def _create_bed_records(
     # Position slices
     start_col = pos[start_idx]; end_col = pos[end_idx]
 
-    if npops == 2:
-        ancestry_col = data_matrix[end_idx, 0]
-        last_ancestry = data_matrix[max_idx, 0]
-    else:
-        ancestry_col = data_matrix[end_idx, :]
-        last_ancestry = data_matrix[max_idx, :]
+    ancestry_col = data_matrix[end_idx, :]
+    last_ancestry = data_matrix[max_idx, :]
 
     # Add final interval
     last_end_index = int(end_idx[-1])
@@ -401,51 +393,12 @@ def _create_bed_records(
     ancestry_col = concatenate([ancestry_col,expand_dims(last_ancestry,axis=0)])
 
     # Stack numeric columns: start, end, ancestry_cols
-    if npops == 2:
-        numeric_cols = cp.stack([
-            cp.array(start_col.compute()),
-            cp.array(end_col.compute()),
-            cp.array(ancestry_col.compute())
-        ], axis=1)
-    else:
-        numeric_cols = cp.hstack([
-            cp.array(start_col.compute().reshape(-1, 1)),
-            cp.array(end_col.compute().reshape(-1, 1)),
-            cp.array(ancestry_col.compute())
-        ])
+    numeric_cols = cp.hstack([
+        cp.array(start_col.compute().reshape(-1, 1)),
+        cp.array(end_col.compute().reshape(-1, 1)),
+        cp.array(ancestry_col.compute())
+    ])
 
     chrom_col = from_array(full((numeric_cols.shape[0],), chrom_value)[:, None])
     numeric_data = from_array(numeric_cols)
     return chrom_col, numeric_data
-
-
-def _load_real_data():
-    from rfmix_reader import read_rfmix
-    basename = "/projects/b1213/resources/processed-data/local-ancestry"
-    prefix_path = f"{basename}/rfmix-version/_m/"
-    binary_dir = f"{basename}/rfmix-version/_m/binary_files/"
-    return read_rfmix(prefix_path, binary_dir=binary_dir)
-
-
-def _load_simu_data(pop=2):
-    from pathlib import Path
-    from rfmix_reader import read_rfmix
-    basename = "/projects/p32505/projects/rfmix_reader-benchmarking/input/simulations"
-    pop_loc = "two_populations" if pop == 2 else "three_populations"
-    prefix_path = Path(basename) / pop_loc / "_m/rfmix-out/"
-    binary_dir = prefix_path / "binary_files"
-    if binary_dir.exists():
-        return read_rfmix(prefix_path, binary_dir=binary_dir)
-    else:
-        return read_rfmix(prefix_path, binary_dir=binary_dir,
-                          generate_binary=True)
-
-
-def _testing_simulation(pop_num, sample_num):
-    loci, rf_q, admix = _load_simu_data(pop_num)
-    return admix_to_bed_individual(loci, rf_q, admix, sample_num)
-
-
-def _testing_real(sample_num):
-    loci, rf_q, admix = _load_real_data()
-    return admix_to_bed_individual(loci, rf_q, admix, sample_num)
