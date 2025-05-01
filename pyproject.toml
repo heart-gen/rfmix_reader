@@ -41,7 +41,6 @@ torchvision = {version = "^0.18.1+cpu", source = "pytorch_cpu"}
 name = "pytorch_cpu"
 url = "https://download.pytorch.org/whl/cpu"
 priority = "explicit"
-default = false
 
 [tool.poetry-dynamic-versioning]
 enable = true
