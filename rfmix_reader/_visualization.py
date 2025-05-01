@@ -176,7 +176,7 @@ def plot_ancestry_by_chromosome(
     plt.title('Ancestry Proportion per Chromosome')
     plt.ylabel('Ancestry Proportion')
     plt.xlabel('Chromosome')
-    plt.legend(title='Ancestry', bbox_to_anchor=(1.05, 1), loc='upper left')
+    plt.legend(title='Ancestry', bbox_to_anchor=(1.05, 1), loc='upper left', frameon=False)
     plt.tight_layout()
     if save_path:
         save_multi_format(save_path, **kwargs)
