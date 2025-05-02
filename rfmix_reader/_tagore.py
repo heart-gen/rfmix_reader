@@ -210,8 +210,8 @@ def plot_local_ancestry_tagore(
         _printif(f"\033[93m{svg_path} exists. Skipping drawing. Use `force=True` to overwrite.\033[0m",
                  verbose)
 
-    printif(f"\033[94mConverting {svg_path} -> {prefix}.{oformat}\033[0m",
-            verbose)
+    _printif(f"\033[94mConverting {svg_path} -> {prefix}.{oformat}\033[0m",
+             verbose)
 
     # Convert SVG to PNG or PDF
     try:
@@ -220,7 +220,7 @@ def plot_local_ancestry_tagore(
         else:
             svg2pdf(url=svg_path, write_to=f'{prefix}.pdf')
     except Exception as convert_err:
-        printif("\033[91mFailed SVG conversion with CairoSVG.\033[0m", verbose)
+        _printif("\033[91mFailed SVG conversion with CairoSVG.\033[0m", verbose)
         raise RuntimeError("SVG conversion failed.") from convert_err
     else:
-        printif(f"\033[92mSuccessfully converted SVG to {oformat.upper()}\033[0m", verbose)
+        _printif(f"\033[92mSuccessfully converted SVG to {oformat.upper()}\033[0m", verbose)
