@@ -40,7 +40,7 @@ __all__ = [
 
 def admix_to_bed_individual(
         loci: DataFrame, rf_q: DataFrame, admix: Array, sample_num: int,
-        verbose: bool=True
+        chunk_size: int = 10_000, min_segment: int = 3, verbose: bool=True
 ) -> DataFrame:
     """
     Returns loci and admixture data to a BED (Browser Extensible Data) file for
@@ -65,6 +65,13 @@ def admix_to_bed_individual(
 
     sample_num : int
        The column name including in data, will take the first population
+
+    chunk_size : int, optional
+        Size of chunks to process at once (default=10_000)
+        Adjust based on available memory
+
+    min_segment : int, optional
+        Minimum length of a segment to consider it a true change (default=3)
 
     verbose : bool
        :const:`True` for progress information; :const:`False` otherwise.
@@ -98,14 +105,14 @@ def admix_to_bed_individual(
 
     # Generate BED dataframe
     ddf = _generate_bed(loci, admix, pops, col_names, sample_name, verbose,
-                        min_segment)
+                        chunk_size, min_segment)
     return ddf.compute()
 
 
 def _generate_bed(
         df: DataFrame, dask_matrix: Array, pops: List[str],
         col_names: List[str], sample_name: str, verbose: bool,
-        min_segment: int = 3
+        chunk_size: int, min_segment: int
 ) -> DataFrame:
     """
     Generate BED records from loci and admixture data and subsets for specific
@@ -134,8 +141,11 @@ def _generate_bed(
     chrom : str
         The chromosome to generate BED format for.
 
+    chunk_size : int, optional
+        Size of chunks to process at once. Adjust based on available memory.
+
     min_segment : int
-        Minimum length of a segment to consider for a true change (default=3)
+        Minimum length of a segment to consider for a true change.
 
     Returns
     -------
@@ -171,19 +181,19 @@ def _generate_bed(
     # Subset for chromosome
     results = []
     chromosomes = ddf["chromosome"].drop_duplicates().compute()
-    for chrom in tqdm(sorted(chromosomes), desc="Processing Chromosomes",
+    for chrom in tqdm(sorted(chromosomes), desc="Processing chromosomes",
                       disable=not verbose):
         chrom_group = ddf[ddf['chromosome'] == chrom]
         chrom_group = chrom_group.repartition(npartitions=parts)
         results.append(_process_chromosome(chrom_group, sample_name, pops,
-                                           min_segment))
+                                           chunk_size, min_segment))
 
     return dd.concat(results, axis=0)
 
 
 def _process_chromosome(
         group: dd.DataFrame, sample_name: str, pops: List[str],
-        min_segment: int = 3
+        chunk_size: int, min_segment: int
 ) -> DataFrame:
     """
     Process genetic data for a single chromosome to identify ancestry
@@ -198,12 +208,18 @@ def _process_chromosome(
         Dask DataFrame containing genetic data for a single chromosome.
         Must contain columns: chromosome, physical_position, and [sample_name].
         Must be sorted by physical position.
+
     sample_name : str
         Name of the ancestry data column to preserve in output.
+
     pops : List[str]
         A list of admixtured populations
-    min_segment : int
-        Minimum length of a segment to consider for a true change (default=3)
+
+    chunk_size : int, optional
+        Size of chunks to process at once. Adjust based on available memory.
+
+    min_segment : int, optional
+        Minimum length of a segment to consider it a true change.
 
     Returns
     -------
@@ -256,7 +272,7 @@ def _process_chromosome(
     data_matrix = group[sample_cols].to_dask_array(lengths=True)
 
     # Detect changes
-    change_indices = _find_intervals(data_matrix, min_segment)
+    change_indices = _find_intervals(data_matrix, chunk_size, min_segment)
 
     # Create BED records
     chrom_col, numeric_data = _create_bed_records(chrom_val, positions,
@@ -267,7 +283,8 @@ def _process_chromosome(
     return df_numeric.assign(chromosome=chrom_val)[cnames]
 
 
-def _find_intervals(data_matrix: Array, min_segment_length: int = 3) -> List[int]:
+def _find_intervals(data_matrix: Array, chunk_size: int,
+                    min_segment_length: int) -> List[int]:
     """
     Detect ancestry change points in genetic data matrix.
 
@@ -276,65 +293,59 @@ def _find_intervals(data_matrix: Array, min_segment_length: int = 3) -> List[int
     data_matrix : dask.array.Array
         2D array (positions × populations) of ancestry counts
         Each row sums to 2 (diploid), with values 0,1,2 per ancestry
-        Shape example: (7000, 2) for two populations
+        Shape example: (175_000, 2) for two populations
+
+    chunk_size : int, optional
+        Size of chunks to process at once. Adjust based on available memory.
+
     min_segment_length : int, optional
-        Minimum length of a segment to consider it a true change (default=3)
+        Minimum length of a segment to consider it a true change.
 
     Returns
     -------
     List[int]
         Sorted indices of ancestry change points (0-based)
-
-    Notes
-    -----
-    Key Operations:
-    1. Computes first-order differences across positions
-    2. Identifies non-zero differentials (ancestry changes)
-    3. Aggregates changes across all samples
-    4. Returns sorted unique change points
-
-    Performance Notes
-    ----------------
-    - Uses CuPy for GPU acceleration when available
-    - Operates lazily until final compute() call
-    - Memory efficient for large genomic datasets
     """
-    # Convert to numpy/cupy array for faster processing of single sample
-    ancestry_states = data_matrix.compute()
-
+    # Get dimensions
+    n_positions = data_matrix.shape[0]
+    n_chunks = (n_positions + chunk_size - 1) // chunk_size
     # Initialize change points list
     change_points = set([0])  # Always include start point
-
-    # Get total length
-    n_positions = ancestry_states.shape[0]
-
-    # Initialize tracking variables
-    current_state = ancestry_states[0]
-    current_length = 1
-    last_change = 0
-
-    # Scan through positions
-    for i in range(1, n_positions):
-        new_state = ancestry_states[i]
-
-        # Check if state changed
-        if not cp.array_equal(current_state, new_state):
-            # If we've had a long enough segment
-            if current_length >= min_segment_length:
-                change_points.add(i)
-                last_change = i
-                current_state = new_state
-                current_length = 1
-            else:
-                # If segment too short, extend previous segment
-                current_length += 1
-        else:
-            current_length += 1
-
+    # Process data in chunks with overlap to handle boundaries
+    overlap = min_segment_length + 1
+    last_state = None
+    for chunk_idx in range(n_chunks):
+        # Calculate chunk boundaries
+        start_idx = chunk_idx * chunk_size
+        end_idx = min(start_idx + chunk_size + overlap, n_positions)
+        # Get chunk data
+        chunk = data_matrix[start_idx:end_idx].compute()
+        # Find state changes within chunk
+        for pos in range(1, len(chunk)):
+            # Compare full state vectors
+            current_state = tuple(chunk[pos])
+            prev_state = tuple(chunk[pos-1])
+            if current_state != prev_state:
+                # Check if change persists for min_segment_length
+                is_stable_change = True
+                if pos + min_segment_length <= len(chunk):
+                    future_states = chunk[pos:pos + min_segment_length]
+                    # Check if the new state is stable
+                    if not all(cp.array_equal(future_states[i], chunk[pos])
+                             for i in range(min_segment_length)):
+                        is_stable_change = False
+                else:
+                    # If we're near chunk boundary,
+                    # mark for checking in next chunk
+                    is_stable_change = False
+                if is_stable_change:
+                    global_pos = start_idx + pos
+                    change_points.add(global_pos)
+        # Save last state for next chunk comparison
+        last_state = tuple(chunk[-1])
     # Add final position
     change_points.add(n_positions - 1)
-
-    return sorted(list(change_points))
+    return sorted(change_points)
 
 
 def _create_bed_records(

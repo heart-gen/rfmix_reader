@@ -186,7 +186,8 @@ def plot_ancestry_by_chromosome(
 
 def generate_tagore_bed(
         loci: DataFrame, rf_q: DataFrame, admix: Array, sample_num: int,
-        palette: str = "tab10", verbose: bool = True
+        palette: str = "tab10", chunk_size: int = 10_000, min_segment: int = 3,
+        verbose: bool = True
 ) -> DataFrame:
     """
     Generate a BED (Browser Extensible Data) file formatted for TAGORE
@@ -207,6 +208,11 @@ def generate_tagore_bed(
         The sample number to process.
     palette : str, optional
         Colormap name (matplotlib colormap) Default: 'tab10'.
+    chunk_size : int, optional
+        Size of chunks to process at once (default=10_000).
+        Adjust based on available memory.
+    min_segment : int, optional
+        Minimum length of a segment to consider it a true change (default=3).
     verbose : bool, optional
         If True, print progress information. Defaults to True.
 
@@ -226,8 +232,8 @@ def generate_tagore_bed(
                             visualization (internal function).
     """
     pops = get_pops(rf_q)
-    bed = admix_to_bed_individual(loci, rf_q, admix,
-                                  sample_num, verbose=verbose)
+    bed = admix_to_bed_individual(loci, rf_q, admix, sample_num,
+                                  chunk_size, min_segment, verbose)
     sample_cols = bed.columns[3:]
     return _annotate_tagore(bed, sample_cols, pops, palette)
 
