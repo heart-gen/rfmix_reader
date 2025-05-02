@@ -97,13 +97,15 @@ def admix_to_bed_individual(
     sample_name = f"{sample_ids[sample_num]}"
 
     # Generate BED dataframe
-    ddf = _generate_bed(loci, admix, pops, col_names, sample_name, verbose)
+    ddf = _generate_bed(loci, admix, pops, col_names, sample_name, verbose,
+                        min_segment)
     return ddf.compute()
 
 
 def _generate_bed(
         df: DataFrame, dask_matrix: Array, pops: List[str],
-        col_names: List[str], sample_name: str, verbose: bool
+        col_names: List[str], sample_name: str, verbose: bool,
+        min_segment: int = 3
 ) -> DataFrame:
     """
     Generate BED records from loci and admixture data and subsets for specific
@@ -131,6 +133,9 @@ def _generate_bed(
 
     chrom : str
         The chromosome to generate BED format for.
+
+    min_segment : int
+        Minimum length of a segment to consider for a true change (default=3)
 
     Returns
     -------
@@ -170,13 +175,16 @@ def _generate_bed(
                       disable=not verbose):
         chrom_group = ddf[ddf['chromosome'] == chrom]
         chrom_group = chrom_group.repartition(npartitions=parts)
-        results.append(_process_chromosome(chrom_group, sample_name, pops))
+        results.append(_process_chromosome(chrom_group, sample_name, pops,
+                                           min_segment))
 
     return dd.concat(results, axis=0)
 
 
 def _process_chromosome(
-        group: dd.DataFrame, sample_name: str, pops: List[str]) -> DataFrame:
+        group: dd.DataFrame, sample_name: str, pops: List[str],
+        min_segment: int = 3
+) -> DataFrame:
     """
     Process genetic data for a single chromosome to identify ancestry
     intervals.
@@ -194,6 +202,8 @@ def _process_chromosome(
         Name of the ancestry data column to preserve in output.
     pops : List[str]
         A list of admixtured populations
+    min_segment : int
+        Minimum length of a segment to consider for a true change (default=3)
 
     Returns
     -------
@@ -246,7 +256,7 @@ def _process_chromosome(
     data_matrix = group[sample_cols].to_dask_array(lengths=True)
 
     # Detect changes
-    change_indices = _find_intervals(data_matrix, len(pops))
+    change_indices = _find_intervals(data_matrix, min_segment)
 
     # Create BED records
     chrom_col, numeric_data = _create_bed_records(chrom_val, positions,
@@ -257,20 +267,18 @@ def _process_chromosome(
     return df_numeric.assign(chromosome=chrom_val)[cnames]
 
 
-def _find_intervals(data_matrix: Array, npops: int) -> List[int]:
+def _find_intervals(data_matrix: Array, min_segment_length: int = 3) -> List[int]:
     """
     Detect ancestry change points in genetic data matrix.
-
-    Identifies positions where ancestry composition changes across samples
-    using column-wise differential analysis.
 
     Parameters
     ----------
     data_matrix : dask.array.Array
-        2D array (positions × samples) of ancestry proportions
-        dtype: numeric (float/int)
-    npops : int
-        The number of populations in the admixture data.
+        2D array (positions × populations) of ancestry counts
+        Each row sums to 2 (diploid), with values 0,1,2 per ancestry
+        Shape example: (7000, 2) for two populations
+    min_segment_length : int, optional
+        Minimum length of a segment to consider it a true change (default=3)
 
     Returns
     -------
@@ -291,30 +299,42 @@ def _find_intervals(data_matrix: Array, npops: int) -> List[int]:
     - Operates lazily until final compute() call
     - Memory efficient for large genomic datasets
     """
-    # Vectorized diff operation across all relevant columns
-    ancestry_vector = argmax(data_matrix, axis=1)
-    ancestry_vector = ancestry_vector.map_blocks(cp.asarray, dtype=cp.int32)
-    diffs = diff(ancestry_vector, axis=0)
+    # Convert to numpy/cupy array for faster processing of single sample
+    ancestry_states = data_matrix.compute()
 
-    # Find non-zero elements across all columns at once
-    changes = diffs.map_blocks(lambda block: cp.where(block != 0)[0], dtype=int)
-    raw_indices = changes.compute()
+    # Initialize change points list
+    change_points = set([0])  # Always include start point
 
-    # Adjust for diff() offset
-    adjusted = [i + 1 for i in raw_indices.tolist()]
+    # Get total length
+    n_positions = ancestry_states.shape[0]
 
-    # Always include first and last row
-    full_length = data_matrix.shape[0]
-    if isinstance(full_length, tuple):
-        full_length = full_length[0]
+    # Initialize tracking variables
+    current_state = ancestry_states[0]
+    current_length = 1
+    last_change = 0
 
-    final_index = int(full_length) - 1
+    # Scan through positions
+    for i in range(1, n_positions):
+        new_state = ancestry_states[i]
 
-    # Ensure inclusion of 0 and final index
-    adjusted = set(adjusted)
-    adjusted.add(0)
-    adjusted.add(final_index)
-    return sorted(adjusted)
+        # Check if state changed
+        if not cp.array_equal(current_state, new_state):
+            # If we've had a long enough segment
+            if current_length >= min_segment_length:
+                change_points.add(i)
+                last_change = i
+                current_state = new_state
+                current_length = 1
+            else:
+                # If segment too short, extend previous segment
+                current_length += 1
+        else:
+            current_length += 1
+
+    # Add final position
+    change_points.add(n_positions - 1)
+
+    return sorted(list(change_points))
 
 
 def _create_bed_records(
