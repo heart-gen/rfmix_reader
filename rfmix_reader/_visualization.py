@@ -307,18 +307,18 @@ def _annotate_tagore(df: DataFrame, sample_cols: List[str], pops: List[str],
     # Initialize columns for feature and size
     expanded_df["feature"] = 0; expanded_df["size"] = 1
     # Map the sample_cols column to colors using the color_dict
-    expanded_df["color"] = expanded_df["sample"].map(color_dict)
+    expanded_df["color"] = expanded_df["sample_name"].map(color_dict)
     # Generate a repeating sequence of 1 and 2
     repeating_sequence = cp.tile(cp.array([1, 2]),
                                  int(cp.ceil(len(expanded_df) / 2)))[:len(expanded_df)]
     # Add the repeating sequence as a new column
     expanded_df['chrCopy'] = repeating_sequence
     # Drop the sample_cols column and rename columns for compatibility
-    return expanded_df.drop(["sample"], axis=1)\
+    return expanded_df.drop(["sample_name"], axis=1)\
                       .rename(columns={"chromosome": "#chr", "end": "stop"})
 
 
-def _expand_dataframe(df, sample_cols: List[str]):
+def _expand_dataframe(df: DataFrame, sample_cols: List[str]) -> DataFrame:
     """
     Expands a dataframe by duplicating rows based on a specified sample name
     column.
@@ -342,28 +342,18 @@ def _expand_dataframe(df, sample_cols: List[str]):
     -------
         DataFrame: The expanded and sorted dataframe.
     """
-    expanded_dfs = []
-    # Process each sample column separately
-    for sample_col in sample_cols:
-        temp_df = df.copy()
-        # Extract ancestry code from column name
-        ancestry_code = sample_col.split('_')[-1]
-        # Create mask where this population contributes >0
-        mask = temp_df[sample_col] > 0
-        # Create first entry: contribution of 1 if any exists, else 0
-        df1 = temp_df.copy()
-        df1['sample'] = ancestry_code
-        df1['value'] = cp.where(mask, 1, 0)
-        # Create second entry: additional 1 if count was 2
-        df2 = temp_df[mask & (temp_df[sample_col] == 2)].copy()
-        df2['sample'] = ancestry_code
-        df2['value'] = 1
-        expanded_dfs.extend([df1, df2])
-    # Combine all results
-    result = concat(expanded_dfs, ignore_index=True)
-    # Filter to only rows with actual contributions (value > 0)
-    result = result[result['value'] > 0][['chromosome', 'start', 'end', 'sample']]
-    # Sort by genomic coordinates and sample name
-    return result.sort_values(by=['chromosome', 'start', 'sample'],
-                              ascending=[True, True, True])\
+    # Convert to long format
+    melted_df = df.melt(id_vars=["chromosome", "start", "end"],
+                         value_vars=sample_cols, var_name="sample_ids",
+                         value_name="allele_count")
+    # Filter non-zero alleles
+    melted_df = melted_df[melted_df["allele_count"] > 0]
+    # Extract ancestry code from column
+    melted_df["sample_name"] = melted_df["sample_ids"].str.extract(r"_([A-Z]+)$")
+    # Repeat rows based on allele count
+    melted_df = melted_df.loc[melted_df.index.repeat(melted_df['allele_count'])]\
+                         .reset_index(drop=True)
+    # Select and sort
+    result = melted_df[["chromosome", "start", "end", "sample_name"]]
+    return result.sort_values(by=['chromosome', 'start', 'sample_name'])\
                  .reset_index(drop=True)
