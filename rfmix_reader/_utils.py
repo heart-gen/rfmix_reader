@@ -512,7 +512,7 @@ def create_binaries(
     - os.makedirs: For creating directories.
     """
     try:
-        fn = get_prefixes(file_prefix, False)
+        fn = get_prefixes(file_prefix, "rfmix", False)
         if not fn:
             raise FileNotFoundError(f"No files found with prefix: {file_prefix}")
 
