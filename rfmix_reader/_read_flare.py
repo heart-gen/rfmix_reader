@@ -127,9 +127,12 @@ def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:
 
     Parameters:
     ----------
-    fn (List[str]): A list of file paths to read.
-    read_func (Callable): A function to read data from each file.
-    pbar (Optional): A progress bar object to update during reading.
+    fn : List[str]
+        A list of file paths to read.
+    read_func : Callable
+        A function to read data from each file.
+    pbar : Optional
+        A progress bar object to update during reading.
 
     Returns:
     -------
@@ -149,7 +152,8 @@ def _read_tsv(fn: str) -> DataFrame:
 
     Parameters:
     ----------
-    fn (str): File name of the TSV file.
+    fn : str
+        File name of the TSV file.
 
     Returns:
     -------
