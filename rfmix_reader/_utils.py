@@ -112,7 +112,7 @@ def _clean_prefixes(prefixes: list[str]):
     return list(set(cleaned_prefixes))
 
 
-def get_prefixes(file_prefix: str, verbose: bool = True):
+def get_prefixes(file_prefix: str, mode: str = "rfmix", verbose: bool = True):
     """
     Retrieve and clean file prefixes for specified file types.
 
@@ -122,11 +122,16 @@ def get_prefixes(file_prefix: str, verbose: bool = True):
 
     Parameters
     ----------
-    file_prefix (str):
+    file_prefix : str
         The prefix used to identify relevant files. This can be
         a directory or a common prefix for the files.
 
-    verbose (bool):
+    mode : {"rfmix", "flare"}
+        The expected output type.
+        - "rfmix" expects files with suffixes: ["fb.tsv", "rfmix.Q"].
+        - "flare" expects files with suffixes: ["anc.vcf.gz", "global.anc.gz"].
+
+    verbose : bool, optional
         :const:`True` for progress information; :const:`False` otherwise.
         Default:`True`.
 
@@ -139,64 +144,58 @@ def get_prefixes(file_prefix: str, verbose: bool = True):
 
     Raises
     ------
-    FileNotFoundError: If no files matching the given prefix are found.
-
-    Example
-    -------
-    Given a directory structure:
-        /data/
-            chr1.fb.tsv
-            chr1.rfmix.Q
-            chr2.fb.tsv
-            chr2.rfmix.Q
-
-    Calling get_prefixes("/data/") will return:
-        [
-            {'fb.tsv': '/data/chr1.fb.tsv', 'rfmix.Q': '/data/chr1.rfmix.Q'},
-            {'fb.tsv': '/data/chr2.fb.tsv', 'rfmix.Q': '/data/chr2.rfmix.Q'}
-        ]
+    FileNotFoundError
+        If no valid files matching the given prefix and mode are found.
 
     Notes
     -----
-    - This function assumes that the files follow a naming convention
-      where the prefix is followed by a file type extension associated
-      with RFMix (e.g., ".fb.tsv", ".rfmix.Q").
-    - The function uses the `glob` module to search for files and the
-      `Path` class from the `pathlib` module for path manipulations.
-
-    Dependencies
-    ------------
-    - pathlib.Path
-    - glob.glob
-    - os.path.join
-    - _clean_prefixes: A helper function to clean and sort file prefixes.
-
+    - Uses `_clean_prefixes` helper to normalize and deduplicate prefixes.
+    - Assumes RFMix outputs follow the convention `<prefix>.fb.tsv` and
+      `<prefix>.rfmix.Q`.
+    - Assumes FLARE outputs follow `<prefix>.anc.vcf.gz` and
+      `<prefix>.global.anc.gz`.
     """
-    try:
-        # Use glob to find files that contain "chr" or "_chr"
-        file_prefixes = sorted([str(x) for x in Path(file_prefix).glob("*[chr]*")])
+    # Define suffix sets based on mode
+    mode_suffixes = {
+        "rfmix": ["fb.tsv", "rfmix.Q"],
+        "flare": ["anc.vcf.gz", "global.anc.gz"]
+    }
 
-        # If only one prefix is found, check for additional files
-        if len(file_prefixes) == 1:
+    if mode not in mode_suffixes:
+        raise ValueError(f"Invalid mode: {mode}. Choose from {list(mode_suffixes.keys())}.")
+
+    try:
+        # Identify candidate files: "chr" or "_chr"
+        file_candidates = sorted(
+            [str(x) for x in Path(file_prefix).glob("*[chr]*")]
+        )
+
+        # If only one candidate, broaden the search
+        if len(file_candidates) == 1:
             file_prefixes = sorted(glob(join(file_prefix, "*")))
             if not file_prefixes:
                 raise FileNotFoundError()
 
-        # Clean the prefixes
-        file_prefixes = sorted(_clean_prefixes(file_prefixes))
+        # Normalize prefixes
+        file_prefixes = sorted(_clean_prefixes(file_candidates))
 
-        # Construct a list of directionaries mapping file types to paths
-        fn = [{s: f"{fp}.{s}" for s in ["fb.tsv", "rfmix.Q"]} for fp in file_prefixes]
+        # Construct prefix-to-file mapping
+        fn = [
+            {sfx: f"{fp}.{sfx}" for sfx in mode_suffixes}
+            for fp in file_prefixes
+        ]
+
         if not fn:
             raise FileNotFoundError()
 
-        # If multiple prefixes are found and verbose is True, print them
+        # Verbose output if multiple prefixes
         if len(file_prefixes) > 1 and verbose:
-            msg = "Multiple files read in this order:"
+            msg = f"Multiple {mode.upper()} file sets read in this order:"
             print(f"{msg} {[basename(f) for f in file_prefixes]}")
 
     except FileNotFoundError:
-        raise FileNotFoundError(f"No valid files found for prefix: {file_prefix}")
+        raise FileNotFoundError(f"No valid {mode.upper()} files found for prefix: {file_prefix}")
+
     return fn
 
 
