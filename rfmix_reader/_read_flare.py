@@ -80,22 +80,23 @@ def read_flare(
         set_gpu_environment()
 
     # Get file prefixes
-    fn = get_prefixes(file_prefix, mode="flare", verbose=verbose)
+    fn = get_prefixes(file_prefix, "flare", verbose
+)
     # Load loci information
-    pbar = tqdm(desc="Mapping loci files", total=len(fn), disable=not verbose)
-    loci = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
+    pbar = tqdm(desc="Mapping loci info files", total=len(fn), disable=not verbose)
+    loci = _read_file(fn, lambda f: _read_loci(f["anc.vcf.gz"]), pbar)
     pbar.close()
 
     # Adjust loci indices and concatenate
     nmarkers = {}; index_offset = 0
     for i, bi in enumerate(loci):
-        nmarkers[fn[i]["fb.tsv"]] = bi.shape[0]
+        nmarkers[fn[i]["anc.vcf.gz"]] = bi.shape[0]
         bi["i"] += index_offset
         index_offset += bi.shape[0]
     loci = concat(loci, axis=0, ignore_index=True)
 
     # Load global ancestry per chromosome
-    pbar = tqdm(desc="Mapping Q files", total=len(fn), disable=not verbose)
+    pbar = tqdm(desc="Mapping global ancestry files", total=len(fn), disable=not verbose)
     g_anc = _read_file(fn, lambda f: _read_anc(f["global.anc.gz"]), pbar)
     pbar.close()
 
@@ -107,11 +108,11 @@ def read_flare(
     if generate_binary:
         create_binaries(file_prefix, binary_dir)
 
-    pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
+    pbar = tqdm(desc="Mapping local ancestry files", total=len(fn), disable=not verbose)
     admix = _read_file(
         fn,
-        lambda f: _read_fb(f["fb.tsv"], nsamples,
-                           nmarkers[f["fb.tsv"]], pops,
+        lambda f: _read_fb(f["anc.vcf.gz"], nsamples,
+                           nmarkers[f["anc.vcf.gz"]], pops,
                            binary_dir, Chunk()),
         pbar,
     )

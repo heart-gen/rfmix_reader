@@ -39,7 +39,7 @@ __all__ = [
 ]
 
 def admix_to_bed_individual(
-        loci: DataFrame, rf_q: DataFrame, admix: Array, sample_num: int,
+        loci: DataFrame, g_anc: DataFrame, admix: Array, sample_num: int,
         chunk_size: int = 10_000, min_segment: int = 3, verbose: bool=True
 ) -> DataFrame:
     """
@@ -55,7 +55,7 @@ def admix_to_bed_individual(
         A DataFrame containing genetic loci information. Expected to have
         columns for chromosome, position, and other relevant genetic markers.
 
-    rf_q : DataFrame
+    g_anc : DataFrame
         A DataFrame containing sample and population information. Used to derive
         sample IDs and population names.
 
@@ -94,12 +94,12 @@ def admix_to_bed_individual(
 
     Example
     -------
-    >>> loci, rf_q, admix = read_rfmix(prefix_path)
-    >>> admix_to_bed_individual(loci_df, rf_q_df, admix_array, "chr22")
+    >>> loci, g_anc, admix = read_rfmix(prefix_path)
+    >>> admix_to_bed_individual(loci_df, g_anc_df, admix_array, "chr22")
     """
     # Column annotations
-    pops = get_pops(rf_q)
-    sample_ids = get_sample_names(rf_q)
+    pops = get_pops(g_anc)
+    sample_ids = get_sample_names(g_anc)
     col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
     sample_name = f"{sample_ids[sample_num]}"
 

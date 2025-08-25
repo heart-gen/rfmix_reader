@@ -397,7 +397,7 @@ def delete_files_or_directories(path_patterns):
                 print(f"Path does not exist: {path}")
 
 
-def get_pops(rf_q: DataFrame):
+def get_pops(g_anc: DataFrame):
     """
     Extract population names from an RFMix Q-matrix DataFrame.
 
@@ -407,7 +407,7 @@ def get_pops(rf_q: DataFrame):
 
     Parameters
     ----------
-    rf_q (pd.DataFrame): A DataFrame containing RFMix Q-matrix data.
+    g_anc (pd.DataFrame): A DataFrame containing RFMix Q-matrix data.
         Expected to have 'sample_id' and 'chrom' columns, along with
         population columns.
 
@@ -417,7 +417,7 @@ def get_pops(rf_q: DataFrame):
 
     Example
     -------
-    If rf_q has columns ['sample_id', 'chrom', 'pop1', 'pop2', 'pop3'],
+    If g_anc has columns ['sample_id', 'chrom', 'pop1', 'pop2', 'pop3'],
     this function will return ['pop1', 'pop2', 'pop3'].
 
     Note
@@ -425,10 +425,10 @@ def get_pops(rf_q: DataFrame):
     This function assumes that all columns other than 'sample_id' and 'chrom'
     represent population names.
     """
-    return rf_q.drop(["sample_id", "chrom"], axis=1).columns.values
+    return g_anc.drop(["sample_id", "chrom"], axis=1).columns.values
 
 
-def get_sample_names(rf_q: DataFrame):
+def get_sample_names(g_anc: DataFrame):
     """
     Extract unique sample IDs from an RFMix Q-matrix DataFrame and
     convert to Arrow array.
@@ -438,7 +438,7 @@ def get_sample_names(rf_q: DataFrame):
 
     Parameters
     ----------
-    rf_q (pd.DataFrame): A DataFrame containing RFMix Q-matrix data.
+    g_anc (pd.DataFrame): A DataFrame containing RFMix Q-matrix data.
         Expected to have a 'sample_id' column.
 
     Returns
@@ -447,7 +447,7 @@ def get_sample_names(rf_q: DataFrame):
 
     Example
     -------
-    If rf_q has a 'sample_id' column with values ['sample1', 'sample2',
+    If g_anc has a 'sample_id' column with values ['sample1', 'sample2',
     'sample1', 'sample3'], this function will return a PyArrow array
     containing ['sample1', 'sample2', 'sample3'].
 
@@ -457,10 +457,10 @@ def get_sample_names(rf_q: DataFrame):
     input DataFrame. It uses PyArrow on GPU for efficient memory
     management and interoperability with other data processing libraries.
     """
-    if hasattr(rf_q, "to_pandas"):
-        return rf_q.sample_id.unique().to_arrow()
+    if hasattr(g_anc, "to_pandas"):
+        return g_anc.sample_id.unique().to_arrow()
     else:
-        return rf_q.sample_id.unique()
+        return g_anc.sample_id.unique()
 
 
 def create_binaries(

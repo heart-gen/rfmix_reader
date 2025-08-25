@@ -79,10 +79,10 @@ def read_rfmix(
         set_gpu_environment()
 
     # Get file prefixes
-    fn = get_prefixes(file_prefix, mode="rfmix", verbose=verbose)
+    fn = get_prefixes(file_prefix, "rfmix", verbose)
 
     # Load loci information
-    pbar = tqdm(desc="Mapping loci files", total=len(fn), disable=not verbose)
+    pbar = tqdm(desc="Mapping loci info files", total=len(fn), disable=not verbose)
     loci = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
     pbar.close()
 
@@ -95,7 +95,7 @@ def read_rfmix(
     loci = concat(loci, axis=0, ignore_index=True)
 
     # Load global ancestry per chromosome
-    pbar = tqdm(desc="Mapping Q files", total=len(fn), disable=not verbose)
+    pbar = tqdm(desc="Mapping global ancestry files", total=len(fn), disable=not verbose)
     g_anc = _read_file(fn, lambda f: _read_Q(f["rfmix.Q"]), pbar)
     pbar.close()
 
@@ -107,7 +107,7 @@ def read_rfmix(
     if generate_binary:
         create_binaries(file_prefix, binary_dir)
 
-    pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
+    pbar = tqdm(desc="Mapping local ancestry files", total=len(fn), disable=not verbose)
     admix = _read_file(
         fn,
         lambda f: _read_fb(f["fb.tsv"], nsamples,

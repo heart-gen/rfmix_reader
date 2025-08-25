@@ -34,7 +34,7 @@ __all__ = [
 ]
 
 def plot_global_ancestry(
-        rf_q: DataFrame, title: str = "Global Ancestry Proportions",
+        g_anc: DataFrame, title: str = "Global Ancestry Proportions",
         palette: Union[str,List[str]] = 'tab10', figsize: Tuple[int,int] = (16,6),
         save_path: Optional[str] = "global_ancestry",
         show_labels: bool = False, sort_by: Optional[str] = None, **kwargs
@@ -44,7 +44,7 @@ def plot_global_ancestry(
 
     Parameters:
     -----------
-    rf_q : DataFrame
+    g_anc : DataFrame
 
     title : str, optional
         Plot title (default: "Global Ancestry Proportions")
@@ -70,13 +70,13 @@ def plot_global_ancestry(
 
     Example:
     -------
-    >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
-    >>> plot_global_ancestry(rf_q, dpi=300, bbox_inches="tight")
+    >>> loci, g_anc, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
+    >>> plot_global_ancestry(g_anc, dpi=300, bbox_inches="tight")
     """
     from pandas import Series
     from numpy import arange
 
-    ancestry_df = _get_global_ancestry(rf_q)
+    ancestry_df = _get_global_ancestry(g_anc)
     if hasattr(ancestry_df, "to_pandas"):
         ancestry_df = ancestry_df.to_pandas()
 
@@ -139,14 +139,14 @@ def plot_global_ancestry(
 
 
 def plot_ancestry_by_chromosome(
-        rf_q: DataFrame, figsize: Tuple[int,int] = (14,6), palette: str = 'Set1',
+        g_anc: DataFrame, figsize: Tuple[int,int] = (14,6), palette: str = 'Set1',
         save_path: Optional[str] = "chromosome_summary", **kwargs) -> None:
     """
     Plot chromosome-wise ancestry distribution using boxplots.
 
     Parameters:
     -----------
-    rf_q : DataFrame
+    g_anc : DataFrame
 
     figsize : Tuple[int, int], optional
         Figure dimensions in inches (width, height) (default: (14, 6))
@@ -163,11 +163,11 @@ def plot_ancestry_by_chromosome(
 
     Example:
     --------
-    >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
-    >>> plot_ancestry_by_chromosome(rf_q, dpi=300, bbox_inches="tight")
+    >>> loci, g_anc, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
+    >>> plot_ancestry_by_chromosome(g_anc, dpi=300, bbox_inches="tight")
     """
     # Melt to long-form for Seaborn
-    df_long = rf_q.melt(id_vars=['sample_id', 'chrom'], var_name='Ancestry',
+    df_long = g_anc.melt(id_vars=['sample_id', 'chrom'], var_name='Ancestry',
                         value_name='Proportion')
     df_long = df_long.to_pandas() if hasattr(df_long, "to_pandas") else df_long
     plt.figure(figsize=figsize)
@@ -185,7 +185,7 @@ def plot_ancestry_by_chromosome(
 
 
 def generate_tagore_bed(
-        loci: DataFrame, rf_q: DataFrame, admix: Array, sample_num: int,
+        loci: DataFrame, g_anc: DataFrame, admix: Array, sample_num: int,
         palette: str = "tab10", chunk_size: int = 10_000, min_segment: int = 3,
         verbose: bool = True
 ) -> DataFrame:
@@ -200,7 +200,7 @@ def generate_tagore_bed(
     -----------
     loci : DataFrame
         A DataFrame containing genomic loci information.
-    rf_q : DataFrame
+    g_anc : DataFrame
         A DataFrame containing recombination fraction quantiles.
     admix : dask.Array
         An array of admixture proportions.
@@ -231,8 +231,8 @@ def generate_tagore_bed(
         - _annotate_tagore: Adds annotation columns required for TAGORE
                             visualization (internal function).
     """
-    pops = get_pops(rf_q)
-    bed = admix_to_bed_individual(loci, rf_q, admix, sample_num,
+    pops = get_pops(g_anc)
+    bed = admix_to_bed_individual(loci, g_anc, admix, sample_num,
                                   chunk_size, min_segment, verbose)
     sample_cols = bed.columns[3:]
     return _annotate_tagore(bed, sample_cols, pops, palette)
@@ -258,13 +258,13 @@ def save_multi_format(filename: str, formats: Tuple[str, ...] = ('png', 'pdf'),
         plt.savefig(f"{filename}.{fmt}", format=fmt, **kwargs)
 
 
-def _get_global_ancestry(rf_q: DataFrame) -> DataFrame:
+def _get_global_ancestry(g_anc: DataFrame) -> DataFrame:
     """
     Process raw ancestry data into global proportions.
 
     Parameters:
     -----------
-    rf_q : DataFrame
+    g_anc : DataFrame
 
     Returns:
     --------
@@ -272,7 +272,7 @@ def _get_global_ancestry(rf_q: DataFrame) -> DataFrame:
         Processed data with individuals as rows and ancestry proportions as columns
     """
     # Remove chromosome column and group by sample
-    return rf_q.drop(columns=['chrom']).groupby('sample_id').mean()
+    return g_anc.drop(columns=['chrom']).groupby('sample_id').mean()
 
 
 def _annotate_tagore(df: DataFrame, sample_cols: List[str], pops: List[str],

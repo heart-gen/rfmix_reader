@@ -29,7 +29,7 @@ else:
 
 __all__ = ["write_data", "write_imputed"]
 
-def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
+def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
                base_rows: int = 100_000, outdir: str = "./output",
                prefix: str = "local-ancestry", verbose: bool = False) -> None:
     """
@@ -48,7 +48,7 @@ def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
         - 'pos': Position of the loci (1-based).
         Additional columns may include 'i' (used for filtering) or others.
 
-    rf_q : DataFrame (pandas or cuDF)
+    g_anc : DataFrame (pandas or cuDF)
         A DataFrame containing sample IDs and ancestry information. This is used
         to generate column names for the admixture data.
 
@@ -83,8 +83,8 @@ def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
 
     Example:
     --------
-    >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir)
-    >>> write_data(loci, rf_q, admix, outdir="./output", prefix="ancestry")
+    >>> loci, g_anc, admix = read_rfmix(prefix_path, binary_dir)
+    >>> write_data(loci, g_anc, admix, outdir="./output", prefix="ancestry")
     # This will create ./output/ancestry.chr{1-22}.parquet files
     """
     from os import makedirs
@@ -108,7 +108,7 @@ def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
         return None
 
     # Column name processing
-    col_names = _get_names(rf_q)
+    col_names = _get_names(g_anc)
     loci = _rename_loci_columns(loci)
     loci["pos"] = loci["pos"]
     loci["hap"] = loci['chrom'].astype(str) + '_' + loci['pos'].astype(str)
@@ -153,7 +153,7 @@ def write_data(loci: DataFrame, rf_q: DataFrame, admix: Array,
             compute(*tasks) # Execute all tasks in parallel
 
 
-def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
+def write_imputed(g_anc: DataFrame, admix: Array, variant_loci: DataFrame,
                   z: zArray, base_rows: int = 250_000, outdir: str = "./",
                   prefix: str = "ancestry-imputed", verbose: bool = False) -> None:
     """
@@ -166,7 +166,7 @@ def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
 
     Parameters:
     -----------
-    rf_q : DataFrame (pandas or cuDF)
+    g_anc : DataFrame (pandas or cuDF)
         A DataFrame containing sample IDs and ancestry information. This is used
         to generate column names for the admixture data.
 
@@ -211,22 +211,22 @@ def write_imputed(rf_q: DataFrame, admix: Array, variant_loci: DataFrame,
 
     Example:
     --------
-    >>> loci, rf_q, admix = read_rfmix(prefix_path, binary_dir)
+    >>> loci, g_anc, admix = read_rfmix(prefix_path, binary_dir)
     >>> loci.rename(columns={"chromosome": "chrom","physical_position": "pos"},
         inplace=True)
     >>> variant_loci = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"],
         how="outer", indicator=True).loc[:, ["chrom", "pos", "i", "_merge"]]
     >>> data_path = f"{basename}/local_ancestry_rfmix/_m"
     >>> z = interpolate_array(variant_loci, admix, data_output_dir)
-    >>> write_imputed(rf_q, admix, variant_loci, z, outdir="./output",
+    >>> write_imputed(g_anc, admix, variant_loci, z, outdir="./output",
         prefix="imputed-ancestry")
     # This will create ./output/imputed-ancestry.chr{1-22}.parquet files
     """
     loci_I, admix_I = _clean_data_imp(admix, variant_loci, z)
-    write_data(loci_I, rf_q, admix_I, base_rows, outdir, prefix, verbose)
+    write_data(loci_I, g_anc, admix_I, base_rows, outdir, prefix, verbose)
 
 
-def _get_names(rf_q: DataFrame) -> List[str]:
+def _get_names(g_anc: DataFrame) -> List[str]:
     """
     Generate a list of sample names by combining sample IDs with N ancestries.
 
@@ -235,7 +235,7 @@ def _get_names(rf_q: DataFrame) -> List[str]:
 
     Parameters:
     -----------
-    rf_q [DataFrame]: A DataFrame (pandas or cuDF) generated with `read_rfmix`.
+    g_anc [DataFrame]: A DataFrame (pandas or cuDF) generated with `read_rfmix`.
 
     Returns:
     --------
@@ -247,10 +247,10 @@ def _get_names(rf_q: DataFrame) -> List[str]:
     - It uses cuDF-specific methods if available, otherwise falls back to pandas.
     """
     if is_available():
-        sample_id = list(rf_q.sample_id.unique().to_pandas())
+        sample_id = list(g_anc.sample_id.unique().to_pandas())
     else:
-        sample_id = list(rf_q.sample_id.unique())
-    ancestries = list(rf_q.drop(["sample_id", "chrom"], axis=1).columns.values)
+        sample_id = list(g_anc.sample_id.unique())
+    ancestries = list(g_anc.drop(["sample_id", "chrom"], axis=1).columns.values)
     sample_names = [f"{sid}_{anc}" for anc in ancestries for sid in sample_id]
     return sample_names
 

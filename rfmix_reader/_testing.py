@@ -37,13 +37,13 @@ def _load_simu_data(pop=2):
 
 
 def _testing_simu_viz(pop_num, sample_num):
-    loci, rf_q, admix = _load_simu_data(pop_num)
-    return generate_tagore_bed(loci, rf_q, admix, sample_num)
+    loci, g_anc, admix = _load_simu_data(pop_num)
+    return generate_tagore_bed(loci, g_anc, admix, sample_num)
 
 
 def _testing_real_viz(sample_num):
-    loci, rf_q, admix = _load_real_data()
-    return generate_tagore_bed(loci, rf_q, admix, sample_num)
+    loci, g_anc, admix = _load_real_data()
+    return generate_tagore_bed(loci, g_anc, admix, sample_num)
 
 
 def __testing__():
@@ -51,7 +51,7 @@ def __testing__():
     # Local ancestry
     prefix_path = f"{basename}/local_ancestry_rfmix/_m/"
     binary_dir = f"{basename}/local_ancestry_rfmix/_m/binary_files/"
-    loci, rf_q, admix = _load_admix(prefix_path, binary_dir)
+    loci, g_anc, admix = _load_admix(prefix_path, binary_dir)
     loci.rename(columns={"chromosome": "chrom",
                          "physical_position": "pos"},
                 inplace=True)
