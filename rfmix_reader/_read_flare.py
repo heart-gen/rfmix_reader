@@ -80,7 +80,7 @@ def read_flare(
         set_gpu_environment()
 
     # Get file prefixes
-    fn = get_prefixes(file_prefix, verbose)
+    fn = get_prefixes(file_prefix, mode="flare", verbose=verbose)
     # Load loci information
     pbar = tqdm(desc="Mapping loci files", total=len(fn), disable=not verbose)
     loci = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
