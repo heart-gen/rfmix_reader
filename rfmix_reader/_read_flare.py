@@ -59,11 +59,12 @@ def read_flare(
     -------
     loci : :class:`pandas.DataFrame`
         Loci information for the FB data.
-    rf_q : :class:`pandas.DataFrame`
-        Global ancestry by chromosome from Flare.
+    g_anc : :class:`pandas.DataFrame`
+        Global ancestry by chromosome from Flare. This is the same as previous
+        name, `rf_q`.
     admix : :class:`dask.array.Array`
         Local ancestry per population (columns pop1*nsamples ... popX*nsamples).
-        This is in order of the populations see `rf_q`.
+        This is in order of the populations see `g_anc`.
 
     Notes
     -----
@@ -77,12 +78,14 @@ def read_flare(
     # Device information
     if verbose and is_available():
         set_gpu_environment()
+
     # Get file prefixes
     fn = get_prefixes(file_prefix, verbose)
     # Load loci information
     pbar = tqdm(desc="Mapping loci files", total=len(fn), disable=not verbose)
     loci = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
     pbar.close()
+
     # Adjust loci indices and concatenate
     nmarkers = {}; index_offset = 0
     for i, bi in enumerate(loci):
@@ -90,16 +93,20 @@ def read_flare(
         bi["i"] += index_offset
         index_offset += bi.shape[0]
     loci = concat(loci, axis=0, ignore_index=True)
+
     # Load global ancestry per chromosome
     pbar = tqdm(desc="Mapping Q files", total=len(fn), disable=not verbose)
-    rf_q = _read_file(fn, lambda f: _read_anc(f["global.anc.gz"]), pbar)
+    g_anc = _read_file(fn, lambda f: _read_anc(f["global.anc.gz"]), pbar)
     pbar.close()
-    nsamples = rf_q[0].shape[0]
-    pops = rf_q[0].drop(["sample_id", "chrom"], axis=1).columns.values
-    rf_q = concat(rf_q, axis=0, ignore_index=True)
+
+    nsamples = g_anc[0].shape[0]
+    pops = g_anc[0].drop(["sample_id", "chrom"], axis=1).columns.values
+    g_anc = concat(g_anc, axis=0, ignore_index=True)
+
     # Loading local ancestry by loci
     if generate_binary:
         create_binaries(file_prefix, binary_dir)
+
     pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
     admix = _read_file(
         fn,
@@ -110,7 +117,7 @@ def read_flare(
     )
     pbar.close()
     admix = concatenate(admix, axis=0)
-    return loci, rf_q, admix
+    return loci, g_anc, admix
 
 
 def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:

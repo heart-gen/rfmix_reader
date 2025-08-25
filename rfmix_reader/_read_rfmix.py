@@ -59,11 +59,11 @@ def read_rfmix(
     -------
     loci : :class:`pandas.DataFrame`
         Loci information for the FB data.
-    rf_q : :class:`pandas.DataFrame`
+    g_anc : :class:`pandas.DataFrame`
         Global ancestry by chromosome from RFMix.
     admix : :class:`dask.array.Array`
         Local ancestry per population (columns pop1*nsamples ... popX*nsamples).
-        This is in order of the populations see `rf_q`.
+        This is in order of the populations see `g_anc`.
 
     Notes
     -----
@@ -95,12 +95,12 @@ def read_rfmix(
 
     # Load global ancestry per chromosome
     pbar = tqdm(desc="Mapping Q files", total=len(fn), disable=not verbose)
-    rf_q = _read_file(fn, lambda f: _read_Q(f["rfmix.Q"]), pbar)
+    g_anc = _read_file(fn, lambda f: _read_Q(f["rfmix.Q"]), pbar)
     pbar.close()
 
-    nsamples = rf_q[0].shape[0]
-    pops = rf_q[0].drop(["sample_id", "chrom"], axis=1).columns.values
-    rf_q = concat(rf_q, axis=0, ignore_index=True)
+    nsamples = g_anc[0].shape[0]
+    pops = g_anc[0].drop(["sample_id", "chrom"], axis=1).columns.values
+    g_anc = concat(g_anc, axis=0, ignore_index=True)
 
     # Loading local ancestry by loci
     if generate_binary:
@@ -116,7 +116,7 @@ def read_rfmix(
     )
     pbar.close()
     admix = concatenate(admix, axis=0)
-    return loci, rf_q, admix
+    return loci, g_anc, admix
 
 
 def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:
