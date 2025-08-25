@@ -3,8 +3,12 @@ Adapted from `_read.py` script in the `pandas-plink` package.
 Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_read.py
 """
 import warnings
+from re import search
+from tqdm import tqdm
 from glob import glob
-from dask.array import Array
+from numpy import int32
+from pandas import StringDtype
+from dask.array import Array, concatenate
 from collections import OrderedDict as odict
 from os.path import basename, dirname, join, exists
 from typing import Optional, Callable, List, Tuple, Dict
@@ -28,22 +32,22 @@ if is_available():
 else:
     from pandas import DataFrame, read_csv, concat
 
-__all__ = ["read_rfmix"]
+__all__ = ["read_flare"]
 
-def read_rfmix(
+def read_flare(
         file_prefix: str, binary_dir: str = "./binary_files",
         generate_binary: bool = False, verbose: bool = True,
 ) -> Tuple[DataFrame, DataFrame, Array]:
     """
-    Read RFMix files into data frames and a Dask array.
+    Read Flare files into data frames and a Dask array.
 
     Parameters
     ----------
     file_prefix : str
-        Path prefix to the set of RFMix files. It will load all of the chromosomes
+        Path prefix to the set of Flare files. It will load all of the chromosomes
         at once.
     binary_dir : str, optional
-        Path prefix to the binary version of RFMix (*fb.tsv) files. Default is
+        Path prefix to the binary version of Flare (*fb.tsv) files. Default is
         "./binary_files".
     generate_binary: bool, optional
        :const:`True` generate the binary file. Default: `False`.
@@ -56,7 +60,7 @@ def read_rfmix(
     loci : :class:`pandas.DataFrame`
         Loci information for the FB data.
     rf_q : :class:`pandas.DataFrame`
-        Global ancestry by chromosome from RFMix.
+        Global ancestry by chromosome from Flare.
     admix : :class:`dask.array.Array`
         Local ancestry per population (columns pop1*nsamples ... popX*nsamples).
         This is in order of the populations see `rf_q`.
@@ -70,8 +74,6 @@ def read_rfmix(
     - :const:`1` One allele is associated with this ancestry
     - :const:`2` Both alleles are associated with this ancestry
     """
-    from tqdm import tqdm
-    from dask.array import concatenate
     # Device information
     if verbose and is_available():
         set_gpu_environment()
@@ -90,7 +92,7 @@ def read_rfmix(
     loci = concat(loci, axis=0, ignore_index=True)
     # Load global ancestry per chromosome
     pbar = tqdm(desc="Mapping Q files", total=len(fn), disable=not verbose)
-    rf_q = _read_file(fn, lambda f: _read_Q(f["rfmix.Q"]), pbar)
+    rf_q = _read_file(fn, lambda f: _read_anc(f["global.anc.gz"]), pbar)
     pbar.close()
     nsamples = rf_q[0].shape[0]
     pops = rf_q[0].drop(["sample_id", "chrom"], axis=1).columns.values
@@ -145,8 +147,6 @@ def _read_tsv(fn: str) -> DataFrame:
     -------
     DataFrame: DataFrame containing specified columns from the TSV file.
     """
-    from numpy import int32
-    from pandas import StringDtype
     header = {"chromosome": StringDtype(), "physical_position": int32}
     try:
         if is_available():
@@ -220,36 +220,18 @@ def _read_csv(fn: str, header: dict) -> DataFrame:
     DataFrame: The data read from the CSV file as a pandas DataFrame.
     """
     try:
-        if is_available():
-            df = read_csv(
-                fn,
-                sep="\t",
-                header=None,
-                names=list(header.keys()),
-                dtype=header,
-                comment="#"
-            )
-        else:
-            df = read_csv(
-                fn,
-                delim_whitespace=True,
-                header=None,
-                names=list(header.keys()),
-                dtype=header,
-                comment="#",
-                compression=None,
-                engine="c",
-                iterator=False,
-            )
+        df = read_csv(fn, sep="\t", names=list(header.keys()),
+                      dtype=header, skiprows=1)
     except Exception as e:
         raise IOError(f"Error reading file '{fn}': {e}")
+
     # Validate that resulting DataFrame is correct type
     if not isinstance(df, DataFrame):
         raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
     return df
 
 
-def _read_Q(fn: str) -> DataFrame:
+def _read_anc(fn: str) -> DataFrame:
     """
     Read the Q matrix from a file and add the chromosome information.
 
@@ -261,9 +243,7 @@ def _read_Q(fn: str) -> DataFrame:
     -------
     DataFrame: The Q matrix with the chromosome information added.
     """
-    from re import search
-
-    df = _read_Q_noi(fn)
+    df = _read_anc_noi(fn)
     match = search(r'chr(\d+)', fn)
     if match:
         chrom = match.group(0)
@@ -273,7 +253,7 @@ def _read_Q(fn: str) -> DataFrame:
     return df
 
 
-def _read_Q_noi(fn: str) -> DataFrame:
+def _read_anc_noi(fn: str) -> DataFrame:
     """
     Read the Q matrix from a file without adding chromosome information.
 
@@ -338,8 +318,6 @@ def _subset_populations(X: Array, npops: int) -> Array:
     Returns:
     dask.array: Processed array with adjacent columns summed for each population subset.
     """
-    from dask.array import concatenate
-
     pop_subset = []
     pop_start = 0
     ncols = X.shape[1]
@@ -367,36 +345,21 @@ def _types(fn: str) -> dict:
     -------
     dict : Dictionary mapping column names to their inferred data types.
     """
-    from pandas import StringDtype
-
     try:
-        # Read the first two rows of the file, skipping the first row
-        if is_available():
-            df = read_csv(
-                fn,
-                sep="\t",
-                nrows=2,
-                skiprows=1,
-            )
-        else:
-            df = read_csv(
-                fn,
-                delim_whitespace=True,
-                nrows=2,
-                skiprows=1,
-            )
+        df = read_csv(fn, sep="\t", nrows=2)
     except FileNotFoundError:
         raise FileNotFoundError(f"File '{fn}' not found.")
     except Exception as e:
         raise IOError(f"Error reading file '{fn}': {e}")
+
     # Validate that the resulting DataFrame is of the correct type
     if not isinstance(df, DataFrame):
         raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
     # Ensure the DataFrame contains at least one column
     if df.shape[1] < 1:
         raise ValueError("The DataFrame does not contain any columns.")
+
     # Initialize the header dictionary with the sample_id column
     header = {"sample_id": StringDtype()}
-    # Update the header dictionary with the data types of the remaining columns
     header.update(df.dtypes[1:].to_dict())
     return header
