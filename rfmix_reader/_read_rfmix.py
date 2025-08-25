@@ -3,8 +3,12 @@ Adapted from `_read.py` script in the `pandas-plink` package.
 Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_read.py
 """
 import warnings
+from re import search
+from tqdm import tqdm
 from glob import glob
-from dask.array import Array
+from numpy import int32
+from pandas import StringDtype
+from dask.array import Array, concatenate
 from collections import OrderedDict as odict
 from os.path import basename, dirname, join, exists
 from typing import Optional, Callable, List, Tuple, Dict
@@ -70,17 +74,17 @@ def read_rfmix(
     - :const:`1` One allele is associated with this ancestry
     - :const:`2` Both alleles are associated with this ancestry
     """
-    from tqdm import tqdm
-    from dask.array import concatenate
     # Device information
     if verbose and is_available():
         set_gpu_environment()
+
     # Get file prefixes
     fn = get_prefixes(file_prefix, verbose)
     # Load loci information
     pbar = tqdm(desc="Mapping loci files", total=len(fn), disable=not verbose)
     loci = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
     pbar.close()
+
     # Adjust loci indices and concatenate
     nmarkers = {}; index_offset = 0
     for i, bi in enumerate(loci):
@@ -88,16 +92,20 @@ def read_rfmix(
         bi["i"] += index_offset
         index_offset += bi.shape[0]
     loci = concat(loci, axis=0, ignore_index=True)
+
     # Load global ancestry per chromosome
     pbar = tqdm(desc="Mapping Q files", total=len(fn), disable=not verbose)
     rf_q = _read_file(fn, lambda f: _read_Q(f["rfmix.Q"]), pbar)
     pbar.close()
+
     nsamples = rf_q[0].shape[0]
     pops = rf_q[0].drop(["sample_id", "chrom"], axis=1).columns.values
     rf_q = concat(rf_q, axis=0, ignore_index=True)
+
     # Loading local ancestry by loci
     if generate_binary:
         create_binaries(file_prefix, binary_dir)
+
     pbar = tqdm(desc="Mapping fb files", total=len(fn), disable=not verbose)
     admix = _read_file(
         fn,
@@ -145,24 +153,15 @@ def _read_tsv(fn: str) -> DataFrame:
     -------
     DataFrame: DataFrame containing specified columns from the TSV file.
     """
-    from numpy import int32
-    from pandas import StringDtype
     header = {"chromosome": StringDtype(), "physical_position": int32}
     try:
         if is_available():
-            df = read_csv(
-                fn,
-                sep="\t",
-                header=0,
-                usecols=list(header.keys()),
-                dtype=header,
-                comment="#"
-            )
+            df = read_csv(fn, sep="\t", header=0, usecols=list(header.keys()),
+                          dtype=header, comment="#")
         else:
             ## TODO: FutureWarning: The 'delim_whitespace' keyword in
             ## pd.read_csv is deprecated and will be removed in a future
             ## version. Use ``sep='\s+'`` instead.
-
             chunks = read_csv(
                 fn,
                 delim_whitespace=True,
@@ -170,7 +169,7 @@ def _read_tsv(fn: str) -> DataFrame:
                 usecols=list(header.keys()),
                 dtype=header,
                 comment="#",
-                chunksize=100000, # Low memory chunks
+                chunksize=100_000, # Low memory chunks
             )
             # Concatenate chunks into single DataFrame
             df = concat(chunks, ignore_index=True)
@@ -221,28 +220,15 @@ def _read_csv(fn: str, header: dict) -> DataFrame:
     """
     try:
         if is_available():
-            df = read_csv(
-                fn,
-                sep="\t",
-                header=None,
-                names=list(header.keys()),
-                dtype=header,
-                comment="#"
-            )
+            df = read_csv(fn, sep="\t", header=None, names=list(header.keys()),
+                          dtype=header, comment="#")
         else:
-            df = read_csv(
-                fn,
-                delim_whitespace=True,
-                header=None,
-                names=list(header.keys()),
-                dtype=header,
-                comment="#",
-                compression=None,
-                engine="c",
-                iterator=False,
-            )
+            df = read_csv(fn, delim_whitespace=True, header=None,
+                          names=list(header.keys()), dtype=header, comment="#",
+                          compression=None, engine="c", iterator=False)
     except Exception as e:
         raise IOError(f"Error reading file '{fn}': {e}")
+
     # Validate that resulting DataFrame is correct type
     if not isinstance(df, DataFrame):
         raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
@@ -261,10 +247,9 @@ def _read_Q(fn: str) -> DataFrame:
     -------
     DataFrame: The Q matrix with the chromosome information added.
     """
-    from re import search
-
     df = _read_Q_noi(fn)
     match = search(r'chr(\d+)', fn)
+
     if match:
         chrom = match.group(0)
         df["chrom"] = chrom
@@ -319,6 +304,7 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
     col_chunk = max(ncols // max_npartitions, col_chunk)
     binary_fn = join(temp_dir,
                      basename(fn).split(".")[0] + ".bin")
+
     if exists(binary_fn):
         X = read_fb(binary_fn, nrows, ncols, row_chunk, col_chunk)
     else:
@@ -338,13 +324,12 @@ def _subset_populations(X: Array, npops: int) -> Array:
     Returns:
     dask.array: Processed array with adjacent columns summed for each population subset.
     """
-    from dask.array import concatenate
-
     pop_subset = []
     pop_start = 0
     ncols = X.shape[1]
     if ncols % npops != 0:
         raise ValueError("The number of columns in X must be divisible by npops.")
+
     while pop_start < npops:
         X0 = X[:, pop_start::npops] # Subset based on populations
         if X0.shape[1] % 2 != 0:
@@ -367,34 +352,25 @@ def _types(fn: str) -> dict:
     -------
     dict : Dictionary mapping column names to their inferred data types.
     """
-    from pandas import StringDtype
-
     try:
         # Read the first two rows of the file, skipping the first row
         if is_available():
-            df = read_csv(
-                fn,
-                sep="\t",
-                nrows=2,
-                skiprows=1,
-            )
+            df = read_csv(fn, sep="\t", nrows=2, skiprows=1)
         else:
-            df = read_csv(
-                fn,
-                delim_whitespace=True,
-                nrows=2,
-                skiprows=1,
-            )
+            df = read_csv(fn, delim_whitespace=True, nrows=2, skiprows=1)
+
     except FileNotFoundError:
         raise FileNotFoundError(f"File '{fn}' not found.")
     except Exception as e:
         raise IOError(f"Error reading file '{fn}': {e}")
+
     # Validate that the resulting DataFrame is of the correct type
     if not isinstance(df, DataFrame):
         raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
     # Ensure the DataFrame contains at least one column
     if df.shape[1] < 1:
         raise ValueError("The DataFrame does not contain any columns.")
+
     # Initialize the header dictionary with the sample_id column
     header = {"sample_id": StringDtype()}
     # Update the header dictionary with the data types of the remaining columns
