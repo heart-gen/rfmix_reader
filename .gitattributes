@@ -4,3 +4,5 @@ chr21.fb.tsv filter=lfs diff=lfs merge=lfs -text
 chr21.msp.tsv filter=lfs diff=lfs merge=lfs -text
 chr21.sis.tsv filter=lfs diff=lfs merge=lfs -text
 chr21.rfmix.Q filter=lfs diff=lfs merge=lfs -text
+chr21.vcf.gz filter=lfs diff=lfs merge=lfs -text
+chr21.global.truth.tsv.gz filter=lfs diff=lfs merge=lfs -text
