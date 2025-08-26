@@ -7,11 +7,11 @@ from re import search
 from tqdm import tqdm
 from glob import glob
 from numpy import int32
-from pandas import StringDtype
 from dask.array import Array, concatenate
+from pysam import tabix_index, VariantFile
 from collections import OrderedDict as odict
-from os.path import basename, dirname, join, exists
-from typing import Optional, Callable, List, Tuple, Dict
+from os.path import basename, dirname, join, exists, getsize
+from typing import Optional, Callable, List, Tuple, Dict, Iterator
 
 from ._chunk import Chunk
 from ._fb_read import read_fb
@@ -28,14 +28,14 @@ except ModuleNotFoundError as e:
 
 
 if is_available():
-    from cudf import DataFrame, read_csv, concat
+    from cudf import DataFrame, read_csv, concat, CategoricalDtype
 else:
-    from pandas import DataFrame, read_csv, concat
+    from pandas import DataFrame, read_csv, concat, CategoricalDtype
 
 __all__ = ["read_flare"]
 
 def read_flare(
-        file_prefix: str, verbose: bool = True,
+        file_prefix: str, chunk_size: int32 = 1_000_000, verbose: bool = True,
 ) -> Tuple[DataFrame, DataFrame, Array]:
     """
     Read Flare files into data frames and a Dask array.
@@ -45,6 +45,8 @@ def read_flare(
     file_prefix : str
         Path prefix to the set of Flare files. It will load all of the chromosomes
         at once.
+    chunk_size : int
+        Number of records to read per chunk.
     verbose : bool, optional
         :const:`True` for progress information; :const:`False` otherwise.
         Default:`True`.
@@ -77,8 +79,10 @@ def read_flare(
     fn = get_prefixes(file_prefix, "flare", verbose)
 
     # Load loci information
-    pbar = tqdm(desc="Mapping loci info files", total=len(fn), disable=not verbose)
-    loci = _read_file(fn, lambda f: _read_loci(f["anc.vcf.gz"]), pbar)
+    pbar = tqdm(desc="Mapping loci info files", total=len(fn),
+                disable=not verbose)
+    loci = _read_file(fn, lambda f: _read_loci(f["anc.vcf.gz"], chunk_size),
+                      pbar)
     pbar.close()
 
     # Adjust loci indices and concatenate
@@ -139,50 +143,25 @@ def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:
             pbar.update(1)
     return data
 
-
-def _read_tsv(fn: str) -> DataFrame:
+def _read_vcf(fn: str, chunk_size: int32 = 1_000_000) -> DataFrame:
     """
-    Read a TSV file into a pandas DataFrame.
+    Read a VCF file into a DataFrame.
 
     Parameters:
     ----------
     fn : str
-        File name of the TSV file.
+        File name of the VCF file.
+    chunk_size : int
+        Number of records to include per chunk.
 
     Returns:
     -------
-    DataFrame: DataFrame containing specified columns from the TSV file.
+    DataFrame: DataFrame containing specified columns from the VCF file.
     """
-    header = {"chromosome": StringDtype(), "physical_position": int32}
-    n_skip = _detect_flare_header(fn)
-    
+    header = {"chromosome": CategoricalDtype(), "physical_position": int32}
     try:
-        if is_available():
-            df = read_csv(
-                fn,
-                sep="\t",
-                skiprows=n_skip,
-                usecols=[0, 1],
-                dtype=list(header.values()),
-                names=list(header.keys()),
-                compression="gzip",
-            )
-        else:
-            ## TODO: FutureWarning: The 'delim_whitespace' keyword in
-            ## pd.read_csv is deprecated and will be removed in a future
-            ## version. Use ``sep='\s+'`` instead.
-
-            chunks = read_csv(
-                fn,
-                delim_whitespace=True,
-                header=0,
-                usecols=list(header.keys()),
-                dtype=header,
-                comment="#",
-                chunksize=100_000, # Low memory chunks
-            )
-            # Concatenate chunks into single DataFrame
-            df = concat(chunks, ignore_index=True)
+       chunks = list(_load_vcf_data(fn, chunk_size))
+       df = concat(chunks, ignore_index=True)
     except FileNotFoundError:
         raise FileNotFoundError(f"File {fn} not found.")
     except Exception as e:
@@ -197,20 +176,23 @@ def _read_tsv(fn: str) -> DataFrame:
     return df
 
 
-def _read_loci(fn: str) -> DataFrame:
+def _read_loci(fn: str, chunk_size: int32 = 1_000_000) -> DataFrame:
     """
     Read loci information from a TSV file and add a sequential index column.
 
     Parameters:
     ----------
-    fn (str): The file path of the TSV file containing loci information.
+    fn : str
+        The file path of the TSV file containing loci information.
+    chunk_size : int
+        Number of records to include per chunk.
 
     Returns:
     -------
     DataFrame: A DataFrame containing the loci information with an
                additional 'i' column for indexing.
     """
-    df = _read_tsv(fn)
+    df = _read_vcf(fn, chunk_size)
     df["i"] = range(df.shape[0])
     return df
 
@@ -342,6 +324,65 @@ def _subset_populations(X: Array, npops: int) -> Array:
     return concatenate(pop_subset, 1, True)
 
 
+def _create_tabix(vcf_file: str) -> None:
+    """
+    Checks for the presence of a .tbi file for the given VCF.
+    If missing, create a tabix index using pysam.tabix_index.
+
+    Parameters
+    ----------
+    vcf_file : str
+        Path to the bgzip-compressed VCF file (.vcf.gz).
+
+    Raises
+    ------
+    RuntimeError
+        If indexing fails or input file is not properly bgzip compressed or sorted.
+    """
+    tbi_path = vcf_file + ".tbi"
+    if not exists(tbi_path):
+        print(f"Index file {tbi_path} not found, creating tabix index...")
+        try:
+            tabix_index(vcf_file, preset="vcf", force=True)
+            print("Tabix index created successfully.")
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to create tabix index for {vcf_file}: {str(e)}"
+            )
+
+
+def _load_vcf_data(vcf_file: str, chunk_size: int32 = 1_000_000
+                   ) -> Iterator[DataFrame]:
+    """
+    Load VCF records from a BGZF compressed and tabix indexed VCF file in chunks
+    using pysam and convert to DataFrames.
+
+    Parameters
+    ----------
+    vcf_file : str
+        Path to BGZF compressed VCF (.vcf.gz) with an associated .tbi index.
+    chunk_size : int
+        Number of records to include per chunk.
+
+    Yields
+    ------
+    DataFrame
+        DataFrame with 'chromosome' and 'physical_position' columns loaded chunk.
+    """
+    _create_tabix(vcf_file)
+    vcf = VariantFile(vcf_file)
+    records = []; count = 0
+    fetch_iter = vcf.fetch()
+    for rec in fetch_iter:
+        records.append({'chromosome': rec.chrom, 'physical_position': rec.pos})
+        count += 1
+        if count % chunk_size == 0:
+            yield DataFrame(records)
+            records = []
+    if records:
+        yield DataFrame(records)
+
+
 def _types(fn: str) -> dict:
     """
     Infer the data types of columns in a TSV file.
@@ -369,30 +410,6 @@ def _types(fn: str) -> dict:
         raise ValueError("The DataFrame does not contain any columns.")
 
     # Initialize the header dictionary with the sample_id column
-    header = {"sample_id": StringDtype()}
+    header = {"sample_id": CategoricalDtype()}
     header.update(df.dtypes[1:].to_dict())
     return header
-
-
-def _detect_flare_header(vcf_file: str) -> int:
-    """
-    Detect the number of header lines in a gzipped VCF file.
-
-    Parameters:
-    ----------
-    vcf_file : str
-        Path to the input VCF (.vcf.gz).
-
-    Returns:
-    -------
-    int
-        Number of lines to skip (lines beginning with '##').
-    """
-    n_skip = 0
-    with open(vcf_file, "rt") as f:
-        for line in f:
-            if line.startswith("##"):
-                n_skip += 1
-            else:
-                break
-    return n_skip
