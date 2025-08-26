@@ -7,7 +7,6 @@ from re import search
 from tqdm import tqdm
 from glob import glob
 from numpy import int32
-from pandas import StringDtype
 from dask.array import Array, concatenate
 from collections import OrderedDict as odict
 from os.path import basename, dirname, join, exists
@@ -28,9 +27,9 @@ except ModuleNotFoundError as e:
 
 
 if is_available():
-    from cudf import DataFrame, read_csv, concat
+    from cudf import DataFrame, read_csv, concat, CategoricalDtype
 else:
-    from pandas import DataFrame, read_csv, concat
+    from pandas import DataFrame, read_csv, concat, CategoricalDtype
 
 __all__ = ["read_rfmix"]
 
@@ -154,7 +153,7 @@ def _read_tsv(fn: str) -> DataFrame:
     -------
     DataFrame: DataFrame containing specified columns from the TSV file.
     """
-    header = {"chromosome": StringDtype(), "physical_position": int32}
+    header = {"chromosome": CategoricalDtype(), "physical_position": int32}
     try:
         if is_available():
             df = read_csv(fn, sep="\t", header=0, usecols=list(header.keys()),
@@ -373,7 +372,7 @@ def _types(fn: str) -> dict:
         raise ValueError("The DataFrame does not contain any columns.")
 
     # Initialize the header dictionary with the sample_id column
-    header = {"sample_id": StringDtype()}
+    header = {"sample_id": CategoricalDtype()}
     # Update the header dictionary with the data types of the remaining columns
     header.update(df.dtypes[1:].to_dict())
     return header
