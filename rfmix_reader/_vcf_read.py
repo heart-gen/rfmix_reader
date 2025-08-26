@@ -3,6 +3,7 @@ Adapted from `_bed_read.py` script in the `pandas-plink` package.
 Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_bed_read.py
 """
 from dask.delayed import delayed
+from pysam import tabix_index, VariantFile
 from dask.array import from_delayed, Array, concatenate
 from numpy import (
     ascontiguousarray,
@@ -46,7 +47,7 @@ def read_fb(
     # Validate input parameters
     if row_chunk <= 0 or col_chunk <= 0:
         raise ValueError("row_chunk and col_chunk must be positive integers.")
-    
+
     # Calculate row size and total size for memory mapping
     col_sx: list[Array] = []
     row_start = 0
@@ -70,7 +71,7 @@ def read_fb(
             col_start = col_end
         col_sx.append(concatenate(row_sx, 1, True))
         row_start = row_end
-        
+
     # Concatenate all chunks
     X = concatenate(col_sx, 0, True)
     assert isinstance(X, Array)
@@ -100,8 +101,41 @@ def _read_chunk(
     base_size = float32().nbytes
     offset = (row_start * ncols + col_start) * base_size
     size = (row_end - row_start, col_end - col_start)
-    
+
     buff = memmap(filepath, dtype=float32, mode="r",
                   offset=offset, shape=size)
     return ascontiguousarray(buff, int32)
-    
+
+
+def _load_vcf_data(vcf_file: str, chunk_size: int32 = 1_000_000
+                   ) -> Iterator[DataFrame]:
+    """
+    Load VCF records from a BGZF compressed and tabix indexed VCF file in chunks
+    using pysam and convert to DataFrames.
+
+    Parameters
+    ----------
+    vcf_file : str
+        Path to BGZF compressed VCF (.vcf.gz) with an associated .tbi index.
+    chunk_size : int
+        Number of records to include per chunk.
+
+    Yields
+    ------
+    DataFrame
+        DataFrame with 'chromosome' and 'physical_position' columns loaded chunk.
+    """
+    _create_tabix(vcf_file)
+    vcf = VariantFile(vcf_file)
+    records = []; count = 0
+    fetch_iter = vcf.fetch()
+
+    for rec in fetch_iter:
+        records.append({'chromosome': rec.chrom, 'physical_position': rec.pos})
+        count += 1
+        if count % chunk_size == 0:
+            yield DataFrame(records)
+            records = []
+
+    if records:
+        yield DataFrame(records)
