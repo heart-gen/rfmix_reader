@@ -61,7 +61,7 @@ def read_rfmix(
     g_anc : :class:`pandas.DataFrame`
         Global ancestry by chromosome from RFMix.
     admix : :class:`dask.array.Array`
-        Local ancestry per population (columns pop1*nsamples ... popX*nsamples).
+        Local ancestry per population stacked (variants, samples, ancestries).
         This is in order of the populations see `g_anc`.
 
     Notes
@@ -81,7 +81,7 @@ def read_rfmix(
     fn = get_prefixes(file_prefix, "rfmix", verbose)
 
     # Load loci information
-    pbar = tqdm(desc="Mapping loci info files", total=len(fn), disable=not verbose)
+    pbar = tqdm(desc="Mapping loci information", total=len(fn), disable=not verbose)
     loci = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
     pbar.close()
 
@@ -337,7 +337,7 @@ def _subset_populations(X: Array, npops: int) -> Array:
         X0_summed = X0[:, ::2] + X0[:, 1::2] # Sum adjacent columns
         pop_subset.append(X0_summed)
         pop_start += 1
-    return concatenate(pop_subset, 1, True)
+    return stack(pop_subset, axis=2)
 
 
 def _types(fn: str) -> dict:
