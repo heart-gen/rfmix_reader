@@ -2,6 +2,7 @@ from ._chunk import Chunk
 from ._fb_read import read_fb
 from ._write_data import write_data
 from ._read_rfmix import read_rfmix
+from ._read_flare import read_flare
 from ._loci_bed import admix_to_bed_individual
 from ._tagore import plot_local_ancestry_tagore
 from ._constants import CHROM_SIZES, COORDINATES
@@ -33,6 +34,7 @@ __all__ = [
     "get_pops",
     "write_data",
     "read_rfmix",
+    "read_flare",
     "CHROM_SIZES",
     "COORDINATES",
     "__version__",
