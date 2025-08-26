@@ -181,7 +181,7 @@ def get_prefixes(file_prefix: str, mode: str = "rfmix", verbose: bool = True):
 
         # Construct prefix-to-file mapping
         fn = [
-            {sfx: f"{fp}.{sfx}" for sfx in mode_suffixes}
+            {sfx: f"{fp}.{sfx}" for sfx in mode_suffixes[mode]}
             for fp in file_prefixes
         ]
 
