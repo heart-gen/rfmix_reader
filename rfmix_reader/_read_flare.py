@@ -15,8 +15,8 @@ from typing import Optional, Callable, List, Tuple, Dict
 
 from ._chunk import Chunk
 from ._fb_read import read_fb
+from ._utils import get_prefixes
 from ._utils import set_gpu_environment
-from ._utils import get_prefixes, create_binaries
 from ._errorhandling import BinaryFileNotFoundError
 
 try:
@@ -35,8 +35,7 @@ else:
 __all__ = ["read_flare"]
 
 def read_flare(
-        file_prefix: str, binary_dir: str = "./binary_files",
-        generate_binary: bool = False, verbose: bool = True,
+        file_prefix: str, verbose: bool = True,
 ) -> Tuple[DataFrame, DataFrame, Array]:
     """
     Read Flare files into data frames and a Dask array.
@@ -46,11 +45,6 @@ def read_flare(
     file_prefix : str
         Path prefix to the set of Flare files. It will load all of the chromosomes
         at once.
-    binary_dir : str, optional
-        Path prefix to the binary version of Flare (*fb.tsv) files. Default is
-        "./binary_files".
-    generate_binary: bool, optional
-       :const:`True` generate the binary file. Default: `False`.
     verbose : bool, optional
         :const:`True` for progress information; :const:`False` otherwise.
         Default:`True`.
@@ -80,8 +74,8 @@ def read_flare(
         set_gpu_environment()
 
     # Get file prefixes
-    fn = get_prefixes(file_prefix, "flare", verbose
-)
+    fn = get_prefixes(file_prefix, "flare", verbose)
+
     # Load loci information
     pbar = tqdm(desc="Mapping loci info files", total=len(fn), disable=not verbose)
     loci = _read_file(fn, lambda f: _read_loci(f["anc.vcf.gz"]), pbar)
@@ -160,15 +154,18 @@ def _read_tsv(fn: str) -> DataFrame:
     DataFrame: DataFrame containing specified columns from the TSV file.
     """
     header = {"chromosome": StringDtype(), "physical_position": int32}
+    n_skip = _detect_flare_header(fn)
+    
     try:
         if is_available():
             df = read_csv(
                 fn,
                 sep="\t",
-                header=0,
-                usecols=list(header.keys()),
-                dtype=header,
-                comment="#"
+                skiprows=n_skip,
+                usecols=[0, 1],
+                dtype=list(header.values()),
+                names=list(header.keys()),
+                compression="gzip",
             )
         else:
             ## TODO: FutureWarning: The 'delim_whitespace' keyword in
@@ -182,7 +179,7 @@ def _read_tsv(fn: str) -> DataFrame:
                 usecols=list(header.keys()),
                 dtype=header,
                 comment="#",
-                chunksize=100000, # Low memory chunks
+                chunksize=100_000, # Low memory chunks
             )
             # Concatenate chunks into single DataFrame
             df = concat(chunks, ignore_index=True)
@@ -375,3 +372,27 @@ def _types(fn: str) -> dict:
     header = {"sample_id": StringDtype()}
     header.update(df.dtypes[1:].to_dict())
     return header
+
+
+def _detect_flare_header(vcf_file: str) -> int:
+    """
+    Detect the number of header lines in a gzipped VCF file.
+
+    Parameters:
+    ----------
+    vcf_file : str
+        Path to the input VCF (.vcf.gz).
+
+    Returns:
+    -------
+    int
+        Number of lines to skip (lines beginning with '##').
+    """
+    n_skip = 0
+    with open(vcf_file, "rt") as f:
+        for line in f:
+            if line.startswith("##"):
+                n_skip += 1
+            else:
+                break
+    return n_skip
