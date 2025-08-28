@@ -88,27 +88,31 @@ def _expand_array(
     - The resulting Zarr array is saved to disk at the specified path.
     - Memory usage may be high when dealing with large datasets.
     """
-    from numpy import nan, int32
-    from numpy import any as nany
-    from numpy import where as nwhere
     _print_logger("Generate empty Zarr.")
+
     # Open Zarr array without loading into memory
     z = zarr.open(f"{zarr_outdir}/local-ancestry.zarr", mode="w",
-                  shape=(variant_loci_df.shape[0], admix.shape[1]),
-                  chunks=(8000, 2000), dtype='float32')
+                  shape=(variant_loci_df.shape[0],
+                         admix.shape[1], admix.shape[2]),
+                  chunks=(8000, 200, admix.shape[2]),
+                  dtype='float32')
+
     # Get indices of NaN-containing rows
     nan_rows_mask = variant_loci_df.isnull().any(axis=1).values
-    nan_indices = nwhere(nan_rows_mask)[0]
+    nan_rows_mask = arr_mod.asarray(nan_rows_mask)
+    nan_indices = arr_mod.where(nan_rows_mask)[0]
+
     _print_logger(f"Filling Zarr ({len(nan_indices)} rows) with NaNs.")
     # Batch processing for NaNs (vectorized)
     if nan_indices.size > 0:
-        z[nan_indices, :] = nan
+        z[nan_indices, :, :] = arr_mod.nan
+
     # Process `admix` in blocks
     _print_logger("Filling Zarr with local ancestry data in batches.")
     for start in range(0, admix.shape[0], batch_size):
         end = min(start + batch_size, admix.shape[0])
-        if nany(~nan_rows_mask[start:end]): # Skip NaN rows
-            z[start:end, :] = admix[start:end].compute()
+        if arr_mod.any(~nan_rows_mask[start:end]):
+            z[start:end, :, :] = admix[start:end].compute()
     _print_logger("Zarr array successfully populated!")
     return z
 
@@ -137,8 +141,9 @@ def _interpolate_col(col: arr_mod.ndarray) -> arr_mod.ndarray:
     idx = arr_mod.arange(len(col))
     valid = ~mask
     if arr_mod.any(valid):
-        interpolated = arr_mod.round(arr_mod.interp(idx[mask], idx[valid],
-                                                    col[valid]))
+        interpolated = arr_mod.round(
+            arr_mod.interp(idx[mask], idx[valid], col[valid])
+        )
         col = col.copy() # Avoid modifying the original array
         col[mask] = interpolated.astype(int)
     return col
@@ -194,14 +199,16 @@ def interpolate_array(
     """
     _print_logger("Starting expansion!")
     z = _expand_array(variant_loci_df, admix, zarr_outdir)
-    total_rows, _ = z.shape
-    # Process the data in chunks
+
+    total_rows, _, _ = z.shape
     _print_logger("Interpolating data!")
+
     for i in tqdm(range(0, total_rows, chunk_size),
                   desc="Processing chunks", unit="chunk"):
         end = min(i + chunk_size, total_rows)
-        chunk = arr_mod.array(z[i:end, :])
+        chunk = arr_mod.array(z[i:end, :, :])
         interp_chunk = arr_mod.apply_along_axis(_interpolate_col, axis=0,
                                                 arr=chunk)
-        z[i:end, :] = interp_chunk.get() if is_available() else interp_chunk
+        z[i:end, :, :] = interp_chunk.get() if is_available() else interp_chunk
+
     return z
