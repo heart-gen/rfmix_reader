@@ -4,14 +4,14 @@ Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_read.py
 """
 from re import search
 from tqdm import tqdm
+from cyvcf2 import VCF
 from numpy import int32
 from dask import delayed
 from os.path import exists
 from re import match as rmatch
-from pysam import tabix_index, VariantFile
 from collections import OrderedDict as odict
 from typing import Callable, List, Tuple, Iterator
-from dask.array import Array, concatenate, from_delayed
+from dask.array import Array, concatenate, from_delayed, stack
 
 from ._utils import get_prefixes, set_gpu_environment
 
@@ -22,14 +22,11 @@ except ModuleNotFoundError as e:
     def is_available():
         return False
 
-
 if is_available():
-    from cupy import int32 as py_int32
-    from cupy import array, full, zeros
+    from cupy import array, full, zeros, asarray, int8
     from cudf import DataFrame, read_csv, concat, CategoricalDtype
 else:
-    from numpy import int32 as py_int32
-    from numpy import array, full, zeros
+    from numpy import array, full, zeros, asarray, int8
     from pandas import DataFrame, read_csv, concat, CategoricalDtype
 
 __all__ = ["read_flare"]
@@ -59,7 +56,7 @@ def read_flare(
         Global ancestry by chromosome from Flare.
     admix : :class:`dask.array.Array`
         Local ancestry per population stacked (variants, samples, ancestries).
-        This is in alphabetical order of the populations.
+        This is in alphabetical order of the populations. This matches RFMix.
 
     Notes
     -----
@@ -294,58 +291,39 @@ def _load_haplotypes(vcf_file: str, chunk_size: int32 = 10_000) -> Array:
     (270000, 500, 2)
     >>> afr_counts = dask_array[:, :, 0]  # Access AFR ancestry slice
     """
-
     if not exists(vcf_file):
         raise FileNotFoundError(f"VCF file not found: {vcf_file}")
 
-    try:
-        vcf = VariantFile(vcf_file)
-    except FileNotFoundError:
-        raise
-    except Exception as e:
-        raise RuntimeError(f"Error opening VCF file {vcf_file}: {e}")
-
-    samples = list(vcf.header.samples)
+    vcf = VCF(vcf_file)
+    samples = vcf.samples
     n_samples = len(samples)
 
-    ancestries = _parse_ancestry_header(vcf_file)
-    pop_labels = sorted(ancestries.keys())
-    n_pop = len(pop_labels)
-    idx_pop = {v: k for k, v in ancestries.items()}
-
-    # Detect ancestry keys from first record
-    first_record = next(vcf.fetch())
-    an_keys = ['AN1', 'AN2'] # This is based on haplotypes
-    vcf = VariantFile(vcf_file)  # reset iterator
+    # Parse ancestry header
+    ancestry_map = _parse_ancestry_header(vcf_file)
+    n_ancestries = len(ancestry_map)
 
     def process_chunk(records):
         chunk_len = len(records)
-        # Create arrays; variants x samples x ancestries
-        counts = zeros((chunk_len, n_samples, n_pop), dtype=py_int32)
+        counts = zeros((chunk_len, n_samples, n_ancestries), dtype=int8)
 
-        for i, record in enumerate(records):
-            for j, sample in enumerate(samples):
-                hap_val = [
-                    record.samples[sample].get(an_key, -1) for an_key in an_keys
-                ]
+        for i, rec in enumerate(records):
+            an1 = rec.format("AN1")
+            an2 = rec.format("AN2")
 
-                # Sum counts for ancestry
-                if all(h == hap_val[0] for h in hap_val):
-                    anc_idx = hap_val[0]
-                    if anc_idx in idx_pop:
-                        counts[i, j, anc_idx] += len(hap_val)
-                    else:
-                        for anc_idx in hap_val:
-                            if anc_idx in idx_pop:
-                                counts[i, j, anc_idx] += 1
+            # Mask missing values as -1
+            an1 = asarray(an1, dtype=int8)
+            an2 = asarray(an2, dtype=int8)
+
+            # Count local ancestries in vectorized fashion
+            for anc_idx in range(n_ancestries):
+                counts[i, :, anc_idx] = (an1 == anc_idx).astype(int8) + (an2 == anc_idx).astype(int8)
+
         return counts
 
     records_buffer = []
     delayed_arrays = []
-
-    fetch_iter = vcf.fetch()
-    for record in fetch_iter:
-        records_buffer.append(record)
+    for rec in vcf:
+        records_buffer.append(rec)
         if len(records_buffer) == chunk_size:
             delayed_arrays.append(delayed(process_chunk)(records_buffer))
             records_buffer = []
@@ -353,17 +331,18 @@ def _load_haplotypes(vcf_file: str, chunk_size: int32 = 10_000) -> Array:
     if records_buffer:
         delayed_arrays.append(delayed(process_chunk)(records_buffer))
 
-    # Build dask arrays by stacking
+    # Build dask arrays by stacking (variants, samples, ancestries)
     combined = concatenate(
-        [from_delayed(d, shape=(chunk_size, n_samples, n_pop),
-                      dtype=py_int32) for d in delayed_arrays],
+        [from_delayed(d, shape=(chunk_size, n_samples, n_ancestries), dtype=int8)
+         for d in delayed_arrays],
         axis=0,
     )
 
     an_dask_arrays = {
-        label: combined[:, :, ancestries[label]] for label in pop_labels
+        label: combined[:, :, ancestry_map[label]] for label in ancestry_map.keys()
     }
     arrays_list = [an_dask_arrays[k] for k in sorted(an_dask_arrays.keys())]
+
     return stack(arrays_list, axis=2)
 
 
@@ -384,18 +363,17 @@ def _parse_ancestry_header(vcf_file: str) -> dict:
     dict
         Mapping from ancestry label (e.g., 'EUR') to integer index (e.g., 0).
     """
-    import gzip
+    vcf = VCF(vcf_file)
     ancestries = {}
-    with gzip.open(vcf_file, "rt") as f:
-        for line in f:
-            if line.startswith("##ANCESTRY="):
-                m = search(r"<(.+)>", line)
-                if m:
-                    pairs = m.group(1).split(",")
-                    for pair in pairs:
-                        label, idx = pair.split("=")
-                        ancestries[label] = int(idx)
-                break
+    for hline in vcf.raw_header.splitlines():
+        if hline.startswith("##ANCESTRY="):
+            m = search(r"<(.+)>", hline)
+            if m:
+                pairs = m.group(1).split(",")
+                for pair in pairs:
+                    label, idx = pair.split("=")
+                    ancestries[label] = int(idx)
+            break
     return ancestries
 
 
@@ -417,13 +395,11 @@ def _load_vcf_info(vcf_file: str, chunk_size: int32 = 1_000_000
     DataFrame
         DataFrame with 'chromosome' and 'physical_position' columns loaded chunk.
     """
-    _create_tabix(vcf_file)
-    vcf = VariantFile(vcf_file)
-    records = []; count = 0
-    fetch_iter = vcf.fetch()
+    vcf = VCF(vcf_file)
+    records, count = [], 0
 
-    for rec in fetch_iter:
-        records.append({'chromosome': rec.chrom, 'physical_position': rec.pos})
+    for rec in vcf:
+        records.append({'chromosome': rec.CHROM, 'physical_position': rec.POS})
         count += 1
         if count % chunk_size == 0:
             yield DataFrame(records)
@@ -431,33 +407,6 @@ def _load_vcf_info(vcf_file: str, chunk_size: int32 = 1_000_000
 
     if records:
         yield DataFrame(records)
-
-
-def _create_tabix(vcf_file: str) -> None:
-    """
-    Checks for the presence of a .tbi file for the given VCF.
-    If missing, create a tabix index using pysam.tabix_index.
-
-    Parameters
-    ----------
-    vcf_file : str
-        Path to the bgzip-compressed VCF file (.vcf.gz).
-
-    Raises
-    ------
-    RuntimeError
-        If indexing fails or input file is not properly bgzip compressed or sorted.
-    """
-    tbi_path = vcf_file + ".tbi"
-    if not exists(tbi_path):
-        print(f"Index file {tbi_path} not found, creating tabix index...")
-        try:
-            tabix_index(vcf_file, preset="vcf", force=True)
-            print("Tabix index created successfully.")
-        except Exception as e:
-            raise RuntimeError(
-                f"Failed to create tabix index for {vcf_file}: {str(e)}"
-            )
 
 
 def _types(fn: str) -> dict:
