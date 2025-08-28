@@ -27,6 +27,7 @@ seaborn = "^0.13.2"
 matplotlib = "^3.10.1"
 cairosvg = "^2.7.1"
 cyvcf2 = "^0.31.1"
+psutil = "^7.0.0"
 
 [tool.poetry.scripts]
 create-binaries = "rfmix_reader._cli:main"
