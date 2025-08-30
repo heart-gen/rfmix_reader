@@ -159,12 +159,9 @@ def _read_tsv(fn: str) -> DataFrame:
             df = read_csv(fn, sep="\t", header=0, usecols=list(header.keys()),
                           dtype=header, comment="#")
         else:
-            ## TODO: FutureWarning: The 'delim_whitespace' keyword in
-            ## pd.read_csv is deprecated and will be removed in a future
-            ## version. Use ``sep='\s+'`` instead.
             chunks = read_csv(
                 fn,
-                delim_whitespace=True,
+                sep=r"\s+",
                 header=0,
                 usecols=list(header.keys()),
                 dtype=header,
@@ -223,7 +220,7 @@ def _read_csv(fn: str, header: dict) -> DataFrame:
             df = read_csv(fn, sep="\t", header=None, names=list(header.keys()),
                           dtype=header, comment="#")
         else:
-            df = read_csv(fn, delim_whitespace=True, header=None,
+            df = read_csv(fn, sep=r"\s+", header=None,
                           names=list(header.keys()), dtype=header, comment="#",
                           compression=None, engine="c", iterator=False)
     except Exception as e:
@@ -357,7 +354,7 @@ def _types(fn: str) -> dict:
         if is_available():
             df = read_csv(fn, sep="\t", nrows=2, skiprows=1)
         else:
-            df = read_csv(fn, delim_whitespace=True, nrows=2, skiprows=1)
+            df = read_csv(fn, sep=r"\s+", nrows=2, skiprows=1)
 
     except FileNotFoundError:
         raise FileNotFoundError(f"File '{fn}' not found.")
