@@ -5,6 +5,7 @@ This is a time consuming process, but should only need to be done once.
 Loading the data becomes very fast because data is saved to a Zarr.
 """
 import zarr
+import numpy as np
 from tqdm import tqdm
 from time import strftime
 from pandas import DataFrame
@@ -102,10 +103,13 @@ def _expand_array(
     nan_rows_mask = arr_mod.asarray(nan_rows_mask)
     nan_indices = arr_mod.where(nan_rows_mask)[0]
 
+    if hasattr(nan_indices, "get"):
+        nan_indices = nan_indices.get()
+        
     _print_logger(f"Filling Zarr ({len(nan_indices)} rows) with NaNs.")
     # Batch processing for NaNs (vectorized)
     if nan_indices.size > 0:
-        z[nan_indices, :, :] = arr_mod.nan
+        z[nan_indices, :, :] = np.nan
 
     # Process `admix` in blocks
     _print_logger("Filling Zarr with local ancestry data in batches.")
