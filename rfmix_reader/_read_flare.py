@@ -412,6 +412,7 @@ def _load_vcf_info(vcf_file: str, chunk_size: int32 = 1_000_000
 def _types(fn: str) -> dict:
     """
     Infer the data types of columns in a TSV file.
+    For FLARE global ancestry (global.anc.gz), force float32.
 
     Parameters:
     ----------
@@ -437,5 +438,11 @@ def _types(fn: str) -> dict:
 
     # Initialize the header dictionary with the sample_id column
     header = {"sample_id": CategoricalDtype()}
-    header.update(df.dtypes[1:].to_dict())
+    # For global ancestry files, force float32
+    if fn.endswith("global.anc.gz"):
+        for col in df.columns[1:]:
+            header[col] = 'float32'
+    else:
+        header.update(df.dtypes[1:].to_dict())
+
     return header
