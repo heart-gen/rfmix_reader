@@ -2,6 +2,7 @@
 Revision of `_read_flare.py` to work with data generated from
 `haptools simgenotype` with population field flag (`--pop_field`).
 """
+from re import search
 from tqdm import tqdm
 from glob import glob
 from cyvcf2 import VCF
@@ -215,7 +216,22 @@ def _load_haplotypes_from_pop(vcf_file: str, chunk_size: int = 10_000) -> Array:
 
 
 def _calculate_global_ancestry_from_pop(vcf_file: str) -> DataFrame:
-    """Calculate global ancestry from POP."""
+    """
+    Calculate per-sample global ancestry proportions from a VCF file with GT:POP.
+
+    Adds a 'chrom' column extracted from the filename (e.g., 'chr21.vcf.gz').
+
+    Parameters
+    ----------
+    vcf_file : str
+        Path to the VCF file.
+
+    Returns
+    -------
+    DataFrame
+        Global ancestry proportions with columns: sample_id, <ancestries...>, chrom
+    """
+    # Get information from VCF
     vcf = VCF(vcf_file)
     samples = vcf.samples
     ancestries = _parse_pop_labels(vcf_file)
@@ -237,7 +253,6 @@ def _calculate_global_ancestry_from_pop(vcf_file: str) -> DataFrame:
                 continue
 
             haps = [hap.strip() for hap in pop_string.split(",") if hap.strip()]
-            
             for hap in haps:
                 global_counts[s_idx, anc_index[hap]] += 1
                 total_alleles[s_idx] += 1
@@ -245,18 +260,35 @@ def _calculate_global_ancestry_from_pop(vcf_file: str) -> DataFrame:
     # Normalize to fractions
     fractions = global_counts / total_alleles[:, None]
     df = DataFrame(fractions, columns=ancestries)
-    df.insert(0, "SAMPLE", samples)
+    df.insert(0, "sample_id", samples)
+
+    # Extract chromosome from filename (e.g., "chr21" or "chrX")
+    m = search(r'chr[\w]+', vcf_file)
+    if m:
+        chrom = m.group(0)
+        df["chrom"] = chrom
+    else:
+        print(f"Warning: Could not extract chromosome information from '{vcf_file}'")
+        df["chrom"] = None
+
     return df
 
 
 def _get_vcf_files(vcf_path: str) -> List[str]:
     if isdir(vcf_path):
-        vcf_files = sorted(glob(join(vcf_path, "*.vcf.gz")))
+        vcf_files = sorted(
+            f for f in glob(join(vcf_path, "*.vcf.gz"))
+            if not f.endswith("anc.vcf.gz")
+        )
     elif isfile(vcf_path) and vcf_path.endswith(".vcf.gz"):
-        vcf_files = [vcf_path]
+        if vcf_path.endswith("anc.vcf.gz"):
+            vcf_files = []
+        else:
+            vcf_files = [vcf_path]
     else:
         raise ValueError(f"Invalid input: {vcf_path} must be a .vcf.gz file or directory containing them.")
 
     if not vcf_files:
         raise FileNotFoundError(f"No VCF files found in path: {vcf_path}")
+
     return vcf_files
