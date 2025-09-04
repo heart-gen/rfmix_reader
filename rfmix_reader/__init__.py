@@ -1,5 +1,6 @@
 from ._chunk import Chunk
 from ._fb_read import read_fb
+from ._read_simu import read_simu
 from ._write_data import write_data
 from ._read_rfmix import read_rfmix
 from ._read_flare import read_flare
@@ -32,6 +33,7 @@ __all__ = [
     "Chunk",
     "read_fb",
     "get_pops",
+    "read_simu",
     "write_data",
     "read_rfmix",
     "read_flare",

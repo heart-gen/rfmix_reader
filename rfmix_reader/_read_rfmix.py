@@ -56,11 +56,11 @@ def read_rfmix(
 
     Returns
     -------
-    loci : :class:`pandas.DataFrame`
+    loci_df : :class:`pandas.DataFrame`
         Loci information for the FB data.
     g_anc : :class:`pandas.DataFrame`
         Global ancestry by chromosome from RFMix.
-    admix : :class:`dask.array.Array`
+    local_array : :class:`dask.array.Array`
         Local ancestry per population stacked (variants, samples, ancestries).
         This is in order of the populations see `g_anc`.
 
@@ -82,16 +82,16 @@ def read_rfmix(
 
     # Load loci information
     pbar = tqdm(desc="Mapping loci information", total=len(fn), disable=not verbose)
-    loci = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
+    loci_dfs = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
     pbar.close()
 
     # Adjust loci indices and concatenate
     nmarkers = {}; index_offset = 0
-    for i, bi in enumerate(loci):
+    for i, bi in enumerate(loci_dfs):
         nmarkers[fn[i]["fb.tsv"]] = bi.shape[0]
         bi["i"] += index_offset
         index_offset += bi.shape[0]
-    loci = concat(loci, axis=0, ignore_index=True)
+    loci_df = concat(loci_dfs, axis=0, ignore_index=True)
 
     # Load global ancestry per chromosome
     pbar = tqdm(desc="Mapping global ancestry files", total=len(fn), disable=not verbose)
@@ -107,7 +107,7 @@ def read_rfmix(
         create_binaries(file_prefix, binary_dir)
 
     pbar = tqdm(desc="Mapping local ancestry files", total=len(fn), disable=not verbose)
-    admix = _read_file(
+    local_array = _read_file(
         fn,
         lambda f: _read_fb(f["fb.tsv"], nsamples,
                            nmarkers[f["fb.tsv"]], pops,
@@ -115,8 +115,8 @@ def read_rfmix(
         pbar,
     )
     pbar.close()
-    admix = concatenate(admix, axis=0)
-    return loci, g_anc, admix
+    local_array = concatenate(local_array, axis=0)
+    return loci_df, g_anc, local_array
 
 
 def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:
