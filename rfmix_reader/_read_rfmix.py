@@ -245,13 +245,14 @@ def _read_Q(fn: str) -> DataFrame:
     DataFrame: The Q matrix with the chromosome information added.
     """
     df = _read_Q_noi(fn)
-    match = search(r'chr(\d+)', fn)
 
-    if match:
-        chrom = match.group(0)
+    m = search(r'chr[\d]+', fn)
+    if m:
+        chrom = m.group(0)
         df["chrom"] = chrom
     else:
         print(f"Warning: Could not extract chromosome information from '{fn}'")
+
     return df
 
 
