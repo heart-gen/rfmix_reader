@@ -9,10 +9,10 @@ from cyvcf2 import VCF
 from numpy import int32
 from dask import delayed
 from os.path import isdir, join, isfile
-from typing import Callable, List, Tuple, Iterator
+from typing import List, Tuple, Iterator
 from dask.array import Array, concatenate, from_delayed, stack
 
-from ._utils import set_gpu_environment
+from ._utils import set_gpu_environment, _read_file
 
 try:
     from torch.cuda import is_available
@@ -40,22 +40,26 @@ def read_simu(
     Parameters
     ----------
     vcf_path : str
-        Path to BGZF compressed ancestry VCF.
-    chunk_size : int
-        Variants per chunk to load for efficiency.
-    verbose : bool, optional
-        :const:`True` for progress information; :const:`False` otherwise.
-        Default:`True`.
+        Path to directory contianing BGZF-compressed VCF files (`.vcf.gz`)
+        (e.g., one per chromosome).
+    chunk_size : int, default=1_000_000
+        Number of variant records to process per chunk when reading. Smaller
+        values reduce memory footprint, at the cost of more I/O.
+    verbose : bool, default=True
+        If True, show progress bars during parsing.
 
     Returns
     -------
     loci_df : :class:`DataFrame`
-        Loci information for the FB data.
+        Chromosome, physical position, and sequential index of all variants.
+        Columns: ['chromosome', 'physical_position', 'i'].
     g_anc : :class:`DataFrame`
-        Per-sample global ancestry proportions per chromosome.
+        Per-sample global ancestry proportions for each chromosome.
+        Columns: ['sample_id', <ancestry labels...>, 'chrom'].
     local_array : :class:`dask.array.Array`
-        Local ancestry per population stacked (variants, samples, ancestries).
-        This is in alphabetical order of the populations. This matches RFMix.
+        Local ancestry counts with shape (variants, samples, ancestries).
+        The last axis is ordered alphabetically by ancestry label, ensuring
+        compatibility with RFMix-style conventions.
     """
     # Device information
     if verbose and is_available():
@@ -106,43 +110,18 @@ def read_simu(
     return loci_df, g_anc, local_array
 
 
-def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:
-    """
-    Read data from multiple files using a provided read function.
-
-    Parameters:
-    ----------
-    fn : List[str]
-        A list of file paths to read.
-    read_func : Callable
-        A function to read data from each file.
-    pbar : Optional
-        A progress bar object to update during reading.
-
-    Returns:
-    -------
-    List: A list containing the data read from each file.
-    """
-    data = [];
-    for file_name in fn:
-        data.append(read_func(file_name))
-        if pbar:
-            pbar.update(1)
-    return data
-
-
 def _read_loci_from_vcf(
         vcf_file: str, chunk_size: int32 = 1_000_000
 ) -> Iterator[DataFrame]:
     """
-    Load chromosomal position (loci) information from a BGZF-compressed VCF file.
+    Extract loci information (chromosome and position) from a VCF file.
 
     Parameters
     ----------
     vcf_file : str
-        Path to the VCF file.
-    chunk_size : int, optional
-        Number of records to process per chunk.
+        Path to a BGZF-compressed, tabix-indexed VCF file.
+    chunk_size : int, default=1_000_000
+        Number of variant records per yielded chunk.
 
     Yields
     ------
@@ -165,7 +144,27 @@ def _read_loci_from_vcf(
 
 
 def _parse_pop_labels(vcf_file: str) -> List[str]:
-    """Read the unique ancestries from POP field."""
+    """
+    Parse ancestry population labels from the `POP` field of a VCF.
+
+    This function inspects the first record with non-empty `POP` annotations
+    and extracts all unique ancestry labels.
+
+    Parameters
+    ----------
+    vcf_file : str
+        Path to a VCF with a `POP` FORMAT field.
+
+    Returns
+    -------
+    list of str
+        Sorted list of ancestry labels (alphabetical order).
+
+    Raises
+    ------
+    ValueError
+        If no `POP` field is found in the file.
+    """
     vcf = VCF(vcf_file)
     for rec in vcf:
         for sample_field in rec.format("POP"):
@@ -176,11 +175,30 @@ def _parse_pop_labels(vcf_file: str) -> List[str]:
 
 
 def _load_haplotypes_from_pop(vcf_file: str, chunk_size: int = 10_000) -> Array:
-    """Generate the Dask array with haplotypes."""
+    """
+    Build a local ancestry tensor from the `POP` FORMAT field.
+
+    Each allele for each sample is labeled by ancestry in the VCF.
+    This function constructs a Dask array of counts per ancestry.
+
+    Parameters
+    ----------
+    vcf_file : str
+        Path to ancestry-annotated VCF.
+    chunk_size : int, default=10_000
+        Number of variant records per processing chunk.
+
+    Returns
+    -------
+    dask.array.Array
+        Array of shape (variants, samples, ancestries). Each entry indicates
+        how many haplotypes (0, 1, or 2) of that ancestry are observed for
+        the given variant/sample.
+    """
     vcf = VCF(vcf_file)
     samples = vcf.samples
     n_samples = len(samples)
-    ancestries = _parse_pop_labels(vcf_file)
+    ancestries = sorted(_parse_pop_labels(vcf_file))
     anc_index = {label: i for i, label in enumerate(ancestries)}
     n_ancestries = len(ancestries)
 
@@ -211,20 +229,20 @@ def _load_haplotypes_from_pop(vcf_file: str, chunk_size: int = 10_000) -> Array:
     arrays = [from_delayed(d, shape=(None, n_samples, n_ancestries), dtype=int8)
               for d in delayed_chunks]
     stacked = concatenate(arrays, axis=0)
-    return stack([stacked[:, :, anc_index[anc]]
-                  for anc in sorted(anc_index)], axis=2)
+    return stacked
 
 
 def _calculate_global_ancestry_from_pop(vcf_file: str) -> DataFrame:
     """
-    Calculate per-sample global ancestry proportions from a VCF file with GT:POP.
+    Compute global ancestry proportions directly from the `POP` field.
 
-    Adds a 'chrom' column extracted from the filename (e.g., 'chr21.vcf.gz').
+    Counts all haplotypes across variants for each sample and normalizes
+    to per-sample fractions. A chromosome label is added from the filename.
 
     Parameters
     ----------
     vcf_file : str
-        Path to the VCF file.
+        Path to ancestry-annotated VCF.
 
     Returns
     -------
@@ -275,6 +293,26 @@ def _calculate_global_ancestry_from_pop(vcf_file: str) -> DataFrame:
 
 
 def _get_vcf_files(vcf_path: str) -> List[str]:
+    """
+    Resolve a path into a list of ancestry-annotated VCF files.
+
+    Parameters
+    ----------
+    vcf_path : str
+        Path to a directory containing `.vcf.gz` files.
+
+    Returns
+    -------
+    list of str
+        Sorted list of VCF file paths.
+
+    Raises
+    ------
+    ValueError
+        If `vcf_path` is not a valid file or directory.
+    FileNotFoundError
+        If no VCF files matching the pattern are found.
+    """
     if isdir(vcf_path):
         vcf_files = sorted(
             f for f in glob(join(vcf_path, "*.vcf.gz"))
