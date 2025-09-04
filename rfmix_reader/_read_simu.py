@@ -234,15 +234,25 @@ def _load_haplotypes_from_pop(vcf_file: str, chunk_size: int = 10_000) -> Array:
 
 def _calculate_global_ancestry_from_pop(vcf_file: str) -> DataFrame:
     """
+<<<<<<< HEAD
     Compute global ancestry proportions directly from the `POP` field.
 
     Counts all haplotypes across variants for each sample and normalizes
     to per-sample fractions. A chromosome label is added from the filename.
+=======
+    Calculate per-sample global ancestry proportions from a VCF file with GT:POP.
+
+    Adds a 'chrom' column extracted from the filename (e.g., 'chr21.vcf.gz').
+>>>>>>> 7db3c01 (added chromosome column and updated matching to handle chrX cases; we don't expect these, but good to have already)
 
     Parameters
     ----------
     vcf_file : str
+<<<<<<< HEAD
         Path to ancestry-annotated VCF.
+=======
+        Path to the VCF file.
+>>>>>>> 7db3c01 (added chromosome column and updated matching to handle chrX cases; we don't expect these, but good to have already)
 
     Returns
     -------
