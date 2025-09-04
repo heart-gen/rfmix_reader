@@ -8,11 +8,11 @@ from numpy import int32
 from dask import delayed
 from os.path import exists
 from re import match as rmatch
+from typing import List, Tuple, Iterator
 from collections import OrderedDict as odict
-from typing import Callable, List, Tuple, Iterator
 from dask.array import Array, concatenate, from_delayed, stack
 
-from ._utils import get_prefixes, set_gpu_environment
+from ._utils import get_prefixes, set_gpu_environment, _read_file
 
 try:
     from torch.cuda import is_available
@@ -104,31 +104,6 @@ def read_flare(
     pbar.close()
     local_array = concatenate(local_array, axis=0)
     return loci_df, g_anc, local_array
-
-
-def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:
-    """
-    Read data from multiple files using a provided read function.
-
-    Parameters:
-    ----------
-    fn : List[str]
-        A list of file paths to read.
-    read_func : Callable
-        A function to read data from each file.
-    pbar : Optional
-        A progress bar object to update during reading.
-
-    Returns:
-    -------
-    List: A list containing the data read from each file.
-    """
-    data = [];
-    for file_name in fn:
-        data.append(read_func(file_name))
-        if pbar:
-            pbar.update(1)
-    return data
 
 
 def _read_vcf(fn: str, chunk_size: int32 = 1_000_000) -> DataFrame:

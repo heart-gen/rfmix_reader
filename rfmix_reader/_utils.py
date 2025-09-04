@@ -4,6 +4,7 @@ from os import makedirs
 from pathlib import Path
 from re import search as rsearch
 from numpy import float32, array
+from typing import Callable, List
 from multiprocessing import Pool, cpu_count
 from subprocess import run, CalledProcessError
 from os.path import basename, dirname, join, exists
@@ -16,11 +17,39 @@ except ImportError:
 
 __all__ = [
     "get_pops",
+    "_read_file",
     "get_sample_names",
     "set_gpu_environment",
     "delete_files_or_directories",
     "get_prefixes", "create_binaries"
 ]
+
+def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List[str]:
+    """
+    Apply a reader function across multiple input files.
+
+    Parameters:
+    ----------
+    fn : list of str
+        Paths to files (e.g., one per chromosome).
+    read_func : callable
+        Function that accepts a file path and returns a parsed object
+        (e.g., DataFrame or Dask array).
+    pbar : tqdm, optional
+        Progress bar to update after each file is processed
+
+    Returns:
+    -------
+    list
+        List of objects returned by `read_func`, one per file.
+    """
+    data = [];
+    for file_name in fn:
+        data.append(read_func(file_name))
+        if pbar:
+            pbar.update(1)
+    return data
+
 
 def set_gpu_environment():
     """

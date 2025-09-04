@@ -8,15 +8,15 @@ from tqdm import tqdm
 from glob import glob
 from numpy import int32
 from collections import OrderedDict as odict
+from typing import Optional, List, Tuple, Dict
 from dask.array import Array, concatenate, stack
 from os.path import basename, dirname, join, exists
-from typing import Optional, Callable, List, Tuple, Dict
 
 from ._chunk import Chunk
 from ._fb_read import read_fb
 from ._utils import set_gpu_environment
-from ._utils import get_prefixes, create_binaries
 from ._errorhandling import BinaryFileNotFoundError
+from ._utils import get_prefixes, create_binaries, _read_file
 
 try:
     from torch.cuda import is_available
@@ -117,28 +117,6 @@ def read_rfmix(
     pbar.close()
     local_array = concatenate(local_array, axis=0)
     return loci_df, g_anc, local_array
-
-
-def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:
-    """
-    Read data from multiple files using a provided read function.
-
-    Parameters:
-    ----------
-    fn (List[str]): A list of file paths to read.
-    read_func (Callable): A function to read data from each file.
-    pbar (Optional): A progress bar object to update during reading.
-
-    Returns:
-    -------
-    List: A list containing the data read from each file.
-    """
-    data = [];
-    for file_name in fn:
-        data.append(read_func(file_name))
-        if pbar:
-            pbar.update(1)
-    return data
 
 
 def _read_tsv(fn: str) -> DataFrame:
