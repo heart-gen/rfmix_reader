@@ -1,6 +1,5 @@
 """
-Adapted from `_read.py` script in the `pandas-plink` package.
-Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_read.py
+Revision of `_read_rfmix.py` to work with FLARE output data.
 """
 from re import search
 from tqdm import tqdm
@@ -50,11 +49,11 @@ def read_flare(
 
     Returns
     -------
-    loci : :class:`DataFrame`
+    loci_df : :class:`DataFrame`
         Loci information for the FB data.
     g_anc : :class:`DataFrame`
         Global ancestry by chromosome from Flare.
-    admix : :class:`dask.array.Array`
+    local_array : :class:`dask.array.Array`
         Local ancestry per population stacked (variants, samples, ancestries).
         This is in alphabetical order of the populations. This matches RFMix.
 
@@ -77,10 +76,15 @@ def read_flare(
     # Load loci information
     pbar = tqdm(desc="Mapping loci information", total=len(fn),
                 disable=not verbose)
-    loci = _read_file(fn, lambda f: _read_loci(f["anc.vcf.gz"], chunk_size),
+    loci_dfs = _read_file(fn, lambda f: _read_loci(f["anc.vcf.gz"], chunk_size),
                       pbar)
     pbar.close()
-    loci = concat(loci, axis=0, ignore_index=True)
+
+    index_offset = 0
+    for df in loci_dfs: # Modify in-place
+        df["i"] = range(index_offset, index_offset + df.shape[0])
+        index_offset += df.shape[0]
+    loci_df = concat(loci_dfs, axis=0, ignore_index=True)
 
     # Load global ancestry per chromosome
     pbar = tqdm(desc="Mapping global ancestry files", total=len(fn),
@@ -92,14 +96,14 @@ def read_flare(
     # Loading local ancestry by loci
     pbar = tqdm(desc="Mapping local ancestry files", total=len(fn),
                 disable=not verbose)
-    admix = _read_file(
+    local_array = _read_file(
         fn,
         lambda f: _load_haplotypes(f["anc.vcf.gz"], int(chunk_size / 100)),
         pbar,
     )
     pbar.close()
-    admix = concatenate(admix, axis=0)
-    return loci, g_anc, admix
+    local_array = concatenate(local_array, axis=0)
+    return loci_df, g_anc, local_array
 
 
 def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List:
@@ -380,8 +384,7 @@ def _parse_ancestry_header(vcf_file: str) -> dict:
 def _load_vcf_info(vcf_file: str, chunk_size: int32 = 1_000_000
                    ) -> Iterator[DataFrame]:
     """
-    Load VCF records from a BGZF compressed and tabix indexed VCF file in chunks
-    using pysam and convert to DataFrames.
+    Load VCF records from a BGZF compressed and convert to DataFrames.
 
     Parameters
     ----------

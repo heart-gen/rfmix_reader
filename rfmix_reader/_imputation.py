@@ -9,7 +9,7 @@ import numpy as np
 from tqdm import tqdm
 from time import strftime
 from pandas import DataFrame
-from dask.array import Array
+from dask.array import Array, from_zarr
 
 try:
     from torch.cuda import is_available
