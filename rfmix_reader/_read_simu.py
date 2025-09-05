@@ -229,6 +229,10 @@ def _load_haplotypes_and_global_ancestry(
     vcf = VCF(vcf_file)
     samples = vcf.samples
     n_samples = len(samples)
+    chrom = vcf.seqnames[0]
+
+    # Collect all positions
+    positions = [rec.POS for rec in vcf]
     n_variants = vcf.num_records
 
     # Extract ancestry labels
@@ -239,31 +243,32 @@ def _load_haplotypes_and_global_ancestry(
     # Init global counters
     global_counts = zeros((n_samples, n_ancestries), dtype=xp_int64)
     total_alleles = zeros(n_samples, dtype=xp_int64)
-    
+
     delayed_chunks = []
 
-    # Helper to process batch
-    def process_batch(start, end):
-        """Process a slice of variants [start:end) into local ancestry array."""
-        try:
-            # Pull POP FORMAT in one call: shape (variants, samples)
-            pop_matrix = vcf[start:end].format("POP")
-        except Exception as e:
-            raise RuntimeError(f"Error reading POP field in {vcf_file}: {e}")
-
-        n_vars = end - start
+    # Process by region
+    def process_region(start_idx, end_idx):
+        """Process regions [chr:start-end] into local ancestry array."""
+        region = f"{chrom}:{positions[start_idx]}-{positions[end_idx-1]}"
+        recs = list(vcf(region))
+        n_vars = len(recs)
         local_chunk = zeros((n_vars, n_samples, n_ancestries), dtype=int8)
 
         # Split haplotype labels vectorized
-        hap0 = empty((n_vars, n_samples), dtype=object) # This is NumPy for string
-        hap1 = empty((n_vars, n_samples), dtype=object)
-        for i in range(n_vars):
-            for j in range(n_samples):
-                raw = pop_matrix[i][j]
+        hap0, hap1 = [], []
+        for rec in recs:
+            pop_fields = rec.format("POP")
+            if pop_fields is None:
+                hap0.append([""] * n_samples); hap1.append([""] * n_samples)
+                continue
+            h0, h1 = [], []
+            for raw in pop_fields:
                 if raw:
                     parts = raw.split(",")
-                    hap0[i, j] = parts[0].strip()
-                    hap1[i, j] = parts[1].strip()
+                    h0.append(parts[0].strip()); h1.append(parts[1].strip())
+                else:
+                    h0.append(""); h1.append("")
+            hap0.append(h0); hap1.append(h1)
 
         # Map hap labels -> indices
         idx0 = array([[anc_index.get(x, -1) for x in row] for row in hap0])
@@ -274,17 +279,17 @@ def _load_haplotypes_and_global_ancestry(
             local_chunk[:, :, idx] += (idx0 == idx).astype(int8)
             local_chunk[:, :, idx] += (idx1 == idx).astype(int8)
 
-        # Update global counts deterministically
+        # Update global counts
         global_counts[:] += local_chunk.sum(axis=0)
         total_alleles[:] += 2 * n_vars
-
         return local_chunk
 
     # Chunk loop
-    for start, end in _chunk_intervals(n_variants, chunk_size):
+    for start in range(0, n_variants, chunk_size):
+        end = min(start + chunk_size, n_variants)
         delayed_chunks.append(
             from_delayed(
-                delayed(process_batch)(start, end),
+                delayed(process_region)(start, end),
                 shape=(end - start, n_samples, n_ancestries),
                 dtype="i1",
             )
@@ -304,12 +309,6 @@ def _load_haplotypes_and_global_ancestry(
     global_df["chrom"] = m.group(0) if m else None
 
     return local_array, global_df
-
-
-def _chunk_intervals(n_variants: int, size: int):
-    """Yield (start, end) variant index intervals of length `size`."""
-    for start in range(0, n_variants, size):
-        yield start, min(start + size, n_variants)
 
 
 def _get_vcf_files(vcf_path: str) -> List[str]:
