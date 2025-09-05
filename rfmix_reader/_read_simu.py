@@ -85,27 +85,24 @@ def read_simu(
         index_offset += df.shape[0]
     loci_df = concat(loci_dfs, ignore_index=True)
 
-    # Load global ancestry per chromosome
-    pbar = tqdm(desc="Mapping global ancestry files", total=len(fn),
+    # Load local and global ancestry per chromosome
+    pbar = tqdm(desc="Mapping ancestry data", total=len(fn),
                 disable=not verbose)
-    g_anc = _read_file(
+    ancestry_data = _read_file(
         fn,
-        lambda f: _calculate_global_ancestry_from_pop(f),
+        lambda f: _load_haplotypes_and_global_ancestry(f, chunk_size // 100),
         pbar,
     )
     pbar.close()
-    g_anc = concat(g_anc, ignore_index=True)
 
-    # Loading local ancestry by loci
-    pbar = tqdm(desc="Mapping local ancestry files", total=len(fn),
-                disable=not verbose)
-    local_array = _read_file(
-        fn,
-        lambda f: _load_haplotypes_from_pop(f, chunk_size // 100),
-        pbar,
-    )
-    pbar.close()
-    local_array = concatenate(local_array, axis=0)
+    # Split into separate lists
+    local_chunks, global_dfs = zip(*ancestry_data)
+
+    # Combine global ancestry
+    g_anc = concat(global_dfs, ignore_index=True)
+
+    # Combine local ancestry Dask arrays
+    local_array = concatenate(local_chunks, axis=0)
 
     return loci_df, g_anc, local_array
 
@@ -191,12 +188,12 @@ def _parse_pop_labels(vcf_file: str) -> List[str]:
     return sorted(ancestries)
 
 
-def _load_haplotypes_from_pop(vcf_file: str, chunk_size: int = 10_000) -> Array:
+def _load_haplotypes_and_global_ancestry(
+    vcf_file: str, chunk_size: int = 50_000
+) -> Tuple[Array, DataFrame]:
     """
-    Build a local ancestry tensor from the `POP` FORMAT field.
-
-    Each allele for each sample is labeled by ancestry in the VCF.
-    This function constructs a Dask array of counts per ancestry.
+    Single-pass, GPU-accelerated function to compute: local ancestry tensor and
+    global ancestry fractions per sample.
 
     Parameters
     ----------
@@ -207,103 +204,67 @@ def _load_haplotypes_from_pop(vcf_file: str, chunk_size: int = 10_000) -> Array:
 
     Returns
     -------
-    dask.array.Array
+    local_array : dask.array.Array
         Array of shape (variants, samples, ancestries). Each entry indicates
         how many haplotypes (0, 1, or 2) of that ancestry are observed for
         the given variant/sample.
+    global_df : DataFrame
+        Global ancestry per sample with chromosome label
     """
-    vcf = VCF(vcf_file)
-    samples = vcf.samples
-    n_samples = len(samples)
-    ancestries = sorted(_parse_pop_labels(vcf_file))
-    anc_index = {label: i for i, label in enumerate(ancestries)}
-    n_ancestries = len(ancestries)
-
-    def process_chunk(records):
-        chunk_len = len(records)
-        counts = zeros((chunk_len, n_samples, n_ancestries), dtype=int8)
-
-        for i, rec in enumerate(records):
-            pop_fields = rec.format("POP")
-            for s_idx, pop_string in enumerate(pop_fields):
-                if pop_string:
-                    haps = [h.strip() for h in pop_string.split(",") if h.strip()]
-                    for h in haps:
-                        counts[i, s_idx, anc_index[h]] += 1
-        return counts
-
-    buffer = []
-    delayed_chunks = []
-    for rec in vcf:
-        buffer.append(rec)
-        if len(buffer) == chunk_size:
-            delayed_chunks.append(delayed(process_chunk)(buffer))
-            buffer = []
-
-    if buffer:
-        delayed_chunks.append(delayed(process_chunk)(buffer))
-
-    arrays = [from_delayed(d, shape=(None, n_samples, n_ancestries), dtype=int8)
-              for d in delayed_chunks]
-    stacked = concatenate(arrays, axis=0)
-    return stacked
-
-
-def _calculate_global_ancestry_from_pop(
-        vcf_file: str, chunk_size: int = 10_000) -> DataFrame:
-    """
-    Efficiently compute global ancestry proportions using vectorized processing.
-
-    Parameters
-    ----------
-    vcf_file : str
-        Path to ancestry-annotated VCF.
-
-    Returns
-    -------
-    DataFrame
-        Global ancestry proportions with columns: sample_id, <ancestries...>, chrom
-    """
-    # Get information from VCF
-    vcf = VCF(vcf_file)
-    samples = vcf.samples
-    ancestries = sorted(_parse_pop_labels(vcf_file))
-    anc_index = {label: i for i, label in enumerate(ancestries)}
-    
+    # Initialize VCF and metadata
+    vcf, samples, ancestries, anc_index = _initialize_vcf_metadata(vcf_file)
     n_samples = len(samples)
     n_ancestries = len(ancestries)
 
+    # Global ancestry counters
     global_counts = zeros((n_samples, n_ancestries), dtype=cp_int32)
     total_alleles = zeros(n_samples, dtype=cp_int32)
 
+    # Delayed chunks for local ancestry
+    delayed_chunks = []
     buffer = []
+
     for rec in vcf:
         buffer.append(rec)
         if len(buffer) == chunk_size:
-            _process_chunk(buffer, global_counts, total_alleles, anc_index)
+            delayed_chunks.append(
+                _process_delayed_chunk(buffer, n_samples, n_ancestries,
+                                       anc_index, global_counts,
+                                       total_alleles)
+            )
             buffer = []
 
     if buffer:
-        _process_chunk(buffer, global_counts, total_alleles, anc_index)
+        delayed_chunks.append(
+            _process_delayed_chunk(buffer, n_samples, n_ancestries,
+                                   anc_index, global_counts, total_alleles)
+        )
 
-    # Normalize to fractions
-    with errstate(divide='ignore', invalid='ignore'):
-        fractions = global_counts / total_alleles[:, None]
-        fractions[~isfinite(fractions)] = 0
+    # Build final local Dask array
+    local_array = concatenate(delayed_chunks, axis=0)
+    
+    # Build final global ancestry DataFrame
+    global_df = _finalize_global_ancestry(global_counts, total_alleles,
+                                          samples, ancestries, vcf_file)
 
-    df = DataFrame(fractions, columns=ancestries)
-    df.insert(0, "sample_id", samples)
-
-    # Add chromosome
-    m = search(r'chr[\w]+', vcf_file)
-    df["chrom"] = m.group(0) if m else None
-    return df
+    return local_array, global_df
 
 
-def _process_chunk(records: List, global_counts, total_alleles, anc_index: dict):
-    n_ancestries = len(anc_index)
+def _initialize_vcf_metadata(vcf_file: str) -> Tuple[VCF, List[str], List[str], Dict[str, int]]:
+    """Initialize VCF reader, samples, ancestry labels, and mapping index."""
+    vcf = VCF(vcf_file)
+    samples = vcf.samples
+    ancestries = sorted(_parse_pop_labels(vcf_file))
+    anc_index = {label: i for i, label in enumerate(ancestries)}
+    return vcf, samples, ancestries, anc_index
 
-    for rec in records:
+
+def _process_chunk(records: List, n_samples: int, n_ancestries: int,
+                   anc_index: Dict[str, int], global_counts, total_alleles):
+    """Process one chunk of VCF records: update global counts and return local chunk."""
+    counts = zeros((len(records), n_samples, n_ancestries), dtype=int8)
+
+    for i, rec in enumerate(records):
         pop_fields = rec.format("POP")
         if pop_fields is None:
             continue
@@ -312,13 +273,42 @@ def _process_chunk(records: List, global_counts, total_alleles, anc_index: dict)
             if not pop_string:
                 continue
 
-            # Avoid repeated string ops
-            haps = pop_string.split(",")
-            for h in haps:
-                h = h.strip()
-                if h in anc_index:
-                    global_counts[s_idx, anc_index[h]] += 1
+            haps = [h.strip() for h in pop_string.split(",") if h.strip()]
+            for hap in haps:
+                if hap in anc_index:
+                    a_idx = anc_index[hap]
+                    counts[i, s_idx, a_idx] += 1
+                    global_counts[s_idx, a_idx] += 1
                     total_alleles[s_idx] += 1
+    return counts
+
+
+def _process_delayed_chunk(records: List, n_samples: int, n_ancestries: int,
+                           anc_index: Dict[str, int], global_counts, total_alleles):
+    """Wrap chunk processing as a Dask delayed object."""
+    return from_delayed(
+        delayed(_process_chunk)(
+            records, n_samples, n_ancestries, anc_index, global_counts, total_alleles
+        ),
+        shape=(None, n_samples, n_ancestries),
+        dtype=int8
+    )
+
+
+def _finalize_global_ancestry(
+        global_counts, total_alleles, samples, ancestries, vcf_file: str) -> DataFrame:
+    """Normalize global counts and build final DataFrame."""
+    with errstate(divide='ignore', invalid='ignore'):
+        fractions = global_counts / total_alleles[:, None]
+        fractions[~isfinite(fractions)] = 0
+
+    df = DataFrame(fractions, columns=ancestries)
+    df.insert(0, "sample_id", samples)
+
+    m = search(r'chr[\w]+', vcf_file)
+    df["chrom"] = m.group(0) if m else None
+
+    return df
 
 
 def _get_vcf_files(vcf_path: str) -> List[str]:
