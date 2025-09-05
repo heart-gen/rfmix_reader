@@ -7,8 +7,8 @@ from glob import glob
 from cyvcf2 import VCF
 from dask import delayed
 from re import search, sub
-from typing import List, Tuple, Iterator
 from numpy import int32, errstate, isfinite
+from typing import List, Tuple, Iterator, Dict
 from dask.array import Array, concatenate, from_delayed, stack
 from os.path import isdir, join, isfile, dirname, basename, exists
 
