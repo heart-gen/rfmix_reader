@@ -166,12 +166,22 @@ def _parse_pop_labels(vcf_file: str) -> List[str]:
         If no `POP` field is found in the file.
     """
     vcf = VCF(vcf_file)
+    ancestries = set()
     for rec in vcf:
-        for sample_field in rec.format("POP"):
-            if sample_field:
-                parts = sample_field.split(",")
-                return sorted(set(parts))
-    raise ValueError("No POP field found in VCF.")
+        pop_fields = rec.format("POP")
+        if pop_fields is None:
+            continue
+        
+        for sample_field in pop_fields:
+            if not sample_field:
+                continue
+            
+            parts = [p.strip() for p in sample_field.split(",") if p.strip()]
+            ancestries.update(parts)
+
+    if not ancestries:
+        raise ValueError("No POP field found in VCF.")
+    return sorted(set(ancestries))
 
 
 def _load_haplotypes_from_pop(vcf_file: str, chunk_size: int = 10_000) -> Array:
