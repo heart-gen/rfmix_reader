@@ -2,14 +2,13 @@
 Revision of `_read_flare.py` to work with data generated from
 `haptools simgenotype` with population field flag (`--pop_field`).
 """
-import itertools
 from tqdm import tqdm
 from glob import glob
 from cyvcf2 import VCF
+from numpy import int32
 from dask import delayed
 from re import search, sub
-from numpy import int32, empty
-from typing import List, Tuple, Iterator, Dict
+from typing import List, Tuple, Iterator
 from dask.array import Array, concatenate, from_delayed, stack
 from os.path import isdir, join, isfile, dirname, basename, exists
 
@@ -24,20 +23,12 @@ except ModuleNotFoundError as e:
 if gpu_available():
     from cudf import DataFrame, concat
     from cupy import (
-        zeros,
-        asnumpy,
-        nan_to_num,
-        int64 as xp_int64,
-        asarray, unique, int8,
+        int8, zeros, asnumpy, array,
+        nan_to_num, int64 as xp_int64,
     )
 else:
     from pandas import DataFrame, concat
-    from numpy import (
-        zeros,
-        nan_to_num,
-        int64 as xp_int64,
-        asarray, unique, int8,
-    )
+    from numpy import zeros, array, nan_to_num, int8, int64 as xp_int64
     def asnumpy(x): return x
 
 __all__ = ["read_simu"]
