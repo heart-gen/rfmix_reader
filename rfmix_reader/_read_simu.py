@@ -2,15 +2,15 @@
 Revision of `_read_flare.py` to work with data generated from
 `haptools simgenotype` with population field flag (`--pop_field`).
 """
-from re import search
 from tqdm import tqdm
 from glob import glob
 from cyvcf2 import VCF
 from numpy import int32
 from dask import delayed
-from os.path import isdir, join, isfile
+from re import search, sub
 from typing import List, Tuple, Iterator
 from dask.array import Array, concatenate, from_delayed, stack
+from os.path import isdir, join, isfile, dirname, basename, exists
 
 from ._utils import set_gpu_environment, _read_file
 
@@ -145,10 +145,8 @@ def _read_loci_from_vcf(
 
 def _parse_pop_labels(vcf_file: str) -> List[str]:
     """
-    Parse ancestry population labels from the `POP` field of a VCF.
-
-    This function inspects the first record with non-empty `POP` annotations
-    and extracts all unique ancestry labels.
+    Parse ancestry population labels from a breakpoint (.bp) file
+    that corresponds to the given VCF file.
 
     Parameters
     ----------
@@ -162,26 +160,35 @@ def _parse_pop_labels(vcf_file: str) -> List[str]:
 
     Raises
     ------
+    FileNotFoundError
+        If the corresponding breakpoint file does not exist.
     ValueError
-        If no `POP` field is found in the file.
+        If no ancestry labels could be found in the breakpoint file.
     """
-    vcf = VCF(vcf_file)
+    # Derive .bp file path from VCF path
+    vcf_dir = dirname(vcf_file)
+    base_name = basename(vcf_file)
+    chr_prefix = sub(r"\.vcf\.gz$", "", base_name)
+    bp_file = join(vcf_dir, f"{chr_prefix}.bp")
+
+    if not exists(bp_file):
+        raise FileNotFoundError(f"Breakpoint file not found: {bp_file}")
+
     ancestries = set()
-    for rec in vcf:
-        pop_fields = rec.format("POP")
-        if pop_fields is None:
-            continue
-        
-        for sample_field in pop_fields:
-            if not sample_field:
-                continue
-            
-            parts = [p.strip() for p in sample_field.split(",") if p.strip()]
-            ancestries.update(parts)
+    with open(bp_file, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("Sample_"):
+                continue  # skip sample headers
+
+            parts = line.split()
+            if parts:
+                ancestries.add(parts[0])  # ancestry label
 
     if not ancestries:
-        raise ValueError("No POP field found in VCF.")
-    return sorted(set(ancestries))
+        raise ValueError(f"No ancestry labels found in breakpoint file: {bp_file}")
+
+    return sorted(ancestries)
 
 
 def _load_haplotypes_from_pop(vcf_file: str, chunk_size: int = 10_000) -> Array:
