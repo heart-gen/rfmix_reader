@@ -229,7 +229,7 @@ def _load_haplotypes_and_global_ancestry(
     vcf = VCF(vcf_file)
     samples = vcf.samples
     n_samples = len(samples)
-    n_variants = len(vcf)
+    n_variants = vcf.num_records
 
     # Extract ancestry labels
     ancestries = sorted(set(_parse_pop_labels(vcf_file)))
