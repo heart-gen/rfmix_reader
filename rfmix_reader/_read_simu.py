@@ -344,7 +344,7 @@ def _get_vcf_files(vcf_path: str) -> List[str]:
         else:
             vcf_files = [vcf_path]
     else:
-
+        raise ValueError(f"Invalid input: {vcf_path} must be a .vcf.gz file or directory containing them.")
 
     if not vcf_files:
         raise FileNotFoundError(f"No VCF files found in path: {vcf_path}")
