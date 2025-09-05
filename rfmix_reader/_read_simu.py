@@ -243,6 +243,9 @@ def _load_haplotypes_and_global_ancestry(
         region = f"{chrom}:{positions[start_idx]}-{positions[end_idx-1]}"
         recs = list(vcf(region))
         n_vars = len(recs)
+        if n_vars == 0:
+            return zeros((0, n_samples, n_ancestries), dtype=int8)
+        
         local_chunk = zeros((n_vars, n_samples, n_ancestries), dtype=int8)
 
         # Split haplotype labels vectorized
