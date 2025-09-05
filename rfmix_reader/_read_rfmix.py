@@ -19,14 +19,14 @@ from ._errorhandling import BinaryFileNotFoundError
 from ._utils import get_prefixes, create_binaries, _read_file
 
 try:
-    from torch.cuda import is_available
+    from torch.cuda import is_available as gpu_available
 except ModuleNotFoundError as e:
     print("Warning: PyTorch is not installed. Using CPU!")
-    def is_available():
+    def gpu_available():
         return False
 
 
-if is_available():
+if gpu_available():
     from cudf import DataFrame, read_csv, concat, CategoricalDtype
 else:
     from pandas import DataFrame, read_csv, concat, CategoricalDtype
@@ -74,7 +74,7 @@ def read_rfmix(
     - :const:`2` Both alleles are associated with this ancestry
     """
     # Device information
-    if verbose and is_available():
+    if verbose and gpu_available():
         set_gpu_environment()
 
     # Get file prefixes
@@ -133,7 +133,7 @@ def _read_tsv(fn: str) -> DataFrame:
     """
     header = {"chromosome": CategoricalDtype(), "physical_position": int32}
     try:
-        if is_available():
+        if gpu_available():
             df = read_csv(fn, sep="\t", header=0, usecols=list(header.keys()),
                           dtype=header, comment="#")
         else:
@@ -194,7 +194,7 @@ def _read_csv(fn: str, header: dict) -> DataFrame:
     DataFrame: The data read from the CSV file as a pandas DataFrame.
     """
     try:
-        if is_available():
+        if gpu_available():
             df = read_csv(fn, sep="\t", header=None, names=list(header.keys()),
                           dtype=header, comment="#")
         else:
@@ -330,7 +330,7 @@ def _types(fn: str) -> dict:
     """
     try:
         # Read the first two rows of the file, skipping the first row
-        if is_available():
+        if gpu_available():
             df = read_csv(fn, sep="\t", nrows=2, skiprows=1)
         else:
             df = read_csv(fn, sep=r"\s+", nrows=2, skiprows=1)
