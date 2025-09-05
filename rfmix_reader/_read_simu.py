@@ -5,28 +5,28 @@ Revision of `_read_flare.py` to work with data generated from
 from tqdm import tqdm
 from glob import glob
 from cyvcf2 import VCF
-from numpy import int32
 from dask import delayed
 from re import search, sub
 from typing import List, Tuple, Iterator
+from numpy import int32, errstate, isfinite
 from dask.array import Array, concatenate, from_delayed, stack
 from os.path import isdir, join, isfile, dirname, basename, exists
 
 from ._utils import set_gpu_environment, _read_file
 
 try:
-    from torch.cuda import is_available
+    from torch.cuda import is_available as gpu_available
 except ModuleNotFoundError as e:
     print("Warning: PyTorch is not installed. Using CPU!")
-    def is_available():
+    def gpu_available():
         return False
 
-if is_available():
-    from cupy import zeros, int8
+if gpu_available():
     from cudf import DataFrame, concat
+    from cupy import zeros, int32 as cp_int32, asarray, unique, int8
 else:
-    from numpy import zeros, int8
     from pandas import DataFrame, concat
+    from numpy import zeros, int32 as cp_int32, asarray, unique, int8
 
 __all__ = ["read_simu"]
 
@@ -62,7 +62,7 @@ def read_simu(
         compatibility with RFMix-style conventions.
     """
     # Device information
-    if verbose and is_available():
+    if verbose and gpu_available():
         set_gpu_environment()
 
     # Get VCF file prefixes
@@ -249,12 +249,10 @@ def _load_haplotypes_from_pop(vcf_file: str, chunk_size: int = 10_000) -> Array:
     return stacked
 
 
-def _calculate_global_ancestry_from_pop(vcf_file: str) -> DataFrame:
+def _calculate_global_ancestry_from_pop(
+        vcf_file: str, chunk_size: int = 10_000) -> DataFrame:
     """
-    Compute global ancestry proportions directly from the `POP` field.
-
-    Counts all haplotypes across variants for each sample and normalizes
-    to per-sample fractions. A chromosome label is added from the filename.
+    Efficiently compute global ancestry proportions using vectorized processing.
 
     Parameters
     ----------
@@ -269,44 +267,58 @@ def _calculate_global_ancestry_from_pop(vcf_file: str) -> DataFrame:
     # Get information from VCF
     vcf = VCF(vcf_file)
     samples = vcf.samples
-    ancestries = _parse_pop_labels(vcf_file)
+    ancestries = sorted(_parse_pop_labels(vcf_file))
     anc_index = {label: i for i, label in enumerate(ancestries)}
+    
     n_samples = len(samples)
     n_ancestries = len(ancestries)
 
-    # counts: sample x ancestry
-    global_counts = zeros((n_samples, n_ancestries), dtype=int32)
-    total_alleles = zeros(n_samples, dtype=int32)
+    global_counts = zeros((n_samples, n_ancestries), dtype=cp_int32)
+    total_alleles = zeros(n_samples, dtype=cp_int32)
 
+    buffer = []
     for rec in vcf:
+        buffer.append(rec)
+        if len(buffer) == chunk_size:
+            _process_chunk(buffer, global_counts, total_alleles, anc_index)
+            buffer = []
+
+    if buffer:
+        _process_chunk(buffer, global_counts, total_alleles, anc_index)
+
+    # Normalize to fractions
+    with errstate(divide='ignore', invalid='ignore'):
+        fractions = global_counts / total_alleles[:, None]
+        fractions[~isfinite(fractions)] = 0
+
+    df = DataFrame(fractions, columns=ancestries)
+    df.insert(0, "sample_id", samples)
+
+    # Add chromosome
+    m = search(r'chr[\w]+', vcf_file)
+    df["chrom"] = m.group(0) if m else None
+    return df
+
+
+def _process_chunk(records: List, global_counts, total_alleles, anc_index: dict):
+    n_ancestries = len(anc_index)
+
+    for rec in records:
         pop_fields = rec.format("POP")
         if pop_fields is None:
             continue
-        
+
         for s_idx, pop_string in enumerate(pop_fields):
             if not pop_string:
                 continue
 
-            haps = [hap.strip() for hap in pop_string.split(",") if hap.strip()]
-            for hap in haps:
-                global_counts[s_idx, anc_index[hap]] += 1
-                total_alleles[s_idx] += 1
-
-    # Normalize to fractions
-    fractions = global_counts / total_alleles[:, None]
-    df = DataFrame(fractions, columns=ancestries)
-    df.insert(0, "sample_id", samples)
-
-    # Extract chromosome from filename (e.g., "chr21" or "chrX")
-    m = search(r'chr[\w]+', vcf_file)
-    if m:
-        chrom = m.group(0)
-        df["chrom"] = chrom
-    else:
-        print(f"Warning: Could not extract chromosome information from '{vcf_file}'")
-        df["chrom"] = None
-
-    return df
+            # Avoid repeated string ops
+            haps = pop_string.split(",")
+            for h in haps:
+                h = h.strip()
+                if h in anc_index:
+                    global_counts[s_idx, anc_index[h]] += 1
+                    total_alleles[s_idx] += 1
 
 
 def _get_vcf_files(vcf_path: str) -> List[str]:
