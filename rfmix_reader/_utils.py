@@ -1,3 +1,4 @@
+import gzip
 from tqdm import tqdm
 from glob import glob
 from os import makedirs
@@ -157,7 +158,7 @@ def get_prefixes(file_prefix: str, mode: str = "rfmix", verbose: bool = True):
 
     mode : {"rfmix", "flare"}
         The expected output type.
-        - "rfmix" expects files with suffixes: ["fb.tsv", "rfmix.Q"].
+        - "rfmix" expects files with suffixes: ["fb.tsv", "fb.tsv.gz", "rfmix.Q"].
         - "flare" expects files with suffixes: ["anc.vcf.gz", "global.anc.gz"].
 
     verbose : bool, optional
@@ -168,8 +169,7 @@ def get_prefixes(file_prefix: str, mode: str = "rfmix", verbose: bool = True):
     -------
     list of dict:
         A list of dictionaries where each dictionary maps file
-        types (e.g., "fb.tsv", "rfmix.Q") to their corresponding
-        file paths.
+        types to their corresponding file paths.
 
     Raises
     ------
@@ -186,17 +186,17 @@ def get_prefixes(file_prefix: str, mode: str = "rfmix", verbose: bool = True):
     """
     # Define suffix sets based on mode
     mode_suffixes = {
-        "rfmix": ["fb.tsv", "rfmix.Q"],
+        "rfmix": ["fb.tsv", "fb.tsv.gz", "rfmix.Q"],
         "flare": ["anc.vcf.gz", "global.anc.gz"]
     }
-
+    file_prefix = Path(file_prefix)  # normalize
     if mode not in mode_suffixes:
         raise ValueError(f"Invalid mode: {mode}. Choose from {list(mode_suffixes.keys())}.")
 
     try:
         # Identify candidate files: "chr" or "_chr"
         file_candidates = sorted(
-            [str(x) for x in Path(file_prefix).glob("*[chr]*")]
+            [str(x) for x in file_prefix.glob("*[chr]*")]
         )
 
         # If only one candidate, broaden the search
@@ -209,10 +209,15 @@ def get_prefixes(file_prefix: str, mode: str = "rfmix", verbose: bool = True):
         file_prefixes = sorted(_clean_prefixes(file_candidates))
 
         # Construct prefix-to-file mapping
-        fn = [
-            {sfx: f"{fp}.{sfx}" for sfx in mode_suffixes[mode]}
-            for fp in file_prefixes
-        ]
+        fn = []
+        for fp in file_prefixes:
+            filemap = {}
+            for sfx in mode_suffixes[mode]:
+                candidate = f"{fp}.{sfx}"
+                if Path(candidate).exists():
+                    filemap[sfx.replace(".gz", "")] = candidate
+            if filemap:
+                fn.append(filemap)
 
         if not fn:
             raise FileNotFoundError()
@@ -270,15 +275,15 @@ def _text_to_binary(input_file: str, output_file: str):
     IOError: If there is an error reading from the input file or
              writing to the output file.
     """
-    with open(input_file, 'r') as infile, open(output_file, 'wb') as outfile:
-        # Skip the first two rows
-        next(infile)
-        next(infile)
+    input_file = Path(input_file); output_file = Path(output_file)
+
+    opener = gzip.open if input_file.suffix == ".gz" else open
+    with opener(input_file, 'rt') as infile, open(output_file, 'wb') as outfile:
+        next(infile); next(infile) # Skip the header
         # Process and write each line individually
         for line in infile:
             data = array(line.split()[4:], dtype=float32)
-            # Write the binary data to the output file
-            data.tofile(outfile)
+            data.tofile(outfile) # Write the binary data
 
 
 def _process_file(args):
@@ -317,10 +322,10 @@ def _process_file(args):
        '/tmp/processing/data.bin'
     """
     file_path, temp_dir = args
-    input_file = file_path
-    output_file = join(temp_dir,
-                       basename(file_path).split(".")[0] + ".bin")
-    _text_to_binary(input_file, output_file)
+    file_path = Path(file_path)
+    outname = basename(file_path).split(".")[0] + ".bin"
+    output_file = join(temp_dir, outname)
+    _text_to_binary(file_path, output_file)
 
 
 def _generate_binary_files(fb_files, binary_dir):
@@ -545,7 +550,7 @@ def create_binaries(
         if not fn:
             raise FileNotFoundError(f"No files found with prefix: {file_prefix}")
 
-        fb_files = [f["fb.tsv"] for f in fn]
+        fb_files = [f["fb.tsv"] for f in fn if "fb.tsv" in f]
         makedirs(binary_dir, exist_ok=True)
         print(f"Created binary files at: {binary_dir}")
         _generate_binary_files(fb_files, binary_dir)
