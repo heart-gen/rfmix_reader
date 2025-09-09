@@ -2,34 +2,18 @@
 Revision of `_read_flare.py` to work with data generated from
 `haptools simgenotype` with population field flag (`--pop_field`).
 """
+from re import sub
 from tqdm import tqdm
 from glob import glob
 from cyvcf2 import VCF
-from numpy import int32
 from dask import delayed
-from re import search, sub
+from pandas import DataFrame, concat
 from typing import List, Tuple, Iterator
 from dask.array import Array, concatenate, from_delayed, stack
 from os.path import isdir, join, isfile, dirname, basename, exists
+from numpy import zeros, array, nan_to_num, int8, int64 as xp_int64, int32
 
-from ._utils import set_gpu_environment, _read_file
-
-try:
-    from torch.cuda import is_available as gpu_available
-except ModuleNotFoundError as e:
-    print("Warning: PyTorch is not installed. Using CPU!")
-    def gpu_available(): return False
-
-if gpu_available():
-    from cudf import DataFrame, concat
-    from cupy import (
-        int8, zeros, asnumpy, array,
-        nan_to_num, int64 as xp_int64,
-    )
-else:
-    from pandas import DataFrame, concat
-    from numpy import zeros, array, nan_to_num, int8, int64 as xp_int64
-    def asnumpy(x): return x
+from ._utils import _read_file
 
 __all__ = ["read_simu"]
 
@@ -64,10 +48,6 @@ def read_simu(
         The last axis is ordered alphabetically by ancestry label, ensuring
         compatibility with RFMix-style conventions.
     """
-    # Device information
-    if verbose and gpu_available():
-        set_gpu_environment()
-
     # Get VCF file prefixes
     fn = _get_vcf_files(vcf_path)
 
@@ -222,10 +202,6 @@ def _load_haplotypes_and_global_ancestry(
     n_samples = len(samples)
     chrom = vcf.seqnames[0]
 
-    # Collect all positions
-    positions = [rec.POS for rec in vcf]
-    n_variants = vcf.num_records
-
     # Extract ancestry labels
     ancestries = sorted(set(_parse_pop_labels(vcf_file)))
     n_ancestries = len(ancestries)
@@ -236,73 +212,86 @@ def _load_haplotypes_and_global_ancestry(
     total_alleles = zeros(n_samples, dtype=xp_int64)
 
     delayed_chunks = []
+    batch = []
 
-    # Process by region
-    def process_region(start_idx, end_idx):
-        """Process regions [chr:start-end] into local ancestry array."""
-        region = f"{chrom}:{positions[start_idx]}-{positions[end_idx-1]}"
-        recs = list(vcf(region))
-        n_vars = len(recs)
-        if n_vars == 0:
-            return zeros((0, n_samples, n_ancestries), dtype=int8)
-        
-        local_chunk = zeros((n_vars, n_samples, n_ancestries), dtype=int8)
+    for rec in vcf:
+        batch.append(rec)
+        if len(batch) >= chunk_size:
+            delayed_chunks.append(
+                from_delayed(
+                    delayed(_process_records)(batch, n_samples, anc_index),
+                    shape=(len(batch), n_samples, n_ancestries),
+                    dtype="i1",
+                )
+            )
+            # update globals
+            global_counts += _count_global(batch, n_samples, anc_index)
+            total_alleles += 2 * len(batch)
+            batch = []
 
-        # Split haplotype labels vectorized
-        hap0, hap1 = [], []
-        for rec in recs:
-            pop_fields = rec.format("POP")
-            if pop_fields is None:
-                hap0.append([""] * n_samples); hap1.append([""] * n_samples)
-                continue
-            h0, h1 = [], []
-            for raw in pop_fields:
-                if raw:
-                    parts = raw.split(",")
-                    h0.append(parts[0].strip()); h1.append(parts[1].strip())
-                else:
-                    h0.append(""); h1.append("")
-            hap0.append(h0); hap1.append(h1)
-
-        # Map hap labels -> indices
-        idx0 = array([[anc_index.get(x, -1) for x in row] for row in hap0])
-        idx1 = array([[anc_index.get(x, -1) for x in row] for row in hap1])
-
-        # Fill local ancestry counts
-        for a, idx in anc_index.items():
-            local_chunk[:, :, idx] += (idx0 == idx).astype(int8)
-            local_chunk[:, :, idx] += (idx1 == idx).astype(int8)
-
-        # Update global counts
-        global_counts[:] += local_chunk.sum(axis=0)
-        total_alleles[:] += 2 * n_vars
-        return local_chunk
-
-    # Chunk loop
-    for start in range(0, n_variants, chunk_size):
-        end = min(start + chunk_size, n_variants)
+    # Flush remainder
+    if batch:
         delayed_chunks.append(
             from_delayed(
-                delayed(process_region)(start, end),
-                shape=(end - start, n_samples, n_ancestries),
+                delayed(_process_records)(batch, n_samples, anc_index),
+                shape=(len(batch), n_samples, n_ancestries),
                 dtype="i1",
             )
         )
+        global_counts += _count_global(batch, n_samples, anc_index)
+        total_alleles += 2 * len(batch)
 
     local_array = concatenate(delayed_chunks, axis=0)
     
     # Normalize global ancestry
     fractions = global_counts / total_alleles[:, None]
-    fractions = asnumpy(nan_to_num(fractions, nan=0.0))
+    fractions = nan_to_num(fractions, nan=0.0)
 
     # Build dataframe
     global_df = DataFrame(fractions, columns=ancestries)
     global_df.insert(0, "sample_id", samples)
-
-    m = search(r'chr[\w]+', vcf_file)
-    global_df["chrom"] = m.group(0) if m else None
+    global_df["chrom"] = chrom
 
     return local_array, global_df
+
+
+def _process_records(batch, n_samples, anc_index):
+    """Turn a batch of cyvcf2 records into a local ancestry chunk."""
+    n_vars = len(batch)
+    n_ancestries = len(anc_index)
+    local_chunk = zeros((n_vars, n_samples, n_ancestries), dtype=int8)
+
+    for i, rec in enumerate(batch):
+        pop_fields = rec.format("POP")
+        if pop_fields is None:
+            continue
+        for j, raw in enumerate(pop_fields):
+            if raw:
+                parts = raw.split(",")
+                for hap in parts:
+                    idx = anc_index.get(hap.strip(), -1)
+                    if idx >= 0:
+                        local_chunk[i, j, idx] += 1
+    return local_chunk
+
+
+def _count_global(batch, n_samples, anc_index):
+    """Update global ancestry counts for a batch."""
+    n_ancestries = len(anc_index)
+    chunk_counts = zeros((n_samples, n_ancestries), dtype=xp_int64)
+
+    for rec in batch:
+        pop_fields = rec.format("POP")
+        if pop_fields is None:
+            continue
+        for j, raw in enumerate(pop_fields):
+            if raw:
+                parts = raw.split(",")
+                for hap in parts:
+                    idx = anc_index.get(hap.strip(), -1)
+                    if idx >= 0:
+                        chunk_counts[j, idx] += 1
+    return chunk_counts
 
 
 def _get_vcf_files(vcf_path: str) -> List[str]:
