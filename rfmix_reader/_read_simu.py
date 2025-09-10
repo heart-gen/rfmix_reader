@@ -6,12 +6,16 @@ from re import sub
 from tqdm import tqdm
 from glob import glob
 from cyvcf2 import VCF
-from dask import delayed
-from pandas import DataFrame, concat
 from typing import List, Tuple, Iterator
+from dask import delayed, compute as dask_compute
+from pandas import DataFrame, concat, Categorical
 from dask.array import Array, concatenate, from_delayed, stack
 from os.path import isdir, join, isfile, dirname, basename, exists
-from numpy import zeros, array, nan_to_num, int8, int64 as xp_int64, int32
+from numpy import (
+    int8, int64, int32,
+    zeros, array, nan_to_num,
+    eye, empty, asarray, frompyfunc
+)
 
 from ._utils import _read_file
 
@@ -198,51 +202,141 @@ def _load_haplotypes_and_global_ancestry(
     """
     # Initialize VCF
     vcf = VCF(vcf_file)
-    samples = vcf.samples
+    samples: List[str] = vcf.samples
     n_samples = len(samples)
     chrom = vcf.seqnames[0]
 
     # Extract ancestry labels
     ancestries = sorted(set(_parse_pop_labels(vcf_file)))
     n_ancestries = len(ancestries)
-    anc_index = {label: i for i, label in enumerate(ancestries)}
+    I = eye(n_ancestries, dtype=int8) # One-hot encoding
 
     # Init global counters
-    global_counts = zeros((n_samples, n_ancestries), dtype=xp_int64)
-    total_alleles = zeros(n_samples, dtype=xp_int64)
+    global_counts = zeros((n_samples, n_ancestries), dtype=int64)
+    total_alleles = 0
 
     delayed_chunks = []
     batch = []
+    batch_len = 0
 
-    for rec in vcf:
+    def _finalize_batch(batch_recs):
+        """
+        Turn a list[cyvcf2.Record] into one Dask chunk (variants, samples, ancestries), int8
+        using fully vectorized operations.
+        Also return global_counts increment for the batch.
+        """
+        n_vars = len(batch_recs)
+        if n_vars == 0:
+            return (zeros((0, n_samples, n_ancestries), dtype=int8),
+                    zeros((n_samples, n_ancestries), dtype=int64),
+                    0)
+
+        pop_flat = empty(n_vars * n_samples, dtype=object)
+        idx = 0
+        for rec in batch_recs:
+            pop = rec.format("POP") # array-like len = n_samples (strings "A,B")
+            if pop is None:
+                pop_flat[idx:idx+n_samples] = ""
+                idx += n_samples
+                continue
+            pf = asarray(pop, dtype=object)
+            # Fast-path decode if bytes
+            mask_bytes = frompyfunc(lambda x: isinstance(x, (bytes, bytearray)), 1, 1)(pf).astype(bool)
+            if mask_bytes.any():
+                pf[mask_bytes] = [x.decode("utf-8", "ignore") for x in pf[mask_bytes]]
+            pop_flat[idx:idx+n_samples] = pf
+            idx += n_samples
+
+        pop_mat = pop_flat.reshape(n_vars, n_samples)
+
+        # Vectorize
+        pop_u = pop_mat.astype("U16", copy=False)
+        parts = np.char.partition(pop_u, ",") # shape (n_vars, n_samples, 3)
+        h0 = parts[:, :, 0]
+        h1 = parts[:, :, 2]
+
+        # Integer-encode ancestry labels with C-level factorization
+        h0_codes = Categorical(h0.ravel(), categories=ancestries,
+                               ordered=False).codes.reshape(n_vars, n_samples)
+        h1_codes = Categorical(h1.ravel(), categories=ancestries,
+                               ordered=False).codes.reshape(n_vars, n_samples)
+
+        # Build one-hot via table lookup
+        valid0 = h0_codes >= 0
+        valid1 = h1_codes >= 0
+
+        # Build chunk
+        local_chunk = zeros((n_vars, n_samples, n_ancestries), dtype=int8)
+
+        if valid0.any():
+            tmp0 = I.take(h0_codes, mode="clip", axis=0)
+            tmp0[~valid0] = 0
+            local_chunk += tmp0
+
+        if valid1.any():
+            tmp1 = I.take(h1_codes, mode="clip", axis=0)
+            tmp1[~valid1] = 0
+            local_chunk += tmp1
+
+        # Global counts: sum over variants for each sample x ancestry
+        batch_global = local_chunk.sum(axis=0, dtype=xp_int64)
+        batch_alleles = 2 * n_vars
+
+        return local_chunk, batch_global, batch_alleles
+
+    while True:
+        try:
+            rec = next(vcf)
+        except StopIteration:
+            break
         batch.append(rec)
-        if len(batch) >= chunk_size:
-            delayed_chunks.append(
-                from_delayed(
-                    delayed(_process_records)(batch, n_samples, anc_index),
-                    shape=(len(batch), n_samples, n_ancestries),
-                    dtype="i1",
-                )
-            )
-            # update globals
-            global_counts += _count_global(batch, n_samples, anc_index)
-            total_alleles += 2 * len(batch)
+        batch_len += 1
+        if batch_len >= chunk_size:
+            # Close over a local copy to avoid late-binding issues
+            records = batch
             batch = []
+            batch_len = 0
+
+            def _make_delayed(records_local):
+                return delayed(_finalize_batch)(records_local)
+
+            d = _make_delayed(records)
+            # Split dask
+            local_d = delayed(lambda x: x[0])(d)
+            g_d     = delayed(lambda x: (x[1], x[2]))(d)
+
+            # Collect number of variants
+            n_vars_local = len(records)
+            delayed_chunks.append((
+                from_delayed(local_d, shape=(n_vars_local, n_samples, n_ancestries), dtype=int8),
+                g_d
+            ))
 
     # Flush remainder
-    if batch:
-        delayed_chunks.append(
-            from_delayed(
-                delayed(_process_records)(batch, n_samples, anc_index),
-                shape=(len(batch), n_samples, n_ancestries),
-                dtype="i1",
-            )
-        )
-        global_counts += _count_global(batch, n_samples, anc_index)
-        total_alleles += 2 * len(batch)
+    if batch_len > 0:
+        records = batch
+        d = delayed(_finalize_batch)(records)
+        local_d = delayed(lambda x: x[0])(d)
+        g_d     = delayed(lambda x: (x[1], x[2]))(d)
+        delayed_chunks.append((
+            from_delayed(local_d, shape=(len(records), n_samples, n_ancestries), dtype=int8),
+            g_d
+        ))
 
+    # Separate local dask arrays and global contributions
+    local_arrays = [lc for (lc, _) in delayed_chunks]
+    global_pairs = [gd for (_, gd) in delayed_chunks]
+
+    # Build one concatenated Dask array lazily
     local_array = concatenate(delayed_chunks, axis=0)
-    
+
+    # Aggregate global fractions
+    global_contribs = dask_compute(*global_pairs)
+
+    for g_inc, alleles_inc in global_contribs:
+        global_counts += g_inc
+        total_alleles += alleles_inc
+
     # Normalize global ancestry
     fractions = global_counts / total_alleles[:, None]
     fractions = nan_to_num(fractions, nan=0.0)
@@ -253,45 +347,6 @@ def _load_haplotypes_and_global_ancestry(
     global_df["chrom"] = chrom
 
     return local_array, global_df
-
-
-def _process_records(batch, n_samples, anc_index):
-    """Turn a batch of cyvcf2 records into a local ancestry chunk."""
-    n_vars = len(batch)
-    n_ancestries = len(anc_index)
-    local_chunk = zeros((n_vars, n_samples, n_ancestries), dtype=int8)
-
-    for i, rec in enumerate(batch):
-        pop_fields = rec.format("POP")
-        if pop_fields is None:
-            continue
-        for j, raw in enumerate(pop_fields):
-            if raw:
-                parts = raw.split(",")
-                for hap in parts:
-                    idx = anc_index.get(hap.strip(), -1)
-                    if idx >= 0:
-                        local_chunk[i, j, idx] += 1
-    return local_chunk
-
-
-def _count_global(batch, n_samples, anc_index):
-    """Update global ancestry counts for a batch."""
-    n_ancestries = len(anc_index)
-    chunk_counts = zeros((n_samples, n_ancestries), dtype=xp_int64)
-
-    for rec in batch:
-        pop_fields = rec.format("POP")
-        if pop_fields is None:
-            continue
-        for j, raw in enumerate(pop_fields):
-            if raw:
-                parts = raw.split(",")
-                for hap in parts:
-                    idx = anc_index.get(hap.strip(), -1)
-                    if idx >= 0:
-                        chunk_counts[j, idx] += 1
-    return chunk_counts
 
 
 def _get_vcf_files(vcf_path: str) -> List[str]:
