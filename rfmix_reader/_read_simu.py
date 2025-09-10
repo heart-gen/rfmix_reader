@@ -328,7 +328,7 @@ def _load_haplotypes_and_global_ancestry(
     global_pairs = [gd for (_, gd) in delayed_chunks]
 
     # Build one concatenated Dask array lazily
-    local_array = concatenate(delayed_chunks, axis=0)
+    local_array = concatenate(local_arrays, axis=0)
 
     # Aggregate global fractions
     global_contribs = dask_compute(*global_pairs)
