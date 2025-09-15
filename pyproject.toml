@@ -55,7 +55,9 @@ priority = "explicit"
 
 [tool.poetry-dynamic-versioning]
 enable = true
-write_to = "rfmix_reader/_version.py"
+
+[tool.poetry-dynamic-versioning.metadata]
+file = "rfmix_reader/_version.py"
 
 [build-system]
 requires = ["poetry-core>=2.0.0", "poetry-dynamic-versioning"]
