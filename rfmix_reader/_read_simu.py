@@ -190,7 +190,7 @@ def _load_haplotypes_and_global_ancestry(
     # Initialize VCF
     vcf, samples, chrom = _init_vcf(vcf_file, vcf_threads)
     ancestries, mapper = _get_ancestry_labels(vcf_file)
-    n_samples, n_ac = len(samples), len(ancestries)
+    n_samples, n_anc = len(samples), len(ancestries)
 
     # Global ancestry accumulators
     global_counts = np.zeros((n_samples, n_anc), np.int64)
@@ -302,7 +302,7 @@ def _finalize_global_ancestry(samples, chrom, ancestries, global_counts, total_a
     ).astype(float)
     fractions = np.nan_to_num(fractions, nan=0.0)
 
-    df = DataFrame(fractions, columns=ancestries)
+    df = DataFrame(fractions, columns=ancestries.tolist())
     df.insert(0, "sample_id", samples)
     df["chrom"] = chrom
     return df
@@ -324,6 +324,7 @@ def _map_pop_to_codes(pop_mat: np.ndarray, ancestries: np.ndarray) -> np.ndarray
 
     # Fast searchsorted lookup
     idx = np.searchsorted(ancestries, hap)
+    idx = np.clip(idx, 0, len(ancestries)-1)
     valid = ancestries[idx] == hap
     codes = np.where(valid, idx.astype(np.uint8), MISSING)
 
@@ -334,7 +335,7 @@ def _build_mapper(ancestries: list[str]) -> tuple[np.ndarray, dict[str, np.uint8
     """
     Build fast ancestry lookup: returns sorted ancestry array + dict for labels.
     """
-    ancestries = np.array(sorted(ancestries), dtype="U")
+    ancestries = np.array(ancestries, dtype="U")
     mapper = {a: np.uint8(i) for i, a in enumerate(ancestries)}
     return ancestries, mapper
 
