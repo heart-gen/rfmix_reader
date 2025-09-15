@@ -173,7 +173,7 @@ def _parse_pop_labels(vcf_file: str, max_records: int = 100) -> List[str]:
                 for entry in flat:
                     if not entry:
                         continue
-                    ancestries.update(entry.split(","))
+                    ancestries.update(entry.replace(" ", "").split(","))
             if i + 1 >= max_records:
                 break
 
@@ -199,7 +199,7 @@ def _load_haplotypes_and_global_ancestry(
     ----------
     vcf_file : str
         Path to ancestry-annotated VCF.
-    chunk_size : int, default=10_000
+    chunk_size : int, default=50_000
         Number of variant records per processing chunk.
 
     Returns
@@ -248,11 +248,11 @@ def _process_vcf_batches(vcf, chunk_size, samples, ancestries, mapper):
     for rec in vcf:
         batch.append(rec)
         if len(batch) >= chunk_size:
-            delayed_chunks.append(_make_delayed_chunk(batch, samples,
+            delayed_chunks.append(_make_delayed_chunk(batch, n_samples,
                                                       ancestries, mapper))
             batch = []
     if batch:
-        delayed_chunks.append(_make_delayed_chunk(batch, samples,
+        delayed_chunks.append(_make_delayed_chunk(batch, n_samples,
                                                   ancestries, mapper))
 
     local_array = concatenate([lc for lc, _ in delayed_chunks], axis=0)
@@ -263,20 +263,26 @@ def _process_vcf_batches(vcf, chunk_size, samples, ancestries, mapper):
     return local_array, global_counts, total_alleles
 
 
-def _make_delayed_chunk(batch, samples, ancestries, mapper):
-    d = delayed(_finalize_batch_compact)(batch, ancestries, mapper, len(samples))
+def _make_delayed_chunk(batch, n_samples, ancestries, mapper):
+    d = delayed(_finalize_batch_compact)(batch, ancestries, mapper, n_samples)
     codes_d = delayed(lambda x: x[0])(d)
     g_d     = delayed(lambda x: (x[1], x[2]))(d)
     return (
-        from_delayed(codes_d, shape=(len(batch), len(samples),
+        from_delayed(codes_d, shape=(len(batch), n_samples,
                                      len(ancestries)), dtype=np.uint8),
         g_d,
     )
 
 
 def _finalize_global_ancestry(samples, chrom, ancestries, global_counts, total_alleles):
-    fractions = (global_counts / max(total_alleles, 1)).astype(float)
+    row_sums = global_counts.sum(axis=1, keepdims=True)
+    fractions = np.divide(
+        global_counts,
+        np.maximum(row_sums, 1),  # avoid div/0
+        where=row_sums > 0
+    ).astype(float)
     fractions = np.nan_to_num(fractions, nan=0.0)
+
     df = DataFrame(fractions, columns=ancestries)
     df.insert(0, "sample_id", samples)
     df["chrom"] = chrom
@@ -290,7 +296,6 @@ def _finalize_batch_compact(batch_recs, ancestries, mapper, n_samples):
     if n_vars == 0:
         return (
             np.empty((0, n_samples, n_anc), dtype=np.uint8),
-            np.zeros((n_samples, n_anc), dtype=np.int64),
             np.zeros((n_samples, n_anc), dtype=np.int64),
             0
         )
@@ -322,23 +327,21 @@ def _finalize_batch_compact(batch_recs, ancestries, mapper, n_samples):
     return codes_chunk, gc, alleles
 
 
-def _split_pop_to_codes(pop_mat_U, mapper):
+def _split_pop_to_codes(pop_mat_U: np.ndarray, mapper: dict) -> np.ndarray:
     """
-    pop_mat_U: (n_vars, n_samples) np.ndarray with unicode like "AFR,EUR"
-    Returns: codes uint8 of shape (n_vars, n_samples, 2) with MISSING=255
+    Convert POP field strings into ancestry codes.
     """
+    # Split once into two haplotype arrays
     parts = np.char.partition(pop_mat_U, ",")
     h0 = parts[:, :, 0]
     h1 = parts[:, :, 2]
 
-    # Mapper that returns 255 when missing/unknown
-    def map_vec(arr):
-        # vectorized dict.get; otypes must be [np.uint8]
-        f = np.vectorize(lambda x: mapper.get(x, MISSING), otypes=[np.uint8])
-        return f(arr)
+    # Fast lookup to returns 255 when missing/unknown
+    f = np.frompyfunc(lambda x: mapper.get(x, MISSING), 1, 1)
 
-    c0 = map_vec(h0)
-    c1 = map_vec(h1)
+    c0 = f(h0).astype(np.uint8)
+    c1 = f(h1).astype(np.uint8)
+
     return np.stack([c0, c1], axis=-1)
 
 
