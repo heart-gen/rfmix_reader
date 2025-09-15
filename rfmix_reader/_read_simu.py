@@ -17,6 +17,8 @@ from ._utils import _read_file
 
 __all__ = ["read_simu"]
 
+MISSING = np.uint8(255)
+
 def read_simu(
         vcf_path: str, chunk_size: np.int32 = 1_000_000, n_threads: int = 4,
         verbose: bool = True,
@@ -248,7 +250,7 @@ def _load_haplotypes_and_global_ancestry(
         ))
 
     # Build data
-    local_codes = concatenate([lc for (lc, _) in delayed_chunks], axis=0)
+    local_array = concatenate([lc for (lc, _) in delayed_chunks], axis=0)
     global_pairs = [gd for (_, gd) in delayed_chunks]
 
     # Aggregate global fractions
