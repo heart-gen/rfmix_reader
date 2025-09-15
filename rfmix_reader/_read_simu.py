@@ -20,7 +20,7 @@ __all__ = ["read_simu"]
 MISSING = np.uint8(255)
 
 def read_simu(
-        vcf_path: str, chunk_size: np.int32 = 1_000_000, n_threads: int = 4,
+        vcf_path: str, chunk_size: int = 1_000_000, n_threads: int = 4,
         verbose: bool = True,
 ) -> Tuple[DataFrame, DataFrame, Array]:
     """
@@ -30,7 +30,7 @@ def read_simu(
     Parameters
     ----------
     vcf_path : str
-        Path to directory contianing BGZF-compressed VCF files (`.vcf.gz`)
+        Path to directory containing BGZF-compressed VCF files (`.vcf.gz`)
         (e.g., one per chromosome).
     chunk_size : int, default=1_000_000
         Number of variant records to process per chunk when reading. Smaller
@@ -55,7 +55,7 @@ def read_simu(
     fn = _get_vcf_files(vcf_path)
 
     # Load loci information
-    pbar = tqdm(desc="Mapping loci information", total=len(fn), 
+    pbar = tqdm(desc="Mapping loci information", total=len(fn),
                 disable=not verbose)
     loci_dfs = _read_file(
         fn,
@@ -94,7 +94,7 @@ def read_simu(
 
 
 def _read_loci_from_vcf(
-        vcf_file: str, chunk_size: np.int32 = 1_000_000
+        vcf_file: str, chunk_size: int = 1_000_000
 ) -> Iterator[DataFrame]:
     """
     Extract loci information (chromosome and position) from a VCF file.
@@ -126,27 +126,23 @@ def _read_loci_from_vcf(
         yield DataFrame(loci)
 
 
-def _parse_pop_labels(vcf_file: str) -> List[str]:
+def _parse_pop_labels(vcf_file: str, max_records: int = 100) -> List[str]:
     """
     Parse ancestry population labels from a breakpoint (.bp) file
-    that corresponds to the given VCF file.
+    or from the VCF POP FORMAT field if .bp is missing.
 
     Parameters
     ----------
     vcf_file : str
         Path to a VCF with a `POP` FORMAT field.
+    max_records : int, default=100
+        Number of VCF records to scan for ancestry labels if the .bp file
+        is not found.
 
     Returns
     -------
     list of str
         Sorted list of ancestry labels (alphabetical order).
-
-    Raises
-    ------
-    FileNotFoundError
-        If the corresponding breakpoint file does not exist.
-    ValueError
-        If no ancestry labels could be found in the breakpoint file.
     """
     # Derive .bp file path from VCF path
     vcf_dir = dirname(vcf_file)
@@ -154,22 +150,38 @@ def _parse_pop_labels(vcf_file: str) -> List[str]:
     chr_prefix = sub(r"\.vcf\.gz$", "", base_name)
     bp_file = join(vcf_dir, f"{chr_prefix}.bp")
 
-    if not exists(bp_file):
-        raise FileNotFoundError(f"Breakpoint file not found: {bp_file}")
-
     ancestries = set()
-    with open(bp_file, "r") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("Sample_"):
-                continue  # skip sample headers
 
-            parts = line.split()
-            if parts:
-                ancestries.add(parts[0])  # ancestry label
+    if exists(bp_file):
+        # Primary: read from .bp file (faster)
+        with open(bp_file, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("Sample_"):
+                    continue
+
+                parts = line.split()
+                if parts:
+                    ancestries.add(parts[0])
+    else:
+        # Fallback
+        vcf = VCF(vcf_file)
+        for i, rec in enumerate(vcf):
+            pop = rec.format("POP")
+            if pop is not None:
+                flat = np.asarray(pop).astype(str).ravel()
+                for entry in flat:
+                    if not entry:
+                        continue
+                    ancestries.update(entry.split(","))
+            if i + 1 >= max_records:
+                break
 
     if not ancestries:
-        raise ValueError(f"No ancestry labels found in breakpoint file: {bp_file}")
+        raise ValueError(
+            f"No ancestry labels found in .bp file or first {max_records} "
+            f"records of VCF: {vcf_file}"
+        )
 
     return sorted(ancestries)
 
@@ -200,90 +212,94 @@ def _load_haplotypes_and_global_ancestry(
         Global ancestry per sample with chromosome label
     """
     # Initialize VCF
-    vcf = VCF(vcf_file)
-    if vcf_threads and hasattr(vcf, "set_threads"):
-        vcf.set_threads(vcf_threads)
-        
-    samples = vcf.samples
-    n_samples = len(samples)
-    chrom = vcf.seqnames[0]
+    vcf, samples, chrom = _init_vcf(vcf_file, vcf_threads)
+    ancestries, mapper = _get_ancestry_labels(vcf_file)
 
-    # Extract ancestry labels
-    ancestries = sorted(set(_parse_pop_labels(vcf_file)))
-    n_ancestries = len(ancestries)
-    mapper = _build_mapper(ancestries)
+    local_array, global_counts, total_alleles = _process_vcf_batches(
+        vcf, chunk_size, samples, ancestries, mapper
+    )
 
-    # Init global counters
-    delayed_chunks = []
-    global_counts = np.zeros((n_samples, n_ancestries), dtype=np.int64)
-    total_alleles = 0
-    batch, blen = [], 0
-
-    def _make_delayed(records_local):
-        return delayed(_finalize_batch_compact)(records_local, ancestries, mapper, n_samples)
-    
-    while True:
-        try:
-            rec = next(vcf)
-        except StopIteration:
-            break
-        batch.append(rec); blen += 1
-        if blen >= chunk_size:
-            d = _make_delayed(batch)
-            codes_d = delayed(lambda x: x[0])(d)
-            g_d     = delayed(lambda x: (x[1], x[2]))(d)
-            n_vars_local = blen
-            delayed_chunks.append((
-                from_delayed(codes_d, shape=(n_vars_local, n_samples, n_ancestries), dtype=np.int8),
-                g_d
-            ))
-            batch, blen = [], 0
-
-    # Flush remainder
-    if blen > 0:
-        d = _make_delayed(batch)
-        codes_d = delayed(lambda x: x[0])(d)
-        g_d     = delayed(lambda x: (x[1], x[2]))(d)
-        delayed_chunks.append((
-            from_delayed(codes_d, shape=(blen, n_samples, n_ancestries), dtype=np.int8),
-            g_d
-        ))
-
-    # Build data
-    local_array = concatenate([lc for (lc, _) in delayed_chunks], axis=0)
-    global_pairs = [gd for (_, gd) in delayed_chunks]
-
-    # Aggregate global fractions
-    for g_inc, alleles_inc in dask_compute(*global_pairs):
-        global_counts += g_inc
-        total_alleles += alleles_inc
-
-    # Normalize global ancestry
-    fractions = (global_counts / max(total_alleles, 1)).astype(float)
-    fractions = np.nan_to_num(fractions, nan=0.0)
-
-    # Build dataframe
-    global_df = DataFrame(fractions, columns=ancestries)
-    global_df.insert(0, "sample_id", samples)
-    global_df["chrom"] = chrom
-
+    global_df = _finalize_global_ancestry(
+        samples, chrom, ancestries, global_counts, total_alleles
+    )
     return local_array, global_df
 
 
+def _init_vcf(vcf_file, vcf_threads):
+    vcf = VCF(vcf_file)
+    if vcf_threads and hasattr(vcf, "set_threads"):
+        vcf.set_threads(vcf_threads)
+    return vcf, vcf.samples, vcf.seqnames[0]
+
+
+def _get_ancestry_labels(vcf_file):
+    ancestries = _parse_pop_labels(vcf_file)
+    return ancestries, _build_mapper(ancestries)
+
+
+def _process_vcf_batches(vcf, chunk_size, samples, ancestries, mapper):
+    n_samples, n_ancestries = len(samples), len(ancestries)
+
+    delayed_chunks = []
+    global_counts = np.zeros((n_samples, n_ancestries), np.int64)
+    total_alleles = 0
+
+    batch = []
+    for rec in vcf:
+        batch.append(rec)
+        if len(batch) >= chunk_size:
+            delayed_chunks.append(_make_delayed_chunk(batch, samples,
+                                                      ancestries, mapper))
+            batch = []
+    if batch:
+        delayed_chunks.append(_make_delayed_chunk(batch, samples,
+                                                  ancestries, mapper))
+
+    local_array = concatenate([lc for lc, _ in delayed_chunks], axis=0)
+    for g_inc, alleles_inc in dask_compute(*[gd for _, gd in delayed_chunks]):
+        global_counts += g_inc
+        total_alleles += alleles_inc
+
+    return local_array, global_counts, total_alleles
+
+
+def _make_delayed_chunk(batch, samples, ancestries, mapper):
+    d = delayed(_finalize_batch_compact)(batch, ancestries, mapper, len(samples))
+    codes_d = delayed(lambda x: x[0])(d)
+    g_d     = delayed(lambda x: (x[1], x[2]))(d)
+    return (
+        from_delayed(codes_d, shape=(len(batch), len(samples),
+                                     len(ancestries)), dtype=np.uint8),
+        g_d,
+    )
+
+
+def _finalize_global_ancestry(samples, chrom, ancestries, global_counts, total_alleles):
+    fractions = (global_counts / max(total_alleles, 1)).astype(float)
+    fractions = np.nan_to_num(fractions, nan=0.0)
+    df = DataFrame(fractions, columns=ancestries)
+    df.insert(0, "sample_id", samples)
+    df["chrom"] = chrom
+    return df
+
+
 def _finalize_batch_compact(batch_recs, ancestries, mapper, n_samples):
-    """Return (codes_chunk uint8, global_counts int64[ n_samples, n_ancestries ], alleles_in_batch)"""
+    """Compact ancestry extraction for one batch of VCF records."""
     n_anc = len(ancestries)
     n_vars = len(batch_recs)
     if n_vars == 0:
-        return (np.empty((0, n_samples, 2), dtype=np.uint8),
-                np.zeros((n_samples, n_anc), dtype=np.int64),
-                0)
+        return (
+            np.empty((0, n_samples, n_anc), dtype=np.uint8),
+            np.zeros((n_samples, n_anc), dtype=np.int64),
+            np.zeros((n_samples, n_anc), dtype=np.int64),
+            0
+        )
 
     # Gather POP as a single (n_vars, n_samples) unicode array
     pop_flat = np.empty(n_vars * n_samples, dtype=object)
     idx = 0
     for rec in batch_recs:
-        pop = rec.format("POP")  # len = n_samples; bytes or str like "AFR,EUR"
+        pop = rec.format("POP")
         if pop is None:
             pop_flat[idx:idx+n_samples] = ""
         else:
@@ -292,15 +308,10 @@ def _finalize_batch_compact(batch_recs, ancestries, mapper, n_samples):
         idx += n_samples
 
     pop_mat = pop_flat.reshape(n_vars, n_samples).astype('U', copy=False)
-    codes_chunk = _split_pop_to_codes(pop_mat, mapper)  # (n_vars, n_samples, 2), uint8
+    codes_chunk = _split_pop_to_codes(pop_mat, mapper)
 
     # Global counts by sample via bincount on codes (ignore 255)
     gc = np.zeros((n_samples, n_anc), dtype=np.int64)
-    # reshape to (n_vars*n_samples*2,)
-    flat = codes_chunk.reshape(-1)
-    mask = flat != MISSING
-    valid = flat[mask].astype(np.int64, copy=False)
-    bc = np.bincount(valid, minlength=n_anc)  # total over all samples
     for s in range(n_samples):
         vs = codes_chunk[:, s, :].reshape(-1)
         m = vs != MISSING
@@ -316,7 +327,7 @@ def _split_pop_to_codes(pop_mat_U, mapper):
     pop_mat_U: (n_vars, n_samples) np.ndarray with unicode like "AFR,EUR"
     Returns: codes uint8 of shape (n_vars, n_samples, 2) with MISSING=255
     """
-    parts = np.char.partition(pop_mat_U, ",")  # (n_vars, n_samples, 3): [h0, ',', h1]
+    parts = np.char.partition(pop_mat_U, ",")
     h0 = parts[:, :, 0]
     h1 = parts[:, :, 2]
 
