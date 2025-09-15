@@ -10,7 +10,23 @@ once. Additionally, we leverage GPU acceleration to improve computational speed.
 `rfmix-reader` can be installed using [pip](https://pypi.python.org/pypi/pip):
 
 ```bash
+## Normal install
 pip install rfmix-reader
+```
+
+```bash
+## With GPU acceleration
+pip install rfmix-reader[gpu]
+```
+
+```bash
+## With docs build support
+pip install rfmix-reader[docs]
+```
+
+```bash
+## With testing tools
+pip install rfmix-reader[tests]
 ```
 
 **GPU Acceleration:**
