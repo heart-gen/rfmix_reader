@@ -15,13 +15,13 @@ from dask.array import Array, concatenate, from_delayed, stack
 from ._utils import get_prefixes, set_gpu_environment, _read_file
 
 try:
-    from torch.cuda import is_available
+    from torch.cuda import is_available as gpu_available
 except ModuleNotFoundError as e:
     print("Warning: PyTorch is not installed. Using CPU!")
-    def is_available():
+    def gpu_available():
         return False
 
-if is_available():
+if gpu_available():
     from cupy import array, full, zeros, asarray, int8
     from cudf import DataFrame, read_csv, concat, CategoricalDtype
 else:
@@ -67,7 +67,7 @@ def read_flare(
     - :const:`2` Both alleles are associated with this ancestry
     """
     # Device information
-    if verbose and is_available():
+    if verbose and gpu_available():
         set_gpu_environment()
 
     # Get file prefixes
