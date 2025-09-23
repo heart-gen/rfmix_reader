@@ -347,7 +347,7 @@ def _get_vcf_files(vcf_path: str) -> List[str]:
     Parameters
     ----------
     vcf_path : str
-        Path to a directory containing `.vcf.gz` files.
+        Path to a directory containing `.vcf` or `.vcf.gz` files.
 
     Returns
     -------
@@ -363,16 +363,19 @@ def _get_vcf_files(vcf_path: str) -> List[str]:
     """
     if isdir(vcf_path):
         vcf_files = sorted(
-            f for f in glob(join(vcf_path, "*.vcf.gz"))
-            if not f.endswith("anc.vcf.gz")
+            f for f in glob(join(vcf_path, "*.vcf*"))
+            if not f.endswith("anc.vcf") and not f.endswith("anc.vcf.gz")
         )
-    elif isfile(vcf_path) and vcf_path.endswith(".vcf.gz"):
-        if vcf_path.endswith("anc.vcf.gz"):
+    elif isfile(vcf_path) and (vcf_path.endswith(".vcf") or vcf_path.endswith(".vcf.gz")):
+        if vcf_path.endswith("anc.vcf") or vcf_path.endswith("anc.vcf.gz"):
             vcf_files = []
         else:
             vcf_files = [vcf_path]
     else:
-        raise ValueError(f"Invalid input: {vcf_path} must be a .vcf.gz file or directory containing them.")
+        raise ValueError(
+            f"Invalid input: {vcf_path} must be a .vcf, .vcf.gz file, "
+            f"or directory containing them."
+        )
 
     if not vcf_files:
         raise FileNotFoundError(f"No VCF files found in path: {vcf_path}")

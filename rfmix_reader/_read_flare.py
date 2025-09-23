@@ -99,7 +99,7 @@ def read_flare(
     local_array = _read_file(
         fn,
         lambda f: _load_haplotypes(f["anc.vcf.gz"], int(chunk_size / 100)),
-        pbar,
+        pbar
     )
     pbar.close()
     local_array = concatenate(local_array, axis=0)
@@ -295,7 +295,10 @@ def _load_haplotypes(vcf_file: str, chunk_size: int32 = 10_000) -> Array:
 
             # Count local ancestries in vectorized fashion
             for anc_idx in range(n_ancestries):
-                counts[i, :, anc_idx] = (an1 == anc_idx).astype(int8) + (an2 == anc_idx).astype(int8)
+                counts[i, :, anc_idx] = (
+                    (an1 == anc_idx).astype(int8) +
+                    (an2 == anc_idx).astype(int8)
+                )
 
         return counts
 
@@ -304,21 +307,30 @@ def _load_haplotypes(vcf_file: str, chunk_size: int32 = 10_000) -> Array:
     for rec in vcf:
         records_buffer.append(rec)
         if len(records_buffer) == chunk_size:
-            delayed_arrays.append(delayed(process_chunk)(records_buffer))
+            delayed_arrays.append(
+                from_delayed(
+                    delayed(process_chunk)(records_buffer),
+                    shape=(chunk_size, n_samples, n_ancestries),
+                    dtype=int8,
+                )
+            )
             records_buffer = []
 
     if records_buffer:
-        delayed_arrays.append(delayed(process_chunk)(records_buffer))
+        delayed_arrays.append(
+            from_delayed(
+                delayed(process_chunk)(records_buffer),
+                shape=(len(records_buffer), n_samples, n_ancestries),
+                dtype=int8,
+            )
+        )
 
     # Build dask arrays by stacking (variants, samples, ancestries)
-    combined = concatenate(
-        [from_delayed(d, shape=(chunk_size, n_samples, n_ancestries), dtype=int8)
-         for d in delayed_arrays],
-        axis=0,
-    )
+    combined = concatenate(delayed_arrays, axis=0)
 
     an_dask_arrays = {
-        label: combined[:, :, ancestry_map[label]] for label in ancestry_map.keys()
+        label: combined[:, :, ancestry_map[label]]
+        for label in ancestry_map.keys()
     }
     arrays_list = [an_dask_arrays[k] for k in sorted(an_dask_arrays.keys())]
 
