@@ -7,6 +7,7 @@ from re import sub
 from tqdm import tqdm
 from glob import glob
 from cyvcf2 import VCF
+from pathlib import Path
 from pandas import DataFrame, concat
 from typing import List, Tuple, Iterator
 from dask import delayed, compute as dask_compute
@@ -361,23 +362,29 @@ def _get_vcf_files(vcf_path: str) -> List[str]:
     FileNotFoundError
         If no VCF files matching the pattern are found.
     """
-    if isdir(vcf_path):
-        vcf_files = sorted(
-            f for f in glob(join(vcf_path, "*.vcf*"))
-            if not f.endswith("anc.vcf") and not f.endswith("anc.vcf.gz")
-        )
-    elif isfile(vcf_path) and (vcf_path.endswith(".vcf") or vcf_path.endswith(".vcf.gz")):
-        if vcf_path.endswith("anc.vcf") or vcf_path.endswith("anc.vcf.gz"):
-            vcf_files = []
-        else:
-            vcf_files = [vcf_path]
+    vcf_path = Path(vcf_path)
+
+    if vcf_path.is_dir():
+        candidates = sorted(vcf_path.glob("*.vcf*"))
+    elif vcf_path.is_file() and vcf_path.suffix in {".vcf", ".gz"}:
+        candidates = [vcf_path]
     else:
         raise ValueError(
             f"Invalid input: {vcf_path} must be a .vcf, .vcf.gz file, "
             f"or directory containing them."
         )
 
+    # Filter out unwanted files
+    vcf_files = []
+    for f in candidates:
+        suffixes = "".join(f.suffixes)
+        if suffixes not in {".vcf", ".vcf.gz"}:
+            continue  # skip things like .tbi
+        if f.name.endswith("anc.vcf") or f.name.endswith("anc.vcf.gz"):
+            continue
+        vcf_files.append(f)
+
     if not vcf_files:
         raise FileNotFoundError(f"No VCF files found in path: {vcf_path}")
 
-    return vcf_files
+    return sorted(str(f) for f in vcf_files)
