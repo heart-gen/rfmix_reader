@@ -1,10 +1,6 @@
-import os
-import io
-import gzip
-import tempfile
+import pytest
 import numpy as np
 import pandas as pd
-import pytest
 from pathlib import Path
 
 import rfmix_reader._utils as utils

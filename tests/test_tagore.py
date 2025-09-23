@@ -1,8 +1,6 @@
-import io
 import pickle
-import numpy as np
+import pytest, io
 import pandas as pd
-import pytest
 from pathlib import Path
 
 import matplotlib
