@@ -8,6 +8,7 @@ from tqdm import tqdm
 from glob import glob
 from cyvcf2 import VCF
 from pathlib import Path
+from dask.array import da
 from pandas import DataFrame, concat
 from typing import List, Tuple, Iterator
 from dask import delayed, compute as dask_compute
@@ -60,7 +61,7 @@ def read_simu(
                 disable=not verbose)
     loci_dfs = _read_file(
         fn,
-        lambda f: concat(list(_read_loci_from_vcf(f, chunk_size)),
+        lambda f: concat(_read_loci_from_vcf(f, chunk_size),
                          ignore_index=True),
         pbar,
     )
@@ -134,8 +135,7 @@ def _read_haplotypes(
     """
     Vectorized local ancestry extraction from VCF with `POP` FORMAT field.
     Uses cyvcf2 region-based pulls (requires tabix index).
-    Returns only the local ancestry Dask array. Global ancestry can be
-    computed later from the local array.
+    Returns local ancestry Dask array and metadata.
     """
     # Initialize VCF
     vcf, samples, chrom, chrom_len = _init_vcf(vcf_file, vcf_threads)
@@ -203,54 +203,50 @@ def _process_vectorized_batch(
     dask_chunks = []
     for start in range(0, n_vars, dask_chunk):
         end = min(start + dask_chunk, n_vars)
-        sub = codes_chunk[start:end]  # view slice
+        sub_chunk = codes_chunk[start:end]  # view slice
         dask_chunks.append(
-            from_delayed(
-                delayed(lambda x: x)(sub),
-                shape=sub.shape,
-                dtype=np.uint8
-            )
+            from_delayed(delayed(sub_chunk),
+                         shape=sub_chunk.shape,
+                         dtype=np.uint8)
         )
 
     return dask_chunks
 
 
 def _compute_global_from_local(
-    local_array: Array, samples: list[str], chrom: str,
-    ancestries: np.ndarray, missing_code: int = MISSING
+    local_array: Array, samples: List[str], chrom: str, ancestries: np.ndarray
 ) -> DataFrame:
     """
     Compute per-sample global ancestry proportions from a local ancestry array.
     """
     n_anc = len(ancestries)
 
-    # mask missing values
-    valid = (local_array != missing_code)
+    # Counts per ancestry
+    global_counts = [
+        (local_array == a).sum(axis=(0, 2))
+        for a in range(n_anc)
+    ]
 
-    # counts per ancestry
-    global_counts = []
-    for a in range(n_anc):
-        count = (local_array == a).sum(axis=(0, 2))
-        global_counts.append(count)
+    # Stack and normalize using Dask
+    counts_da = da.stack(global_counts, axis=1)
+    row_sums = counts_da.sum(axis=1, keepdims=True)
 
-    global_counts = dask_compute(*global_counts)
-    global_counts = np.vstack(global_counts).T  # shape (samples, n_anc)
-
-    # convert to fractions
-    row_sums = global_counts.sum(axis=1, keepdims=True)
-    fractions = np.divide(
-        global_counts,
-        np.maximum(row_sums, 1),
-        where=row_sums > 0
+    fractions = da.where(
+        row_sums > 0,
+        counts_da / row_sums,
+        0.0
     ).astype(float)
 
+    fractions = fractions.compute()
+
+    # Wrap in DataFrame
     df = DataFrame(fractions, columns=ancestries.tolist())
     df.insert(0, "sample_id", samples)
     df["chrom"] = chrom
     return df
 
 
-def _normalize_labels(arr: np.ndarray | list[str]) -> np.ndarray:
+def _normalize_labels(arr: np.ndarray | List[str]) -> np.ndarray:
     """
     Normalize ancestry labels for consistent mapping.
     """
@@ -288,6 +284,8 @@ def _parse_pop_labels(vcf_file: str, max_records: int = 100) -> List[str]:
     """
     Parse ancestry population labels from a breakpoint (.bp) file
     or from the VCF POP FORMAT field if .bp is missing.
+
+    Ensure VCF is BGZF-compressed and tabix-indexed.
     """
     # Derive .bp file path from VCF path
     vcf_dir = dirname(vcf_file)
@@ -333,7 +331,7 @@ def _parse_pop_labels(vcf_file: str, max_records: int = 100) -> List[str]:
     return sorted(set(ancestries))
 
 
-def _build_mapper(ancestries: list[str]) -> tuple[np.ndarray, dict[str, np.uint8]]:
+def _build_mapper(ancestries: List[str]) -> Tuple[np.ndarray, dict[str, np.uint8]]:
     """
     Build fast ancestry lookup: returns sorted ancestry array + dict for labels.
     """
