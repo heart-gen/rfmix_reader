@@ -77,7 +77,7 @@ def read_simu(
                 disable=not verbose)
     ancestry_data = _read_file(
         fn,
-        lambda f: _load_haplotypes_and_global_ancestry(f, chunk_size // 100, n_threads),
+        lambda f: _load_haplotypes_and_global_ancestry(f, chunk_size, n_threads),
         pbar,
     )
     pbar.close()
@@ -125,6 +125,163 @@ def _read_loci_from_vcf(
 
     if loci:
         yield DataFrame(loci)
+
+
+def _read_haplotypes(
+        vcf_file: str, chunk_size: int = 1_000_000, vcf_threads: int = 16,
+        dask_chunk: int = 50_000
+) -> Tuple[Array, DataFrame]:
+    """
+    Vectorized local ancestry extraction from VCF with `POP` FORMAT field.
+    Uses cyvcf2 region-based pulls (requires tabix index).
+    Returns only the local ancestry Dask array. Global ancestry can be
+    computed later from the local array.
+    """
+    # Initialize VCF
+    vcf, samples, chrom, chrom_len = _init_vcf(vcf_file, vcf_threads)
+    ancestries, mapper = _get_ancestry_labels(vcf_file)
+
+    local_chunks = []
+    # region-based iteration
+    for start in range(1, chrom_len + 1, chunk_size):
+        end = min(start + chunk_size - 1, chrom_len)
+        region = f"{chrom}:{start}-{end}"
+        batch_recs = list(vcf(region))
+        if not batch_recs:
+            continue
+
+        new_chunks = _process_vectorized_batch(
+            batch_recs, ancestries, mapper, len(samples),
+            dask_chunk=dask_chunk
+        )
+        local_chunks.extend(new_chunks)
+
+    # Build final dask.array
+    local_array = concatenate(local_chunks, axis=0)
+    return local_array, ancestries, samples, chrom
+
+
+def _load_haplotypes_and_global_ancestry(
+        vcf_file: str, chunk_size: int = 1_000_000, vcf_threads: int = 16,
+        dask_chunk: int = 50_000
+):
+    local_array, ancestries, samples, chrom = \
+        _read_haplotypes(vcf_file, chunk_size, vcf_threads, dask_chunk)
+    g_anc = _compute_global_from_local(local_array, samples,
+                                       chrom, ancestries)
+    
+    return local_array, g_anc
+
+
+def _init_vcf(vcf_file, vcf_threads):
+    vcf = VCF(vcf_file)
+    if vcf_threads and hasattr(vcf, "set_threads"):
+        vcf.set_threads(vcf_threads)
+
+    return vcf, vcf.samples, vcf.seqnames[0], vcf.seqlens[0]
+
+
+def _process_vectorized_batch(
+    batch_recs, ancestries, mapper, n_samples, dask_chunk=50_000
+):
+    """
+    Vectorized ancestry extraction for a large batch, then slice
+    into smaller Dask chunks to bound memory.
+    """
+    n_vars = len(batch_recs)
+    n_anc = len(ancestries)
+    if n_vars == 0:
+        return [], np.zeros((n_samples, n_anc), dtype=np.int64), 0
+
+    # Collect POP field in one go
+    pop_mat = np.array([rec.format("POP") for rec in batch_recs], dtype="U")
+
+    # Vectorized mapping with normalization
+    codes_chunk = _map_pop_to_codes(pop_mat, ancestries)
+
+    # Slice into smaller Dask chunks
+    dask_chunks = []
+    for start in range(0, n_vars, dask_chunk):
+        end = min(start + dask_chunk, n_vars)
+        sub = codes_chunk[start:end]  # view slice
+        dask_chunks.append(
+            from_delayed(
+                delayed(lambda x: x)(sub),
+                shape=sub.shape,
+                dtype=np.uint8
+            )
+        )
+
+    return dask_chunks
+
+
+def _compute_global_from_local(
+    local_array: Array, samples: list[str], chrom: str,
+    ancestries: np.ndarray, missing_code: int = MISSING
+) -> DataFrame:
+    """
+    Compute per-sample global ancestry proportions from a local ancestry array.
+    """
+    n_anc = len(ancestries)
+
+    # mask missing values
+    valid = (local_array != missing_code)
+
+    # counts per ancestry
+    global_counts = []
+    for a in range(n_anc):
+        count = (local_array == a).sum(axis=(0, 2))
+        global_counts.append(count)
+
+    global_counts = dask_compute(*global_counts)
+    global_counts = np.vstack(global_counts).T  # shape (samples, n_anc)
+
+    # convert to fractions
+    row_sums = global_counts.sum(axis=1, keepdims=True)
+    fractions = np.divide(
+        global_counts,
+        np.maximum(row_sums, 1),
+        where=row_sums > 0
+    ).astype(float)
+
+    df = DataFrame(fractions, columns=ancestries.tolist())
+    df.insert(0, "sample_id", samples)
+    df["chrom"] = chrom
+    return df
+
+
+def _normalize_labels(arr: np.ndarray | list[str]) -> np.ndarray:
+    """
+    Normalize ancestry labels for consistent mapping.
+    """
+    arr = np.array(arr, dtype="U")
+    arr = np.char.strip(arr)
+    arr = np.char.upper(arr)
+    arr = np.char.replace(arr, " ", "")
+    return arr
+
+
+def _map_pop_to_codes(pop_mat: np.ndarray, ancestries: np.ndarray) -> np.ndarray:
+    """
+    Map ancestry labels in pop_mat (strings) to numeric codes.
+    Uses binary search on sorted ancestry list.
+    """
+    # Flatten haplotypes
+    parts = np.char.partition(pop_mat, ",")
+    h0, h1 = parts[:, :, 0], parts[:, :, 2]
+
+    # Normalize both haplotype arrays
+    h0 = _normalize_labels(h0)
+    h1 = _normalize_labels(h1)
+    hap = np.stack([h0, h1], axis=-1)
+
+    # Fast searchsorted lookup
+    idx = np.searchsorted(ancestries, hap)
+    idx = np.clip(idx, 0, len(ancestries)-1)
+    valid = ancestries[idx] == hap
+    codes = np.where(valid, idx.astype(np.uint8), MISSING)
+
+    return codes
 
 
 def _parse_pop_labels(vcf_file: str, max_records: int = 100) -> List[str]:
@@ -176,162 +333,6 @@ def _parse_pop_labels(vcf_file: str, max_records: int = 100) -> List[str]:
     return sorted(set(ancestries))
 
 
-def _load_haplotypes_and_global_ancestry(
-        vcf_file: str, chunk_size: int = 50_000, vcf_threads: int = 16,
-        dask_chunk: int = 50_000
-) -> Tuple[Array, DataFrame]:
-    """
-    Vectorized local/global ancestry extraction from VCF with `POP` FORMAT field.
-    Internally processes large chunks (fast, vectorized), then yields smaller
-    slices to Dask (memory-friendly).
-
-    Uses cyvcf2 batch pulls instead of per-record loops.
-    Keeps local ancestry as lazy Dask array, computes global ancestry eagerly.
-    """
-    # Initialize VCF
-    vcf, samples, chrom = _init_vcf(vcf_file, vcf_threads)
-    ancestries, mapper = _get_ancestry_labels(vcf_file)
-    n_samples, n_anc = len(samples), len(ancestries)
-
-    # Global ancestry accumulators
-    global_counts = np.zeros((n_samples, n_anc), np.int64)
-    total_alleles = 0
-    local_chunks = []
-
-    batch = []
-    for rec in vcf:
-        batch.append(rec)
-        if len(batch) >= chunk_size:
-            new_chunks, gc, alleles = _process_vectorized_batch(
-                batch, ancestries, mapper, n_samples,
-                dask_chunk=dask_chunk
-            )
-            local_chunks.extend(new_chunks)
-            global_counts += gc
-            total_alleles += alleles
-            batch = []
-
-    if batch:
-        new_chunks, gc, alleles = _process_vectorized_batch(
-            batch, ancestries, mapper, n_samples,
-            dask_chunk=dask_chunk
-        )
-        local_chunks.extend(new_chunks)
-        global_counts += gc
-        total_alleles += alleles
-
-    # Build final dask.array
-    local_array = concatenate(local_chunks, axis=0)
-
-    # Global ancestry proportions
-    global_df = _finalize_global_ancestry(
-        samples, chrom, ancestries, global_counts, total_alleles
-    )
-    return local_array, global_df
-
-
-def _init_vcf(vcf_file, vcf_threads):
-    vcf = VCF(vcf_file)
-    if vcf_threads and hasattr(vcf, "set_threads"):
-        vcf.set_threads(vcf_threads)
-    return vcf, vcf.samples, vcf.seqnames[0]
-
-
-def _get_ancestry_labels(vcf_file):
-    ancestries = _parse_pop_labels(vcf_file)
-    return _build_mapper(ancestries)
-
-
-def _process_vectorized_batch(
-    batch_recs, ancestries, mapper, n_samples, dask_chunk=50_000
-):
-    """
-    Vectorized ancestry extraction for a large batch, then slice
-    into smaller Dask chunks to bound memory.
-    """
-    n_vars = len(batch_recs)
-    n_anc = len(ancestries)
-    if n_vars == 0:
-        return [], np.zeros((n_samples, n_anc), dtype=np.int64), 0
-
-    # Collect POP field in one go
-    pop_mat = np.array([rec.format("POP") for rec in batch_recs], dtype="U")
-
-    # Vectorized mapping with normalization
-    codes_chunk = _map_pop_to_codes(pop_mat, ancestries)
-
-    # Global ancestry counts (vectorized)
-    gc = np.zeros((n_samples, n_anc), dtype=np.int64)
-    for a in range(n_anc):
-        gc[:, a] = (codes_chunk == a).sum(axis=(0, 2))
-
-    alleles = 2 * n_vars
-
-    # Slice into smaller Dask chunks
-    dask_chunks = []
-    for start in range(0, n_vars, dask_chunk):
-        end = min(start + dask_chunk, n_vars)
-        sub = codes_chunk[start:end]  # view slice
-        dask_chunks.append(
-            from_delayed(
-                delayed(lambda x: x)(sub),
-                shape=sub.shape,
-                dtype=np.uint8
-            )
-        )
-
-    return dask_chunks, gc, alleles
-
-
-def _normalize_labels(arr: np.ndarray | list[str]) -> np.ndarray:
-    """
-    Normalize ancestry labels for consistent mapping.
-    """
-    arr = np.array(arr, dtype="U")
-    arr = np.char.strip(arr)
-    arr = np.char.upper(arr)
-    arr = np.char.replace(arr, " ", "")
-    return arr
-
-
-def _finalize_global_ancestry(samples, chrom, ancestries, global_counts, total_alleles):
-    row_sums = global_counts.sum(axis=1, keepdims=True)
-    fractions = np.divide(
-        global_counts,
-        np.maximum(row_sums, 1),  # avoid div/0
-        where=row_sums > 0
-    ).astype(float)
-    fractions = np.nan_to_num(fractions, nan=0.0)
-
-    df = DataFrame(fractions, columns=ancestries.tolist())
-    df.insert(0, "sample_id", samples)
-    df["chrom"] = chrom
-    return df
-
-
-def _map_pop_to_codes(pop_mat: np.ndarray, ancestries: np.ndarray) -> np.ndarray:
-    """
-    Map ancestry labels in pop_mat (strings) to numeric codes.
-    Uses binary search on sorted ancestry list.
-    """
-    # Flatten haplotypes
-    parts = np.char.partition(pop_mat, ",")
-    h0, h1 = parts[:, :, 0], parts[:, :, 2]
-
-    # Normalize both haplotype arrays
-    h0 = _normalize_labels(h0)
-    h1 = _normalize_labels(h1)
-    hap = np.stack([h0, h1], axis=-1)
-
-    # Fast searchsorted lookup
-    idx = np.searchsorted(ancestries, hap)
-    idx = np.clip(idx, 0, len(ancestries)-1)
-    valid = ancestries[idx] == hap
-    codes = np.where(valid, idx.astype(np.uint8), MISSING)
-
-    return codes
-
-
 def _build_mapper(ancestries: list[str]) -> tuple[np.ndarray, dict[str, np.uint8]]:
     """
     Build fast ancestry lookup: returns sorted ancestry array + dict for labels.
@@ -339,6 +340,11 @@ def _build_mapper(ancestries: list[str]) -> tuple[np.ndarray, dict[str, np.uint8
     ancestries = np.array(ancestries, dtype="U")
     mapper = {a: np.uint8(i) for i, a in enumerate(ancestries)}
     return ancestries, mapper
+
+
+def _get_ancestry_labels(vcf_file):
+    ancestries = _parse_pop_labels(vcf_file)
+    return _build_mapper(ancestries)
 
 
 def _get_vcf_files(vcf_path: str) -> List[str]:
