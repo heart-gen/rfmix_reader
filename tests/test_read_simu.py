@@ -7,11 +7,10 @@ import os
 from rfmix_reader._read_simu import (
     read_simu,
     _parse_pop_labels,
-    _split_pop_to_codes,
+    _map_pop_to_codes,
     _build_mapper,
     MISSING,
 )
-
 
 @pytest.fixture
 def realistic_vcf(tmp_path):
@@ -72,10 +71,10 @@ def test_parse_pop_labels_fallback(tmp_path):
     assert "YRI" in labels and "CEU" in labels
 
 
-def test_split_pop_to_codes():
-    mapper = _build_mapper(["CEU", "YRI"])
+def test_map_pop_to_codes():
+    ancestries, mapper = _build_mapper(["CEU", "YRI"])
     arr = np.array([["YRI,CEU", "CEU,YRI"]])
-    codes = _split_pop_to_codes(arr, mapper)
+    codes = _map_pop_to_codes(arr, ancestries)
     assert codes.shape == (1, 2, 2)
     assert np.all(codes != MISSING)
 
