@@ -8,7 +8,7 @@ from tqdm import tqdm
 from glob import glob
 from cyvcf2 import VCF
 from pathlib import Path
-from dask.array import da
+import dask.array as da
 from pandas import DataFrame, concat
 from typing import List, Tuple, Iterator
 from dask import delayed, compute as dask_compute
