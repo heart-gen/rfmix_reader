@@ -40,9 +40,14 @@ def test__draw_local_ancestry_and_plot_tagore(tmp_path, monkeypatch):
     # Monkeypatch open_binary to return a fake pickle containing (header, footer)
     data = pickle.dumps(("<svg>", "</svg>"))
     monkeypatch.setattr(tagore, "open_binary", lambda *a, **k: io.BytesIO(data))
-    # Monkeypatch svg2png/pdf to no-op
-    monkeypatch.setattr(tagore, "svg2png", lambda **k: None)
-    monkeypatch.setattr(tagore, "svg2pdf", lambda **k: None)
+
+    # Monkeypatch svg2png/pdf to create dummy files
+    def fake_svg2png(url, write_to, **k):
+        Path(write_to).touch()
+    def fake_svg2pdf(url, write_to, **k):
+        Path(write_to).touch()
+    monkeypatch.setattr(tagore, "svg2png", fake_svg2png)
+    monkeypatch.setattr(tagore, "svg2pdf", fake_svg2pdf)
 
     tagore.plot_local_ancestry_tagore(bed_df, str(tmp_path / "fig"), "hg37", "png", force=True)
     assert (tmp_path / "fig.png").exists() or (tmp_path / "fig.pdf").exists()

@@ -128,7 +128,7 @@ def _read_vcf(fn: str, chunk_size: int32 = 1_000_000) -> DataFrame:
     except FileNotFoundError:
         raise FileNotFoundError(f"File {fn} not found.")
     except Exception as e:
-        raise IOError(f"Error reading file {fn}: {e}")
+        raise OSError(f"Error reading file {fn}: {e}") from e
 
     # Validate that resulting DataFrame is correct type
     if not isinstance(df, DataFrame):
@@ -177,7 +177,7 @@ def _read_csv(fn: str, header: dict) -> DataFrame:
         df = read_csv(fn, sep="\t", names=list(header.keys()),
                       dtype=header, skiprows=1)
     except Exception as e:
-        raise IOError(f"Error reading file '{fn}': {e}")
+        raise OSError(f"Error reading file {fn}: {e}") from e
 
     # Validate that resulting DataFrame is correct type
     if not isinstance(df, DataFrame):
@@ -223,7 +223,7 @@ def _read_anc_noi(fn: str) -> DataFrame:
         header = odict(_types(fn))
         return _read_csv(fn, header)
     except Exception as e:
-        raise IOError(f"Error reading Q matrix from '{fn}': {e}")
+        raise OSError(f"Error reading file {fn}: {e}") from e
 
 
 def _load_haplotypes(vcf_file: str, chunk_size: int32 = 10_000) -> Array:
@@ -417,7 +417,7 @@ def _types(fn: str) -> dict:
     except FileNotFoundError:
         raise FileNotFoundError(f"File '{fn}' not found.")
     except Exception as e:
-        raise IOError(f"Error reading file '{fn}': {e}")
+        raise OSError(f"Error reading file {fn}: {e}") from e
 
     # Validate that the resulting DataFrame is of the correct type
     if not isinstance(df, DataFrame):

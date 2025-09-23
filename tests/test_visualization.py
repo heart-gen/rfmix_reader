@@ -38,7 +38,7 @@ def test_plot_ancestry_by_chromosome(tmp_path):
     assert (tmp_path / "chromsum.pdf").exists()
 
 
-def test_expand_and_annotate_tagore():
+def test_expand_and_annotate_tagore(monkeypatch):
     df = pd.DataFrame({
         "chromosome": ["1", "1"],
         "start": [0, 100],
@@ -47,8 +47,12 @@ def test_expand_and_annotate_tagore():
         "S1_EUR": [0, 1],
     })
     pops = ["AFR", "EUR"]
+
     expanded = viz._expand_dataframe(df, ["S1_AFR", "S1_EUR"])
     assert "sample_name" in expanded.columns
+
+    # Force NumPy backend for chrCopy
+    monkeypatch.setattr(viz, "cp", np)
     ann = viz._annotate_tagore(df, ["S1_AFR", "S1_EUR"], pops)
     assert "#chr" in ann.columns and "chrCopy" in ann.columns
 
@@ -63,9 +67,10 @@ def test_generate_tagore_bed(monkeypatch):
     g_anc = pd.DataFrame({
         "sample_id": ["S1"], "chrom": ["1"], "AFR": [1.0]
     })
-    # Fake admix_to_bed_individual
     monkeypatch.setattr(viz, "admix_to_bed_individual",
                         lambda loci, g, a, sn, cs, ms, v: df)
+    # Force NumPy backend
+    monkeypatch.setattr(viz, "cp", np)
     admix = np.zeros((1,1,1))
     out = viz.generate_tagore_bed(df, g_anc, admix, 0)
     assert "#chr" in out.columns

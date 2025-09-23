@@ -550,7 +550,19 @@ def create_binaries(
         if not fn:
             raise FileNotFoundError(f"No files found with prefix: {file_prefix}")
 
-        fb_files = [f["fb.tsv"] for f in fn if "fb.tsv" in f]
+        fb_files = []
+        for f in fn:
+            fb_path = f["fb.tsv"]  # normalized key, may be plain or gzipped file
+            prefix = fb_path.replace(".fb.tsv", "").replace(".fb.tsv.gz", "")
+
+            has_plain = Path(f"{prefix}.fb.tsv").exists()
+            has_gzip  = Path(f"{prefix}.fb.tsv.gz").exists()
+            if has_plain and has_gzip:
+                raise RuntimeError(
+                    f"Both compressed and uncompressed FB files found for prefix {prefix}"
+                )
+            fb_files.append(fb_path)
+
         makedirs(binary_dir, exist_ok=True)
         print(f"Created binary files at: {binary_dir}")
         _generate_binary_files(fb_files, binary_dir)

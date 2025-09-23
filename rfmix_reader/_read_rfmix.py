@@ -151,7 +151,7 @@ def _read_tsv(fn: str) -> DataFrame:
     except FileNotFoundError:
         raise FileNotFoundError(f"File {fn} not found.")
     except Exception as e:
-        raise IOError(f"Error reading file {fn}: {e}")
+        raise OSError(f"Error reading file {fn}: {e}") from e
 
     # Validate that resulting DataFrame is correct type
     if not isinstance(df, DataFrame):
@@ -202,7 +202,7 @@ def _read_csv(fn: str, header: dict) -> DataFrame:
                           names=list(header.keys()), dtype=header, comment="#",
                           compression=None, engine="c", iterator=False)
     except Exception as e:
-        raise IOError(f"Error reading file '{fn}': {e}")
+        raise OSError(f"Error reading file {fn}: {e}") from e
 
     # Validate that resulting DataFrame is correct type
     if not isinstance(df, DataFrame):
@@ -250,7 +250,7 @@ def _read_Q_noi(fn: str) -> DataFrame:
         header = odict(_types(fn))
         return _read_csv(fn, header)
     except Exception as e:
-        raise IOError(f"Error reading Q matrix from '{fn}': {e}")
+        raise OSError(f"Error reading file {fn}: {e}") from e
 
 
 def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
@@ -338,7 +338,7 @@ def _types(fn: str) -> dict:
     except FileNotFoundError:
         raise FileNotFoundError(f"File '{fn}' not found.")
     except Exception as e:
-        raise IOError(f"Error reading file '{fn}': {e}")
+        raise OSError(f"Error reading file {fn}: {e}") from e
 
     # Validate that the resulting DataFrame is of the correct type
     if not isinstance(df, DataFrame):
