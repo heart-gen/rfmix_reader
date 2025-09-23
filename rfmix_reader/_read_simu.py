@@ -21,7 +21,7 @@ __all__ = ["read_simu"]
 MISSING = np.uint8(255)
 
 def read_simu(
-        vcf_path: str, chunk_size: int = 1_000_000, n_threads: int = 4,
+        vcf_path: str, chunk_size: int = 1_000_000, n_threads: int = 16,
         verbose: bool = True,
 ) -> Tuple[DataFrame, DataFrame, Array]:
     """
@@ -177,7 +177,7 @@ def _parse_pop_labels(vcf_file: str, max_records: int = 100) -> List[str]:
 
 
 def _load_haplotypes_and_global_ancestry(
-        vcf_file: str, chunk_size: int = 50_000, vcf_threads: int = 4,
+        vcf_file: str, chunk_size: int = 50_000, vcf_threads: int = 16,
         dask_chunk: int = 50_000
 ) -> Tuple[Array, DataFrame]:
     """
