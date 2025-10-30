@@ -264,12 +264,11 @@ def _map_pop_to_codes(pop_mat: np.ndarray, ancestries: np.ndarray) -> np.ndarray
     """
     # Flatten haplotypes
     parts = np.char.partition(pop_mat, ",")
-    h0, h1 = parts[:, :, 0], parts[:, :, 2]
+    h0, h1 = parts[:, 0], parts[:, 2]
 
     # Normalize both haplotype arrays
-    h0 = _normalize_labels(h0)
-    h1 = _normalize_labels(h1)
     hap = np.stack([h0, h1], axis=-1)
+    hap = _normalize_labels(hap)
 
     # Fast searchsorted lookup
     idx = np.searchsorted(ancestries, hap)
@@ -302,22 +301,28 @@ def _parse_pop_labels(vcf_file: str, max_records: int = 100) -> List[str]:
                 line = line.strip()
                 if not line or line.startswith("Sample_"):
                     continue
-
                 parts = line.split()
                 if parts:
                     ancestries.add(parts[0])
     else:
         # Fallback
         vcf = VCF(vcf_file)
-        for i, rec in enumerate(vcf):
-            pop = rec.format("POP")
+        n_scanned = 0
+        for rec in vcf:
+            try:
+                pop = rec.format("POP")
+            except Exception as e:
+                continue
+
             if pop is not None:
                 flat = np.asarray(pop).astype(str).ravel()
                 for entry in flat:
                     if not entry:
                         continue
                     ancestries.update(entry.replace(" ", "").split(","))
-            if i + 1 >= max_records:
+
+            n_scanned += 1
+            if n_scanned >= max_records:
                 break
 
     if not ancestries:
