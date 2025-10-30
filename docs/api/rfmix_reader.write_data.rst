@@ -1,7 +1,7 @@
-rfmix_reader.read_rfmix
+rfmix_reader.write_data
 =======================
 
 .. currentmodule:: rfmix_reader
 
-.. autofunction:: read_rfmix
+.. autofunction:: write_data
 

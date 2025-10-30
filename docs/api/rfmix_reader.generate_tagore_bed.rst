@@ -1,6 +1,7 @@
-﻿rfmix\_reader.generate\_tagore\_bed
-===================================
+rfmix_reader.generate_tagore_bed
+================================
 
 .. currentmodule:: rfmix_reader
 
 .. autofunction:: generate_tagore_bed
+

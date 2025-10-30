@@ -1,7 +1,7 @@
-rfmix_reader.read_rfmix
+rfmix_reader.read_flare
 =======================
 
 .. currentmodule:: rfmix_reader
 
-.. autofunction:: read_rfmix
+.. autofunction:: read_flare
 
