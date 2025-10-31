@@ -163,3 +163,4 @@ cython_debug/
 *.msp.tsv
 *.sis.tsv
 rfmix_reader/_version.py
+docs/api/generated/
