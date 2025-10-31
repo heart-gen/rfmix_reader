@@ -95,7 +95,7 @@ napoleon_attr_annotations = True
 
 # Mock heavy deps during autodoc import
 autodoc_mock_imports = [
-    "psutil",
+    "psutil", "zarr",
     "torch", "cupy", "cudf", "cuml", "dask_cuda", "numba",
     "scanpy", "anndata", "cyvcf2", "pysam"
 ]

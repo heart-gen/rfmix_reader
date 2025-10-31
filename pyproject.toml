@@ -7,8 +7,6 @@ maintainers = ["Kynon J.M. Benjamin <kj.benjamin90@gmail.com>"]
 readme = "README.md"
 license = "GPL-3.0-or-later"
 keywords = ["file parser", "rfmix", "gpu acceleration", "local ancestry"]
-homepage = "https://rfmix-reader.readthedocs.io/en/latest/"
-repository = "https://github.com/heart-gen/rfmix_reader.git"
 packages = [{ include = "rfmix_reader" }]
 classifiers = [
   "Programming Language :: Python :: 3",
@@ -42,6 +40,11 @@ gpu = ["cupy", "cudf", "dask-cudf", "torch"]
 io  = ["pyarrow"]  # parquet export
 docs = ["sphinx", "sphinx-rtd-theme", "sphinx-autodoc-typehints", "sphinx-copybutton"]
 tests = ["pytest"]
+
+[tool.poetry.urls]
+homepage = "https://rfmix-reader.readthedocs.io/en/latest/"
+repository = "https://github.com/heart-gen/rfmix_reader.git"
+"Bug Tracker" = "https://github.com/heart-gen/rfmix_reader/issues"
 
 [tool.poetry.scripts]
 create-binaries = "rfmix_reader._cli:main"
