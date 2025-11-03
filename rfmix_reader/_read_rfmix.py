@@ -132,18 +132,14 @@ def _read_tsv(fn: str) -> DataFrame:
     DataFrame: DataFrame containing specified columns from the TSV file.
     """
     header = {"chromosome": CategoricalDtype(), "physical_position": int32}
-    try:
-        if gpu_available():
+    try: 
+        if gpu_available(): 
             df = read_csv(fn, sep="\t", header=0, usecols=list(header.keys()),
-                          dtype=header, comment="#")
+                          dtype=header, comment="#", compression="infer")
         else:
             chunks = read_csv(
-                fn,
-                sep=r"\s+",
-                header=0,
-                usecols=list(header.keys()),
-                dtype=header,
-                comment="#",
+                fn, sep=r"\s+", header=0, usecols=list(header.keys()),
+                dtype=header, comment="#", compression="infer", 
                 chunksize=100_000, # Low memory chunks
             )
             # Concatenate chunks into single DataFrame
