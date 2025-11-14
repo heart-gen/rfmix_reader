@@ -290,8 +290,8 @@ def _load_haplotypes(vcf_file: str, chunk_size: int32 = 10_000) -> Array:
             an2 = rec.format("AN2")
 
             # Mask missing values as -1
-            an1 = asarray(an1, dtype=int8)
-            an2 = asarray(an2, dtype=int8)
+            an1 = asarray(an1, dtype=int8).ravel()
+            an2 = asarray(an2, dtype=int8).ravel()
 
             # Count local ancestries in vectorized fashion
             for anc_idx in range(n_ancestries):
