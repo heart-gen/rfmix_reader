@@ -100,6 +100,33 @@ structure that ``read_rfmix`` returns.
 
    loci_df, g_anc, admix = read_simu("/path/to/simulations/")
 
+.. note::
+
+   Haptools does **not** emit the chromosome length inside the
+   ``##contig`` header line, but ``read_simu`` requires that information
+   to index each BGZF-compressed VCF file. You can copy the
+   ``contigs.txt`` file that Haptools creates from the reference FASTA
+   and use it to reheader every simulated chromosome before calling
+   ``read_simu``. The following shell snippet shows one way to do this
+   with ``bcftools`` and ``tabix``::
+
+      CONTIGS="../../three_populations/_m/contigs.txt"
+      VCFDIR="gt-files"
+      CHR="chr${SLURM_ARRAY_TASK_ID}"
+      OUT="${VCFDIR}/${CHR}.vcf.gz"
+      IN="${VCFDIR}/back/${CHR}.vcf.gz"
+
+      CONTIG_LINE=$(grep -w "ID=${CHR}" "$CONTIGS")
+      if [[ -z "$CONTIG_LINE" ]]; then
+          echo "ERROR: No contig line found for ${CHR} in $CONTIGS"
+          exit 1
+      fi
+
+      bcftools view -h "$IN" \
+          | sed "s/^##contig=<ID=${CHR}>.*/${CONTIG_LINE}/" > header.${CHR}.tmp
+      bcftools reheader -h header.${CHR}.tmp -o "$OUT" "$IN"
+      tabix -p vcf "$OUT"
+
 Understanding the outputs
 =========================
 

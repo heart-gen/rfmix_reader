@@ -141,6 +141,43 @@ z = interpolate_array(variant_loci_df, admix, "/path/to/output")
 print(z.shape)
 ```
 
+### Reading Haptools simulations
+
+Use `read_simu` to load BGZF-compressed VCF files created by
+`haptools simgenotype --pop_field`:
+
+```python
+from rfmix_reader import read_simu
+
+loci_df, g_anc, admix = read_simu("/path/to/simulations/")
+```
+
+Haptools does **not** include the chromosome length in the `##contig`
+header lines, but `read_simu` requires that metadata to index each VCF.
+Copy the `contigs.txt` file Haptools generates from the FASTA you used
+for simulation and reheader every file with the appropriate contig entry
+before calling `read_simu`. The following snippet shows one approach
+using `bcftools` and `tabix`:
+
+```bash
+CONTIGS="../../three_populations/_m/contigs.txt"
+VCFDIR="gt-files"
+CHR="chr${SLURM_ARRAY_TASK_ID}"
+OUT="${VCFDIR}/${CHR}.vcf.gz"
+IN="${VCFDIR}/back/${CHR}.vcf.gz"
+
+CONTIG_LINE=$(grep -w "ID=${CHR}" "$CONTIGS")
+if [[ -z "$CONTIG_LINE" ]]; then
+    echo "ERROR: No contig line found for ${CHR} in $CONTIGS"
+    exit 1
+fi
+
+bcftools view -h "$IN" \
+    | sed "s/^##contig=<ID=${CHR}>.*/${CONTIG_LINE}/" > header.${CHR}.tmp
+bcftools reheader -h header.${CHR}.tmp -o "$OUT" "$IN"
+tabix -p vcf "$OUT"
+```
+
 ---
 
 ## Development Install
