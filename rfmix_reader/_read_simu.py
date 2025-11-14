@@ -13,6 +13,7 @@ from pandas import DataFrame, concat
 from typing import List, Tuple, Iterator
 from dask import delayed, compute as dask_compute
 from dask.array import Array, concatenate, from_delayed
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from os.path import isdir, join, isfile, dirname, basename, exists
 
 from ._utils import _read_file
@@ -128,6 +129,18 @@ def _read_loci_from_vcf(
         yield DataFrame(loci)
 
 
+def _load_haplotypes_and_global_ancestry(
+        vcf_file: str, chunk_size: int = 1_000_000, vcf_threads: int = 16,
+        dask_chunk: int = 50_000
+):
+    local_array, ancestries, samples, chrom = \
+        _read_haplotypes(vcf_file, chunk_size, vcf_threads, dask_chunk)
+    g_anc = _compute_global_from_local(local_array, samples,
+                                       chrom, ancestries)
+    
+    return local_array, g_anc
+
+
 def _read_haplotypes(
         vcf_file: str, chunk_size: int = 1_000_000, vcf_threads: int = 16,
         dask_chunk: int = 50_000
@@ -141,36 +154,38 @@ def _read_haplotypes(
     vcf, samples, chrom, chrom_len = _init_vcf(vcf_file, vcf_threads)
     ancestries, mapper = _get_ancestry_labels(vcf_file)
 
-    local_chunks = []
-    # region-based iteration
-    for start in range(1, chrom_len + 1, chunk_size):
+    # Region processor
+    def process_region(start: int):
         end = min(start + chunk_size - 1, chrom_len)
         region = f"{chrom}:{start}-{end}"
         batch_recs = list(vcf(region))
         if not batch_recs:
-            continue
-
-        new_chunks = _process_vectorized_batch(
-            batch_recs, ancestries, mapper, len(samples),
-            dask_chunk=dask_chunk
+            return []
+        return _process_vectorized_batch(
+            batch_recs, ancestries, mapper,
+            len(samples), dask_chunk=dask_chunk
         )
-        local_chunks.extend(new_chunks)
+
+    # Thread pool mapping
+    start = range(1, chrom_len + 1, chunk_size)
+    local_chunks = []
+    with ThreadPoolExecutor(max_workers=vcf_threads) as executor:
+        futures = {executor.submit(process_region, start): start for start in starts}
+        for future in as_completed(futures):
+            try:
+                result = future.result()
+                local_chunks.extend(result)
+            except Exception as e:
+                start = futures[future]
+                print(f"[ERROR] Chunk at start={start} failed: {e}")
+                raise
 
     # Build final dask.array
+    if not local_chunks:
+        raise RuntimeError("No valid data extracted from VCF.")
+
     local_array = concatenate(local_chunks, axis=0)
     return local_array, ancestries, samples, chrom
-
-
-def _load_haplotypes_and_global_ancestry(
-        vcf_file: str, chunk_size: int = 1_000_000, vcf_threads: int = 16,
-        dask_chunk: int = 50_000
-):
-    local_array, ancestries, samples, chrom = \
-        _read_haplotypes(vcf_file, chunk_size, vcf_threads, dask_chunk)
-    g_anc = _compute_global_from_local(local_array, samples,
-                                       chrom, ancestries)
-    
-    return local_array, g_anc
 
 
 def _init_vcf(vcf_file, vcf_threads):
@@ -191,7 +206,7 @@ def _process_vectorized_batch(
     n_vars = len(batch_recs)
     n_anc = len(ancestries)
     if n_vars == 0:
-        return [], np.zeros((n_samples, n_anc), dtype=np.int64), 0
+        return []
 
     # Collect POP field in one go
     pop_mat = np.array([rec.format("POP") for rec in batch_recs], dtype="U")
@@ -264,7 +279,7 @@ def _map_pop_to_codes(pop_mat: np.ndarray, ancestries: np.ndarray) -> np.ndarray
     """
     # Flatten haplotypes
     parts = np.char.partition(pop_mat, ",")
-    h0, h1 = parts[:, 0], parts[:, 2]
+    h0, h1 = parts[:, :, 0], parts[:, :, 2]
 
     # Normalize both haplotype arrays
     hap = np.stack([h0, h1], axis=-1)
@@ -272,7 +287,7 @@ def _map_pop_to_codes(pop_mat: np.ndarray, ancestries: np.ndarray) -> np.ndarray
 
     # Fast searchsorted lookup
     idx = np.searchsorted(ancestries, hap)
-    idx = np.clip(idx, 0, len(ancestries)-1)
+    idx = np.clip(idx, 0, len(ancestries) - 1)
     valid = ancestries[idx] == hap
     codes = np.where(valid, idx.astype(np.uint8), MISSING)
 
