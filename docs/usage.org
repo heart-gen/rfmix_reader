@@ -11,22 +11,19 @@
 #+STARTUP:   align fold nodlcheck hidestars oddeven lognotestate
 #+TAGS:      Write(w) Update(u) Fix(f) Check(c) noexport(n)
 
-* Haplotypes
-Using =rfmix-reader= is as simple as [[https://pandas-plink.readthedocs.io/en/latest/usage.html][=pandas-plink=]].
+* General workflow
+Using =rfmix-reader= is as simple as [[https://pandas-plink.readthedocs.io/en/latest/usage.html][=pandas-plink=]] but extended to
+RFMix, FLARE, and Haptools simulations. The sections below show how to
+prepare input data, read each supported format, understand the returned
+objects, and visualize the results.
 
-We provide example data for two and three population
-admixtured from simulation data created with [[https://haptools.readthedocs.io/en/stable/][Haptools]].
-You can download it from Figshare:
-
-Once downloaded, we are ready to start!
-
-** Input
-First, we need to generate binary files. I suggest using
-=create_binaries=.
+** Preparing input data
+The canonical pipeline starts with RFMix's =*.fb.tsv= files. Convert them
+to binary chunks with =create_binaries= to minimize later I/O.
 
 #+begin_src python :results output
   from rfmix_reader import create_binaries
-  
+
   prefix_path = "../examples/two_populations/out/"
   create_binaries(prefix_path)
 #+end_src
@@ -34,163 +31,131 @@ First, we need to generate binary files. I suggest using
 #+RESULTS[20f284c23771c5bf268a8cb4a468752edf5b0410]:
 : Created binary files at: ./binary_files
 : Converting fb files to binary!
-:   0% 0/3 [00:00<?, ?it/s] 33% 1/3 [05:03<10:07, 303.82s/it]100% 3/3 [05:03<00:00, 101.27s/it]
-: Successfully converted 3 files to binary format.
+100% 3/3 [05:03<00:00, 101.27s/it]
+As of =v0.1.20= you can also trigger the conversion from the CLI.
+** Reading RFMix output
+=read_rfmix= combines the loci metadata, chromosome-level global ancestry
+files, and local ancestry chunks. If =binary_dir= is omitted the function
+will transparently build the binaries in the background.
+  from rfmix_reader import read_rfmix
 
-As of =v0.1.20=, this can also be invoked via the command line.
+  loci_df, g_anc, admix = read_rfmix(
+      "../examples/two_populations/out/",
+      binary_dir="../examples/two_populations/out/binary_files",
+  )
 
-#+begin_src shell :results output
-  create-binaries -h
-#+end_src
-
-#+RESULTS:
-#+begin_example
-usage: create-binaries [-h] [--version] [--binary_dir BINARY_DIR] file_prefix
-
-Create binary files from RFMix *.fb.tsv files.
-
-positional arguments:
-  file_prefix           The prefix used to identify the relevant FB TSV files.
-
-options:
-  -h, --help            show this help message and exit
-  --version             Show the version of the program and exit.
-  --binary_dir BINARY_DIR
-                        The directory where the binary files will be stored.
-                        Defaults to './binary_files'.
-#+end_example
-
-Once the binary files are created, we can read in
-the data with the main function =read_rfmix=.
+** Reading FLARE output
+=read_flare= mirrors the =read_rfmix= interface but expects FLARE's
+=*.anc.vcf.gz= and =global.anc.gz= pairs. The resulting =(loci_df, g_anc,
+admix)= tuple therefore drops directly into the rest of the workflow.
 
 #+begin_src python :results output
-    from rfmix_reader import read_rfmix
+  from rfmix_reader import read_flare
 
-    loci, rf_q, admix = read_rfmix(prefix_path)
+  loci_df, g_anc, admix = read_flare("/path/to/flare/prefix/")
 #+end_src
 
-#+RESULTS[894f008f7dfcb07d33816de2f9c4858756db92f6]:
-: GPU 0: NVIDIA TITAN V
-:   Total memory: 11.77 GB
-:   CUDA capability: 7.0
-: Multiple files read in this order: ['chr20', 'chr21', 'chr22']
-: Mapping loci files:   0% 0/3 [00:00<?, ?it/s]Mapping loci files:  33% 1/3 [00:02<00:05,  2.72s/it]Mapping loci files:  67% 2/3 [00:04<00:01,  1.93s/it]Mapping loci files: 100% 3/3 [00:05<00:00,  1.73s/it]Mapping loci files: 100% 3/3 [00:05<00:00,  1.86s/it]
-: Mapping Q files:   0% 0/3 [00:00<?, ?it/s]Mapping Q files: 100% 3/3 [00:00<00:00, 47.69it/s]
-: Mapping fb files:   0% 0/3 [00:00<?, ?it/s]Mapping fb files:  33% 1/3 [00:00<00:00,  2.66it/s]Mapping fb files:  67% 2/3 [00:00<00:00,  3.46it/s]Mapping fb files: 100% 3/3 [00:00<00:00,  3.75it/s]Mapping fb files: 100% 3/3 [00:00<00:00,  3.55it/s]
+** Reading Haptools simulations
+=read_simu= parses BGZF-compressed VCFs produced by
+=haptools simgenotype --pop_field=. It infers the chromosome list,
+computes the per-sample global ancestry matrix, and builds the same
+output tuple as the other loaders.
 
-With a GPU, three chromosomes can be loaded in to your
-session in less than a minute.
+#+begin_src python :results output
+  from rfmix_reader import read_simu
+  loci_df, g_anc, admix = read_simu("/path/to/simulations/")
+#+end_src
+* Understanding the outputs
+Every reader returns =loci_df=, =g_anc=, and =admix= to keep downstream
+code identical.
+** =loci_df=
+  loci_df.shape
+  loci_df.head()
+       chromosome  physical_position  i
+0           chr20              60137  0
+1           chr20              60291  1
+2           chr20              60340  2
+3           chr20              60440  3
+4           chr20              60823  4
 
-** Output
-
-*** =loci=
-=loci= are the metadata for the RFMix results.
-
+The =i= column mirrors =pandas_plink= and simplifies joins with other
+variant-level resources.
+** =g_anc=
+=g_anc= (previously called =rf_q=) stores the global ancestry proportions
+per individual and chromosome.
+  g_anc.shape
+  g_anc.head()
+You can still extract sample IDs or the set of populations for later use.
+  sample_ids = g_anc.sample_id.unique().to_arrow()
+  pops = g_anc.drop(["sample_id", "chrom"], axis=1).columns.values
+** =admix=
+=admix= exposes the local ancestry array as a =dask.array=, matching the
+BED semantics from =pandas_plink= so that only the requested chunks are
+materialized into memory.
 #+begin_src python :results value verbatim
-  loci.shape
-#+end_src
-
-#+RESULTS[217b70fa31fcce528d45f44213a25d1722e1309b]:
-: (646287, 3)
-
+#+RESULTS:
 #+begin_src python :results value
-  loci
-#+end_src
-
-#+RESULTS[bc9ff363ba2f5069d7ad629933ab8302c74b7f5c]:
+#+RESULTS:
 #+begin_example
-       chromosome  physical_position       i
-0           chr20              60137       0
-1           chr20              60291       1
-2           chr20              60340       2
-3           chr20              60440       3
-4           chr20              60823       4
-...           ...                ...     ...
-646282      chr22           50790690  646282
-646283      chr22           50790993  646283
-646284      chr22           50791163  646284
-646285      chr22           50791228  646285
-646286      chr22           50791360  646286
-
-[646287 rows x 3 columns]
+[[2 2 2 ... 0 0 0]
+ [2 2 1 ... 0 0 1]
+ [1 2 1 ... 0 0 0]
+ ...
+ [1 1 2 ... 0 0 0]
+ [2 2 2 ... 1 1 1]
+ [2 2 1 ... 1 0 1]]
 #+end_example
+Column ordering follows the population-major convention (all individuals
+for population 1, then all individuals for population 2, etc.). Generate
+column labels with a list comprehension when needed.
+#+RESULTS:
+* Loci imputation
+Imputing local ancestry loci information to genotype variant locations
+improves downstream integration. The =interpolate_array= helper combines
+RFMix loci with genotype coordinates using memory-efficient
+[[https://zarr.readthedocs.io/en/stable/index.html][Zarr]] arrays.
+#+begin_src python :results none
 
-To model it after =pandas_plink=, there is an index column =i=.
-This is useful for software developing, but in general
-only the first two columns are needed.
-
-*** =rf_q=
-=rf_q= is the global ancestry results per chromosome for each
-individual. This is the =*.rfmix.Q= files combined into a 
-single =DataFrame=.
-
-#+begin_src python :results value verbatim
-  rf_q.shape
+#+end_src
+#+begin_src python :results none
+                       "physical_position": "pos"},
+              inplace=True)
+  variant_df = variant_df.drop_duplicates(subset=["chrom", "pos"], keep='first')
+                                     how="outer", indicator=True) \
+                              .loc[:, ["chrom", "pos", "i", "_merge"]]
 #+end_src
 
-#+RESULTS[03374a9f07046dd7deeef0520f12f85217cf8c20]:
-: (1500, 4)
+* Visualization
+=rfmix-reader= bundles several plotting/export helpers so you can inspect
+results without additional reshaping.
 
-#+begin_src python :results value table
-  rf_q
+** Global summaries
+Use =plot_global_ancestry= for per-individual stacked bars and
+=plot_ancestry_by_chromosome= for chromosome-level boxplots. Both accept
+the =save_path= and =save_multi_format= options exposed by the plotting
+utilities.
+
+#+begin_src python :results none
+  from rfmix_reader import (
+      plot_global_ancestry,
+      plot_ancestry_by_chromosome,
+  )
+
+  plot_global_ancestry(g_anc, dpi=300, bbox_inches="tight")
+  plot_ancestry_by_chromosome(g_anc, dpi=300, bbox_inches="tight")
 #+end_src
 
-#+RESULTS[d52da46fcc3adf7aa1e9dfa5442db27cc50082af]:
-#+begin_example
-       sample_id      AFR      EUR  chrom
-0       Sample_1  0.85383  0.14617  chr20
-1       Sample_2  0.68933  0.31067  chr20
-2       Sample_3  1.00000  0.00000  chr20
-3       Sample_4  0.86754  0.13246  chr20
-4       Sample_5  0.68280  0.31720  chr20
-...          ...      ...      ...    ...
-1495  Sample_496  0.82322  0.17678  chr22
-1496  Sample_497  0.73456  0.26544  chr22
-1497  Sample_498  1.00000  0.00000  chr22
-1498  Sample_499  0.87362  0.12638  chr22
-1499  Sample_500  0.85129  0.14871  chr22
-
-[1500 rows x 4 columns]
-#+end_example
-
-Since we have three chromosomes, that means there
-are 500 samples in this example dataset.
+** Export for TAGORE and BED-based tools
+=generate_tagore_bed= converts =(loci_df, g_anc, admix)= to an annotated
+BED-style table that matches TAGORE's expectations. Use it whenever you
+need external visualization or browser-ready tracks.
 
 #+begin_src python :results value
-  rf_q.groupby("chrom").size()
+  from rfmix_reader import generate_tagore_bed
+
+  tagore_df = generate_tagore_bed(loci_df, g_anc, admix, sample_num=0)
+  tagore_df.head()
 #+end_src
-
-#+RESULTS[d92e8d18e5bbb94760735575df8b58cf442f61c1]:
-: chrom
-: chr22    500
-: chr20    500
-: chr21    500
-: dtype: int64
-
-Let's exact the sample names! This is a =cudf= DataFrame,
-so we need to extract the data with =.to_arrow()=.
-When running on CPU, this will be a regular =pandas= DataFrame.
-
-#+begin_src python :results value
-  type(rf_q)
-#+end_src
-
-#+RESULTS[31f076edd1d8a293467b76d46381391573fd01ac]:
-: <class 'cudf.core.dataframe.DataFrame'>
-
-#+begin_src python :results value
-  sample_ids = rf_q.sample_id.unique().to_arrow()
-  len(sample_ids)
-#+end_src
-
-#+RESULTS[d3e5cab41b367de4cab44d2d0450f1b958f4d098]:
-: 500
-
-We'll also get the unique populations.
-
-#+begin_src python :results value verbatim
-  pops = rf_q.drop(["sample_id", "chrom"], axis=1).columns.values
-  pops
 #+end_src
 
 #+RESULTS[943d0f4206518c373fa852ab000059693e2b2897]:

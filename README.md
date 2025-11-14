@@ -107,7 +107,7 @@ Once binaries are available, process RFMix results:
 ```python
 from rfmix_reader import read_rfmix
 
-loci, rf_q, admix = read_rfmix("two_pops/out/")
+loci, g_anc, admix = read_rfmix("two_pops/out/")
 ```
 
 ### Three Population Example
@@ -116,7 +116,7 @@ Binaries can also be generated on-the-fly within `read_rfmix` with
 `generate_binary` set to `True`.
 
 ```python
-loci, rf_q, admix = read_rfmix("examples/three_populations/out/",
+loci, g_anc, admix = read_rfmix("examples/three_populations/out/",
                                binary_dir="./binary_files",
                                generate_binary=True)
 ```
