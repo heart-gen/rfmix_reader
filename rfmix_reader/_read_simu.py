@@ -167,7 +167,7 @@ def _read_haplotypes(
         )
 
     # Thread pool mapping
-    start = range(1, chrom_len + 1, chunk_size)
+    starts = range(1, chrom_len + 1, chunk_size)
     local_chunks = []
     with ThreadPoolExecutor(max_workers=vcf_threads) as executor:
         futures = {executor.submit(process_region, start): start for start in starts}
