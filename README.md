@@ -178,6 +178,44 @@ bcftools reheader -h header.${CHR}.tmp -o "$OUT" "$IN"
 tabix -p vcf "$OUT"
 ```
 
+### Visualization
+
+`read_rfmix`, `read_flare`, and `read_simu` all return the same
+`(loci_df, g_anc, admix)` tuple, so the plotting utilities in
+`rfmix_reader._visualization` work identically for RFMix, FLARE, and
+Haptools-simulated inputs. The snippet below shows the typical workflow
+for each reader:
+
+```python
+from rfmix_reader import (
+    plot_ancestry_by_chromosome,
+    plot_global_ancestry,
+    read_flare,
+    read_rfmix,
+    read_simu,
+)
+
+# RFMix run directory
+loci_df, g_anc, admix = read_rfmix("two_pops/out/")
+plot_global_ancestry(g_anc, save_path="rfmix_global.png")
+plot_ancestry_by_chromosome(loci_df, admix, save_path="rfmix_local.png")
+
+# FLARE output directory (contains *.anc.vcf.gz + global.anc.gz)
+loci_df, g_anc, admix = read_flare("flare_runs/chr1/")
+plot_global_ancestry(g_anc, save_path="flare_global.png")
+plot_ancestry_by_chromosome(loci_df, admix, save_path="flare_local.png")
+
+# Haptools simulations (after reheadering contigs)
+loci_df, g_anc, admix = read_simu("/path/to/simulations/")
+plot_global_ancestry(g_anc, save_path="simu_global.png")
+plot_ancestry_by_chromosome(loci_df, admix, save_path="simu_local.png")
+```
+
+`plot_global_ancestry` builds per-individual stacked bars of global
+ancestry while `plot_ancestry_by_chromosome` summarizes local ancestry
+along each chromosome, giving you quick visual QC for every supported
+input format.
+
 ---
 
 ## Development Install
