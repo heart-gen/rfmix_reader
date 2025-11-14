@@ -11,6 +11,8 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC = ROOT / "src"
 if SRC.is_dir():
     sys.path.insert(0, str(SRC))  # support src/ layout
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))  # allow direct package layout
 
 # -------------------------------------------------------------------------
 # Project metadata no import
