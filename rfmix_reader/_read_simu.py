@@ -56,7 +56,7 @@ def read_simu(
     """
     # Get VCF file prefixes
     fn = _get_vcf_files(vcf_path)
-
+    
     # Load loci information
     pbar = tqdm(desc="Mapping loci information", total=len(fn),
                 disable=not verbose)
@@ -151,14 +151,20 @@ def _read_haplotypes(
     Returns local ancestry Dask array and metadata.
     """
     # Initialize VCF
-    vcf, samples, chrom, chrom_len = _init_vcf(vcf_file, vcf_threads)
+    _, samples, chrom, chrom_len = _init_vcf(vcf_file, vcf_threads)
     ancestries, mapper = _get_ancestry_labels(vcf_file)
 
     # Region processor
     def process_region(start: int):
+        from cyvcf2 import VCF
+        vcf = VCF(vcf_file)
+        if vcf_threads and hasattr(vcf, "set_threads"):
+            vcf.set_threads(vcf_threads)
+
         end = min(start + chunk_size - 1, chrom_len)
         region = f"{chrom}:{start}-{end}"
         batch_recs = list(vcf(region))
+        vcf.close()
         if not batch_recs:
             return []
         return _process_vectorized_batch(
