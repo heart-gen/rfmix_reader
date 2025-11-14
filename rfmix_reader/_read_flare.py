@@ -76,7 +76,7 @@ def read_flare(
     # Load loci information
     pbar = tqdm(desc="Mapping loci information", total=len(fn),
                 disable=not verbose)
-    loci_dfs = _read_file(fn, lambda f: _read_loci(f["anc.vcf.gz"], chunk_size),
+    loci_dfs = _read_file(fn, lambda f: _read_loci(f["anc.vcf"], chunk_size),
                       pbar)
     pbar.close()
 
@@ -89,7 +89,7 @@ def read_flare(
     # Load global ancestry per chromosome
     pbar = tqdm(desc="Mapping global ancestry files", total=len(fn),
                 disable=not verbose)
-    g_anc = _read_file(fn, lambda f: _read_anc(f["global.anc.gz"]), pbar)
+    g_anc = _read_file(fn, lambda f: _read_anc(f["global.anc"]), pbar)
     pbar.close()
     g_anc = concat(g_anc, axis=0, ignore_index=True)
 
@@ -98,7 +98,7 @@ def read_flare(
                 disable=not verbose)
     local_array = _read_file(
         fn,
-        lambda f: _load_haplotypes(f["anc.vcf.gz"], int(chunk_size / 100)),
+        lambda f: _load_haplotypes(f["anc.vcf"], int(chunk_size / 100)),
         pbar
     )
     pbar.close()
