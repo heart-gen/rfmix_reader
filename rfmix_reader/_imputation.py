@@ -32,14 +32,6 @@ if GPU_ENABLED:
 else:
     arr_mod = np
 
-
-def _to_host(x):
-    """Convert an array-module array back to a NumPy array on host."""
-    if GPU_ENABLED and hasattr(x, "get"):
-        return x.get()
-    return np.asarray(x)
-
-
 __all__ = [
     "interpolate_array",
     "interpolate_block",
@@ -47,6 +39,12 @@ __all__ = [
     "_expand_array",
     "_print_logger"
 ]
+
+def _to_host(x):
+    """Convert an array-module array back to a NumPy array on host."""
+    if GPU_ENABLED and hasattr(x, "get"):
+        return x.get()
+    return np.asarray(x)
 
 
 def _print_logger(message: str) -> None:
@@ -86,6 +84,122 @@ def _normalize_method(method: str) -> str:
     raise ValueError(f"Unknown interpolation method: {method}")
 
 
+def _interpolate_1d(col, x: Optional[np.ndarray] = None, 
+                    method: InterpMethod = "linear",
+):
+    """
+    Interpolate a 1D ancestry trajectory.
+
+    Parameters
+    ----------
+    col : array-like
+        Shape (n_loci,), dtype float, with NaNs for missing loci.
+    x : array-like, optional
+        Monotonic coordinate along loci (e.g., bp position). If None,
+        the index (0..n_loci-1) is used.
+    method : {"linear","nearest","stepwise"}
+
+    Returns
+    -------
+    col_imputed : same type as arr_mod
+    """
+    mod = arr_mod
+    col = mod.asarray(col, dtype=mod.float32)
+    mask = mod.isnan(col)
+    if not bool(mask.any()):
+        return col
+
+    n = int(col.shape[0])
+    xp = mod.arange(n, dtype=mod.float32) if x is None else mod.asarray(x, dtype=mod.float32)
+    valid = ~mask
+    if not bool(valid.any()):
+        # All NaNs for this column – nothing to impute
+        return col # All NaNs, nothing to impute
+
+    method = _normalize_method(method)
+
+    if method == "linear":
+        xp_valid = xp[valid]
+        y_valid = col[valid]
+        xp_nan = xp[mask]
+        interp_vals = mod.interp(xp_nan, xp_valid, y_valid)
+        out = col.copy()
+        out[mask] = mod.round(interp_vals).astype(mod.float32)
+        return out
+
+    idx = mod.arange(n, dtype=mod.int64)
+
+    if method == "stepwise":
+        left_idx = mod.where(valid, idx, -1)
+        left_nearest = mod.maximum.accumulate(left_idx)
+        idx_valid_or_n = mod.where(valid, idx, n)
+        first_valid = mod.min(idx_valid_or_n)
+        left_nearest = mod.where(left_nearest < 0, first_valid, left_nearest)
+        out = col.copy()
+        out[mask] = col[left_nearest[mask]]
+        return out
+
+    if method == "nearest":
+        left_idx = mod.where(valid, idx, -1)
+        left_nearest = mod.maximum.accumulate(left_idx)
+        right_idx_pre = mod.where(valid, idx, n)
+        right_nearest = mod.minimum.accumulate(right_idx_pre[::-1])[::-1]
+        xp_all = xp
+
+        safe_left = mod.where(left_nearest < 0, 0, left_nearest)
+        safe_right = mod.where(right_nearest >= n, n - 1, right_nearest)
+        left_pos = xp_all[safe_left]
+        right_pos = xp_all[safe_right]
+
+        dist_left = mod.where(left_nearest >= 0, xp_all - left_pos, float("inf"))
+        dist_right = mod.where(right_nearest < n, right_pos - xp_all, float("inf"))
+        nearest_idx = mod.where(dist_left <= dist_right, left_nearest, right_nearest)
+        out = col.copy()
+        out[mask] = col[nearest_idx[mask]]
+        return out
+
+    raise ValueError(f"Unexpected interpolation method after normalization: {method}")
+
+
+def interpolate_block(
+    block,
+    *,
+    method: InterpMethod = "linear",
+    pos: Optional[np.ndarray] = None,
+):
+    """
+    Block-wise interpolation for a haplotype / ancestry block.
+
+    This is intentionally very close to localQTL's `_interpolate_block`:
+
+        block : (loci, samples, ancestries)
+
+    `method` can be "linear", "nearest", or "stepwise". If `pos` is given,
+    interpolation is performed in bp space; otherwise it is done in index
+    space (0..n_loci-1).
+
+    Returns a float32 array in the same array module (NumPy or CuPy).
+    """
+    mod = arr_mod
+    block = mod.asarray(block, dtype=mod.float32)
+    loci_dim, sample_dim, ancestry_dim = block.shape
+    flat = block.reshape(loci_dim, -1)  # (loci, samples*ancestries)
+
+    x = None
+    if pos is not None:
+        x = mod.asarray(pos, dtype=mod.float32)
+
+    for j in range(flat.shape[1]):
+        flat[:, j] = _interpolate_1d(flat[:, j], x=x, method=method)
+
+    return flat.reshape(loci_dim, sample_dim, ancestry_dim)
+
+
+def _interpolate_col(col):
+    # Backwards-compatible shim: original code interpolated a single column linearly.
+    return _interpolate_1d(col, method="linear")
+
+
 def _expand_array(
         variant_loci_df: DataFrame, admix: Array, zarr_outdir: str,
         batch_size: int = 10_000) -> zarr.Array:
@@ -122,73 +236,35 @@ def _expand_array(
     - Memory usage may be high when dealing with large datasets.
     """
     _print_logger("Generate empty Zarr.")
-    # Open Zarr array without loading into memory
     z = zarr.open(f"{zarr_outdir}/local-ancestry.zarr", mode="w",
                   shape=(variant_loci_df.shape[0],
                          admix.shape[1], admix.shape[2]),
                   chunks=(8000, 200, admix.shape[2]),
                   dtype='float32')
 
-    # Get indices of NaN-containing rows
     nan_rows_mask = variant_loci_df.isnull().any(axis=1).values
     nan_rows_mask = arr_mod.asarray(nan_rows_mask)
     nan_indices = arr_mod.where(nan_rows_mask)[0]
-
-    if hasattr(nan_indices, "get"):
-        nan_indices = nan_indices.get()
+    nan_indices = _to_host(nan_indices)
         
-    _print_logger(f"Filling Zarr ({len(nan_indices)} rows) with NaNs.")
-    # Batch processing for NaNs (vectorized)
-    if nan_indices.size > 0:
-        z[nan_indices, :, :] = np.nan
-
-    # Process `admix` in blocks
+    # Materialize admix blocks in manageable batches
     _print_logger("Filling Zarr with local ancestry data in batches.")
     for start in range(0, admix.shape[0], batch_size):
         end = min(start + batch_size, admix.shape[0])
-        if arr_mod.any(~nan_rows_mask[start:end]):
+        if bool(arr_mod.any(~nan_rows_mask[start:end])):
             z[start:end, :, :] = admix[start:end].compute()
+
     _print_logger("Zarr array successfully populated!")
     return z
 
 
-def _interpolate_col(col: arr_mod.ndarray) -> arr_mod.ndarray:
-    """
-    Interpolate missing values in a column of data.
-
-    This function performs linear interpolation on missing values (NaNs) in the
-    input column. If CUDA is available, it uses cupy for GPU-accelerated
-    computation; otherwise, it falls back to numpy.
-
-    Parameters
-    ----------
-    col : ndarray
-        A 1D numpy or cupy array representing a column of data, potentially
-        containing NaN values.
-
-    Returns
-    -------
-    ndarray
-        A copy of the input array with NaN values interpolated and rounded to
-        the nearest integer.
-    """
-    mask = arr_mod.isnan(col)
-    idx = arr_mod.arange(len(col))
-    valid = ~mask
-    if arr_mod.any(valid):
-        interpolated = arr_mod.round(
-            arr_mod.interp(idx[mask], idx[valid], col[valid])
-        )
-        col = col.copy() # Avoid modifying the original array
-        col[mask] = interpolated.astype(int)
-    return col
-
-
 def interpolate_array(
-        variant_loci_df: DataFrame, admix: Array, zarr_outdir: str,
-        chunk_size: int = 50_000, batch_size: int = 10_000) -> zarr.Array:
+    variant_loci_df: DataFrame, admix: Array, zarr_outdir: str,
+    chunk_size: int = 50_000, batch_size: int = 10_000,
+    interpolation: str = "linear", use_bp_positions: bool = False,
+) -> zarr.Array:
     """
-    Interpolate missing values in a large array of genetic data.
+    Interpolate missing local ancestry entries on the variant grid.
 
     This function expands the input data into a Zarr array and then performs
     column-wise interpolation on chunks of the data to fill in missing values.
@@ -196,20 +272,28 @@ def interpolate_array(
     Parameters
     ----------
     variant_loci_df : pandas.DataFrame
-        DataFrame containing variant and loci information.
+        DataFrame defining the variant grid and missing loci.
+        Must be sorted by genomic coordinate; should contain at least:
+           - 'chrom' (optional but nice for debugging)
+           - 'pos'   (used when `use_bp_positions=True`)
     admix : dask.array.Array
-        Dask array containing the admixture data to be interpolated.
+        Local ancestry array with shape (loci, samples, ancestries).
     zarr_outdir : str
         Directory path where the Zarr array will be saved.
     chunk_size : int, optional
-        Number of rows to process in each chunk. Default is 50,000.
+        Number of variant rows to interpolate per chunk. Default is 50,000.
     batch_size : int
         Batch size for processing local ancestry data. Default is 10,000.
+    interpolation : {"linear","nearest","stepwise"}, default "linear"
+        Interpolation scheme.
+    use_bp_positions : bool, default False
+        If True, use `variant_loci_df['pos']` as the x-axis for interpolation.
+        If False, loci are treated as equally spaced (index-based).
 
     Returns
     -------
     zarr.Array
-        The Zarr array containing the interpolated data.
+        Zarr-backed (variants, samples, ancestries) array with missing rows imputed.
 
     Notes
     -----
@@ -232,18 +316,26 @@ def interpolate_array(
     >>> print(z.shape)
     (2, 3)
     """
+    method = _normalize_method(interpolation)
+    
     _print_logger("Starting expansion!")
-    z = _expand_array(variant_loci_df, admix, zarr_outdir)
+    z = _expand_array(variant_loci_df, admix, zarr_outdir, batch_size=batch_size)
 
     total_rows, _, _ = z.shape
-    _print_logger("Interpolating data!")
+    _print_logger(f"Interpolating data using method='{method}'!")
 
-    for i in tqdm(range(0, total_rows, chunk_size),
-                  desc="Processing chunks", unit="chunk"):
-        end = min(i + chunk_size, total_rows)
-        chunk = arr_mod.array(z[i:end, :, :])
-        interp_chunk = arr_mod.apply_along_axis(_interpolate_col, axis=0,
-                                                arr=chunk)
-        z[i:end, :, :] = interp_chunk.get() if cuda_is_available() else interp_chunk
+    pos = None
+    if use_bp_positions:
+        if "pos" not in variant_loci_df.columns:
+            raise ValueError("use_bp_positions=True but 'pos' column not found in variant_loci_df.")
+        pos = variant_loci_df["pos"].to_numpy(dtype=np.float32)
 
+    for start in tqdm(range(0, total_rows, chunk_size), desc="Interpolating chunks", unit="chunk"):
+        end = min(start + chunk_size, total_rows)
+        chunk = arr_mod.array(z[start:end, :, :], dtype=arr_mod.float32)
+        pos_chunk = None if pos is None else pos[start:end]
+        interp_chunk = interpolate_block(chunk, method=method, pos=pos_chunk)
+        z[start:end, :, :] = _to_host(interp_chunk)
+
+    _print_logger("Interpolation complete!")
     return z
