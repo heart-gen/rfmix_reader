@@ -4,31 +4,50 @@ Functions to imputate loci to genotype.
 This is a time consuming process, but should only need to be done once.
 Loading the data becomes very fast because data is saved to a Zarr.
 """
+from __future__ import annotations
+
 import zarr
 import numpy as np
 from tqdm import tqdm
 from time import strftime
 from pandas import DataFrame
-from dask.array import Array, from_zarr
+from dask.array import Array
+from typing import Literal, Optional
 
 try:
-    from torch.cuda import is_available
-except ModuleNotFoundError as e:
-    print("Warning: PyTorch is not installed. Using CPU!")
-    def is_available():
+    from torch.cuda import is_available as cuda_is_available
+except ModuleNotFoundError:
+    def cuda_is_available() -> bool:
         return False
 
-if is_available():
-    import cupy as arr_mod
+try:
+    import cupy as cp
+except ImportError:
+    cp = None
+
+GPU_ENABLED = bool(cuda_is_available() and (cp is not None))
+
+if GPU_ENABLED:
+    arr_mod = cp
 else:
-    import numpy as arr_mod
+    arr_mod = np
+
+
+def _to_host(x):
+    """Convert an array-module array back to a NumPy array on host."""
+    if GPU_ENABLED and hasattr(x, "get"):
+        return x.get()
+    return np.asarray(x)
+
 
 __all__ = [
     "interpolate_array",
+    "interpolate_block",
     "_interpolate_col",
     "_expand_array",
     "_print_logger"
 ]
+
 
 def _print_logger(message: str) -> None:
     """
@@ -52,6 +71,19 @@ def _print_logger(message: str) -> None:
     """
     current_time = strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{current_time}] {message}")
+
+
+InterpMethod = Literal["linear", "nearest", "stepwise"]
+
+def _normalize_method(method: str) -> str:
+    m = method.lower()
+    if m in ("linear", "lin"):
+        return "linear"
+    if m in ("nearest", "midpoint", "nearest_neighbor", "nearest-neighbor"):
+        return "nearest"
+    if m in ("step", "stepwise", "nearest_segment", "nearest-segment"):
+        return "stepwise"
+    raise ValueError(f"Unknown interpolation method: {method}")
 
 
 def _expand_array(
@@ -90,7 +122,6 @@ def _expand_array(
     - Memory usage may be high when dealing with large datasets.
     """
     _print_logger("Generate empty Zarr.")
-
     # Open Zarr array without loading into memory
     z = zarr.open(f"{zarr_outdir}/local-ancestry.zarr", mode="w",
                   shape=(variant_loci_df.shape[0],
@@ -213,6 +244,6 @@ def interpolate_array(
         chunk = arr_mod.array(z[i:end, :, :])
         interp_chunk = arr_mod.apply_along_axis(_interpolate_col, axis=0,
                                                 arr=chunk)
-        z[i:end, :, :] = interp_chunk.get() if is_available() else interp_chunk
+        z[i:end, :, :] = interp_chunk.get() if cuda_is_available() else interp_chunk
 
     return z
