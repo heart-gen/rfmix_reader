@@ -27,6 +27,8 @@ else:
     from dask.dataframe import from_pandas, concat
     from pandas import DataFrame, Series, read_parquet
 
+from ._imputation import interpolate_array
+
 __all__ = ["write_data", "write_imputed"]
 
 def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
@@ -153,61 +155,86 @@ def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
             compute(*tasks) # Execute all tasks in parallel
 
 
-def write_imputed(g_anc: DataFrame, admix: Array, variant_loci: DataFrame,
-                  z: zArray, base_rows: int = 250_000, outdir: str = "./",
-                  prefix: str = "ancestry-imputed", verbose: bool = False) -> None:
+def write_imputed(
+    g_anc: DataFrame, admix: Array, variant_loci: DataFrame, z: zArray = None,
+    zarr_outdir: str = None, base_rows: int = 250_000, outdir: str = "./",
+    prefix: str = "ancestry-imputed", interpolation: str = "linear",
+    use_bp_positions: bool = True, chunk_size: int = 50_000,
+    batch_size: int = 10_000, verbose: bool = False
+) -> None:
     """
-    Process and write imputed local ancestry data to a Parquet file per
+    Interpolate and write imputed local ancestry data to Parquet per
     chromosome.
 
-    This function first cleans and aligns imputed local ancestry data with
-    variant loci information, then writes the result to Parquet files per
-    chromosome.
-
+    This function:
+      1. Runs low-memory interpolation of local ancestry onto the variant grid
+         using the updated `interpolate_array` from `_imputation.py`.
+      2. Cleans and aligns the imputed data with `variant_loci` using
+         `_clean_data_imp` (drops right_only variants, preserves order).
+      3. Delegates to `write_data` to stream the result to Parquet files
+         per chromosome.
+    
     Parameters:
     -----------
     g_anc : DataFrame (pandas or cuDF)
-        A DataFrame containing sample IDs and ancestry information. This is used
-        to generate column names for the admixture data.
+        Sample / ancestry metadata from `read_rfmix` or `read_flare`. Used to
+        generate column names for the admixture data.
 
     admix : dask.Array
-        A Dask array containing local ancestry haplotypes for each sample and
-        locus.
+        Local ancestry array with shape (loci, samples, ancestries) in the
+        RFMix / FLARE locus order.
 
     variant_loci : DataFrame (pandas or cuDF)
         A DataFrame containing variant loci information. Must include columns for
         chromosome, position, and any merge-related columns used in data cleaning.
 
-    z : zarr.Array
-        An array used in the data cleaning process to align indices between
-        admix and variant_loci.
+    z : zarr.Array, optional
+        If present, don't interpolate data.
+
+    zarr_outdir : str, optional
+        Directory where the interpolated Zarr array should be written, e.g.
+        the same directory used elsewhere for local-ancestry Zarrs.
 
     base_rows : int, optional (default=250,000)
         Controls how many rows each chunk (partition) of `admix` Dask array
         should have when rechunked. This is used to control memory consumption.
         Smaller chunks should be used to reduce memory.
 
-    outdir : str, optional (default="./output")
+    outdir : str, optional (default="./")
         The directory where the output Parquet files will be saved.
 
-    prefix : str, optional (default="ancestry-imputed")
-        The file prefix for imputed local ancestry data.
+    prefix : str, default "ancestry-imputed"
+        File prefix for imputed ancestry Parquet files, e.g.
+        "{prefix}.chr1-0.parquet".
 
-    verbose : bool, optional (default=False)
-        Print out debugging information for partition shape and row matching.
+    interpolation : {"linear","nearest","stepwise"}, default "linear"
+        Interpolation scheme:
+          - "linear"   : linear interpolation + rounding (original behavior).
+          - "nearest"  : nearest-neighbour / midpoint.
+          - "stepwise" : piecewise-constant "nearest segment" / forward-fill.
+    
+    use_bp_positions : bool, default True
+        If True, interpolate along base-pair positions using
+        `variant_loci['pos']` as the x-axis. If False, interpolate in
+        index space (0..n_loci-1).
+
+    chunk_size : int, default 50_000
+        Number of variant rows to interpolate per chunk inside
+        `interpolate_array`.
+
+    batch_size : int, default 10_000
+        Batch size used during the initial Zarr expansion inside
+        `interpolate_array` (controls how much of `admix` is materialized
+        at once).
+
+    verbose : bool, default False
+        If True, prints debug information from `write_data` and partition
+        alignment checks.
 
     Returns:
     --------
     None
         Writes an imputed local ancestry Parquet files per chromosome.
-
-    Notes:
-    ------
-    - Calls `_clean_data_imp` to process and align the input data.
-    - Uses `write_data` to output the cleaned data to Parquet files.
-    - The resulting Parquet files includes chromosome, position, and ancestry
-      probabilities for each sample at each locus.
-    - Ensure that `variant_loci` contains necessary columns ('chrom' and 'pos').
 
     Example:
     --------
@@ -216,12 +243,22 @@ def write_imputed(g_anc: DataFrame, admix: Array, variant_loci: DataFrame,
         inplace=True)
     >>> variant_loci = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"],
         how="outer", indicator=True).loc[:, ["chrom", "pos", "i", "_merge"]]
-    >>> data_path = f"{basename}/local_ancestry_rfmix/_m"
-    >>> z = interpolate_array(variant_loci, admix, data_output_dir)
-    >>> write_imputed(g_anc, admix, variant_loci, z, outdir="./output",
-        prefix="imputed-ancestry")
+    >>> zarr_dir = f"{basename}/local_ancestry_rfmix/_m"
+    >>> write_imputed(g_anc, admix, variant_loci, zarr_dir=zarr_dir,
+                      outdir="./output", prefix="imputed-ancestry",
+                      interpolation="linear", use_bp_positions=True)
     # This will create ./output/imputed-ancestry.chr{1-22}.parquet files
     """
+    if z is None:
+        try:
+            z = interpolate_array(
+                variant_loci_df=variant_loci, admix=admix,
+                zarr_outdir=zarr_outdir, chunk_size=chunk_size,
+                batch_size=batch_size, interpolation=interpolation,
+                use_bp_positions=use_bp_positions,
+            )
+        except Exception as e:
+            raise RuntimeError("Interpolation failed") from e
     loci_I, admix_I = _clean_data_imp(admix, variant_loci, z)
     write_data(loci_I, g_anc, admix_I, base_rows, outdir, prefix, verbose)
 
