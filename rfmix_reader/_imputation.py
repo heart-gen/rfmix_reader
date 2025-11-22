@@ -40,6 +40,8 @@ __all__ = [
     "_print_logger"
 ]
 
+InterpMethod = Literal["linear", "nearest", "stepwise"]
+
 def _to_host(x):
     """Convert an array-module array back to a NumPy array on host."""
     if GPU_ENABLED and hasattr(x, "get"):
@@ -71,8 +73,6 @@ def _print_logger(message: str) -> None:
     print(f"[{current_time}] {message}")
 
 
-InterpMethod = Literal["linear", "nearest", "stepwise"]
-
 def _normalize_method(method: str) -> str:
     m = method.lower()
     if m in ("linear", "lin"):
@@ -84,8 +84,8 @@ def _normalize_method(method: str) -> str:
     raise ValueError(f"Unknown interpolation method: {method}")
 
 
-def _interpolate_1d(col, x: Optional[np.ndarray] = None, 
-                    method: InterpMethod = "linear",
+def _interpolate_1d(
+    col, x: Optional[np.ndarray] = None, method: InterpMethod = "linear"
 ):
     """
     Interpolate a 1D ancestry trajectory.
@@ -113,7 +113,6 @@ def _interpolate_1d(col, x: Optional[np.ndarray] = None,
     xp = mod.arange(n, dtype=mod.float32) if x is None else mod.asarray(x, dtype=mod.float32)
     valid = ~mask
     if not bool(valid.any()):
-        # All NaNs for this column – nothing to impute
         return col # All NaNs, nothing to impute
 
     method = _normalize_method(method)
@@ -162,17 +161,11 @@ def _interpolate_1d(col, x: Optional[np.ndarray] = None,
 
 
 def interpolate_block(
-    block,
-    *,
-    method: InterpMethod = "linear",
+    block, *, method: InterpMethod = "linear",
     pos: Optional[np.ndarray] = None,
 ):
     """
     Block-wise interpolation for a haplotype / ancestry block.
-
-    This is intentionally very close to localQTL's `_interpolate_block`:
-
-        block : (loci, samples, ancestries)
 
     `method` can be "linear", "nearest", or "stepwise". If `pos` is given,
     interpolation is performed in bp space; otherwise it is done in index
@@ -196,13 +189,19 @@ def interpolate_block(
 
 
 def _interpolate_col(col):
-    # Backwards-compatible shim: original code interpolated a single column linearly.
+    """
+    Backwards-compatible shim: original code interpolated a single
+    column linearly.
+
+    TODO: deprecate
+    """
     return _interpolate_1d(col, method="linear")
 
 
 def _expand_array(
-        variant_loci_df: DataFrame, admix: Array, zarr_outdir: str,
-        batch_size: int = 10_000) -> zarr.Array:
+    variant_loci_df: DataFrame, admix: Array, zarr_outdir: str,
+    batch_size: int = 10_000
+) -> zarr.Array:
     """
     Expand and fill a Zarr array with local ancestry data, handling missing
     values.
@@ -319,7 +318,8 @@ def interpolate_array(
     method = _normalize_method(interpolation)
     
     _print_logger("Starting expansion!")
-    z = _expand_array(variant_loci_df, admix, zarr_outdir, batch_size=batch_size)
+    z = _expand_array(variant_loci_df, admix, zarr_outdir,
+                      batch_size=batch_size)
 
     total_rows, _, _ = z.shape
     _print_logger(f"Interpolating data using method='{method}'!")
@@ -330,7 +330,8 @@ def interpolate_array(
             raise ValueError("use_bp_positions=True but 'pos' column not found in variant_loci_df.")
         pos = variant_loci_df["pos"].to_numpy(dtype=np.float32)
 
-    for start in tqdm(range(0, total_rows, chunk_size), desc="Interpolating chunks", unit="chunk"):
+    for start in tqdm(range(0, total_rows, chunk_size),
+                      desc="Interpolating chunks", unit="chunk"):
         end = min(start + chunk_size, total_rows)
         chunk = arr_mod.array(z[start:end, :, :], dtype=arr_mod.float32)
         pos_chunk = None if pos is None else pos[start:end]
