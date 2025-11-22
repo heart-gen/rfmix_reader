@@ -36,6 +36,7 @@ __all__ = ["read_rfmix"]
 def read_rfmix(
         file_prefix: str, binary_dir: str = "./binary_files",
         generate_binary: bool = False, verbose: bool = True,
+        return_hap_index: bool = False,
 ) -> Tuple[DataFrame, DataFrame, Array]:
     """
     Read RFMix files into data frames and a Dask array.
@@ -53,6 +54,8 @@ def read_rfmix(
     verbose : bool, optional
         :const:`True` for progress information; :const:`False` otherwise.
         Default:`True`.
+    return_hap_index : bool, optional
+        Return the haplotypes index for reconstruction of hap0 / hap1.
 
     Returns
     -------
@@ -107,7 +110,7 @@ def read_rfmix(
         create_binaries(file_prefix, binary_dir)
 
     pbar = tqdm(desc="Mapping local ancestry files", total=len(fn), disable=not verbose)
-    local_array = _read_file(
+    local_array, hap_indices = _read_file(
         fn,
         lambda f: _read_fb(f["fb.tsv"], nsamples,
                            nmarkers[f["fb.tsv"]], pops,
@@ -116,6 +119,8 @@ def read_rfmix(
     )
     pbar.close()
     local_array = concatenate(local_array, axis=0)
+    if return_hap_index:
+        return loci_df, g_anc, local_array, hap_indices[0]
     return loci_df, g_anc, local_array
 
 
@@ -287,29 +292,52 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
 
 def _subset_populations(X: Array, npops: int) -> Array:
     """
-    Subset and process the input array X based on populations.
+    Subset and process the input array X based on populations, and record which
+    original columns correspond to hap0 / hap1 for each sample.
 
     Parameters:
     X (dask.array): Input array where columns represent data for different populations.
     npops (int): Number of populations for column processing.
 
     Returns:
-    dask.array: Processed array with adjacent columns summed for each population subset.
+    admix_summed : dask.array.Array
+        Processed array with adjacent columns summed for each population subset.
+
+    hap_index : np.ndarray
+        Integer array of shape (n_samples, npops, 2) giving , for each (sample, ancestry, hap), the original column index in X. This is used to reconstruct hap0/hap1 mappings.
     """
-    pop_subset = []
-    pop_start = 0
+    import numpy as np
     ncols = X.shape[1]
     if ncols % npops != 0:
         raise ValueError("The number of columns in X must be divisible by npops.")
 
-    while pop_start < npops:
+    if ncols % (2 * npops) != 0:
+        raise ValueError(
+            "The number of columns in X must be divisible by (2 * npops). "
+            "Expected layout: 2 haplotypes per sample per ancestry."
+        )
+
+    nsamples = ncols // (2 * npops)
+    pop_subset = []
+    hap_index = np.empty((nsamples, npops, 2), dtype=int32)
+
+    for pop_start in range(npops):
         X0 = X[:, pop_start::npops] # Subset based on populations
-        if X0.shape[1] % 2 != 0:
+        if int(X0.shape[1]) % 2 != 0:
             raise ValueError("Number of columns must be even.")
+
         X0_summed = X0[:, ::2] + X0[:, 1::2] # Sum adjacent columns
         pop_subset.append(X0_summed)
-        pop_start += 1
-    return stack(pop_subset, axis=2)
+
+        s_idx = np.arange(nsamples, dtype=int32)
+        cols_h0 = pop_start + (2 * s_idx) * npops
+        cols_h1 = pop_start + (2 * s_idx + 1) * npops
+
+        hap_index[:, pop_start, 0] = cols_h0
+        hap_index[:, pop_start, 1] = cols_h1
+
+    admix_summed = stack(pop_subset, axis=2)
+    return admix_summed, hap_index
 
 
 def _types(fn: str) -> dict:
