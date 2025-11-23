@@ -3,6 +3,10 @@ import torch
 import numpy as np
 from typing import Tuple
 
+__all__ = [
+    "hmm_interpolate",
+]
+
 def build_log_emissions_from_anchors(
     obs_post: np.ndarray | torch.Tensor, eps_anchor: float = 1e-3,
     device: str | torch.device = "cuda", dtype: torch.dtype = torch.float32,
@@ -180,7 +184,7 @@ def _forward_backward(
     return gamma, log_alpha, log_beta
 
 
-def hmm_interpolate_local_ancestry(
+def hmm_interpolate(
     pos_bp: np.ndarray | torch.Tensor, obs_post: np.ndarray | torch.Tensor,
     recomb_rate: float = 1e-8, eps_anchor: float = 1e-3,
     device: str | torch.device = "cuda", dtype: torch.dtype = torch.float32,
