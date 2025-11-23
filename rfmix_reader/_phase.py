@@ -64,9 +64,7 @@ class PhasingConfig:
 # ---------------------------------------------------------------------------
 
 def find_heterozygous_blocks(
-    hap0: ArrayLike,
-    hap1: ArrayLike,
-    min_block_len: int = 1,
+    hap0: ArrayLike, hap1: ArrayLike, min_block_len: int = 1,
 ) -> List[slice]:
     """
     Find contiguous blocks where hap0 != hap1 (heterozygous ancestry).
@@ -200,9 +198,7 @@ def assign_reference_per_window(
 # (adapted from gnomix `correct_phase_error` / `track_switch`)
 # ---------------------------------------------------------------------------
 
-def build_phase_track_from_ref(
-    ref_track: np.ndarray,
-) -> np.ndarray:
+def build_phase_track_from_ref(ref_track: np.ndarray) -> np.ndarray:
     """
     Build a window-level "phase flip track" from reference assignments.
 
@@ -252,10 +248,7 @@ def build_phase_track_from_ref(
 
 
 def apply_phase_track(
-    hap0: ArrayLike,
-    hap1: ArrayLike,
-    phase_track: np.ndarray,
-    window_size: int,
+    hap0: ArrayLike, hap1: ArrayLike, phase_track: np.ndarray, window_size: int,
 ) -> Tuple[ArrayLike, ArrayLike]:
     """
     Apply tail flips between hap0 and hap1 according to phase_track.
@@ -301,10 +294,7 @@ def apply_phase_track(
 # ---------------------------------------------------------------------------
 
 def phase_local_ancestry_sample(
-    hap0: ArrayLike,
-    hap1: ArrayLike,
-    ref0: ArrayLike,
-    ref1: ArrayLike,
+    hap0: ArrayLike, hap1: ArrayLike, ref0: ArrayLike, ref1: ArrayLike,
     config: Optional[PhasingConfig] = None,
 ) -> Tuple[ArrayLike, ArrayLike]:
     """
@@ -404,9 +394,7 @@ def phase_local_ancestry_sample(
 
 
 def load_sample_annotations(
-    annot_path: str,
-    sep: str = r"\s+",
-    col_sample: str = "sample_id",
+    annot_path: str, sep: str = r"\s+", col_sample: str = "sample_id",
     col_group: str = "group",
 ) -> pd.DataFrame:
     """
@@ -446,10 +434,8 @@ def load_sample_annotations(
 
 
 def choose_reference_samples(
-    annot: pd.DataFrame,
-    group0: Optional[str] = None,
-    group1: Optional[str] = None,
-    col_sample: str = "sample_id",
+    annot: pd.DataFrame, group0: Optional[str] = None,
+    group1: Optional[str] = None, col_sample: str = "sample_id",
     col_group: str = "group",
 ) -> Tuple[str, str]:
     """
@@ -503,12 +489,8 @@ def choose_reference_samples(
 
 
 def build_reference_haplotypes_from_vcf(
-    vcf_path: str,
-    annot_path: str,
-    chrom: str,
-    positions: np.ndarray,
-    group0: Optional[str] = None,
-    group1: Optional[str] = None,
+    vcf_path: str, annot_path: str, chrom: str, positions: np.ndarray,
+    group0: Optional[str] = None, group1: Optional[str] = None,
     hap_index: int = 0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -606,10 +588,7 @@ def build_reference_haplotypes_from_vcf(
 # ---------------------------------------------------------------------------
 
 def count_switch_errors(
-    M_pred: ArrayLike,
-    P_pred: ArrayLike,
-    M_true: ArrayLike,
-    P_true: ArrayLike,
+    M_pred: ArrayLike, P_pred: ArrayLike, M_true: ArrayLike, P_true: ArrayLike,
 ) -> int:
     """
     Count minimal number of phase switches needed to turn (M_pred, P_pred)

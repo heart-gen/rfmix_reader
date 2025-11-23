@@ -3,7 +3,6 @@ import torch
 import numpy as np
 from typing import Tuple
 
-
 def build_log_emissions_from_anchors(
     obs_post: np.ndarray | torch.Tensor, eps_anchor: float = 1e-3,
     device: str | torch.device = "cuda", dtype: torch.dtype = torch.float32,
@@ -233,11 +232,8 @@ def hmm_interpolate_local_ancestry(
 
     # Build shared transition matrices on device
     log_T = build_log_transitions(
-        pos_bp=pos_bp,
-        K=K,
-        recomb_rate=recomb_rate,
-        device=device,
-        dtype=dtype,
+        pos_bp=pos_bp, K=K, recomb_rate=recomb_rate,
+        device=device, dtype=dtype,
     )
 
     # Initial distribution (uniform over ancestries)
@@ -251,22 +247,15 @@ def hmm_interpolate_local_ancestry(
 
         # Build log emissions for this batch
         log_emission = build_log_emissions_from_anchors(
-            obs_post=obs_batch,
-            eps_anchor=eps_anchor,
-            device=device,
-            dtype=dtype,
+            obs_post=obs_batch, eps_anchor=eps_anchor,
+            device=device, dtype=dtype,
         )
 
         # Run forward-backward
         gamma, _, _ = _forward_backward(
-            log_emission=log_emission,
-            log_T=log_T,
-            log_pi=log_pi,
+            log_emission=log_emission, log_T=log_T, log_pi=log_pi,
         )
-
         gamma_out[b_start:b_end] = gamma.detach().cpu().numpy().astype(np.float32)
-
-        # Optional: free GPU memory between batches
         torch.cuda.empty_cache()
 
     return gamma_out
