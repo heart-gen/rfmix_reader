@@ -40,7 +40,7 @@ def build_log_emissions_from_anchors(
 
     # mask where all ancestries are NaN
     nan_mask = torch.isnan(obs_post)                  # (B,L,K)
-    anchor_mask = ~nan_mask.all(dim=-1)               # (B,L)
+    has_anchor = ~nan_mask.all(dim=-1)               # (B,L)
 
     # Replace NaNs with 0 for now
     obs_filled = obs_post.clone()
@@ -53,7 +53,7 @@ def build_log_emissions_from_anchors(
 
     # For non-anchor positions, emissions should be uninformative / uniform
     uniform = torch.full_like(p, 1.0 / K)
-    p = torch.where(anchor_mask.unsqueeze(-1), p, uniform)
+    p = torch.where(has_anchor.unsqueeze(-1), p, uniform)
 
     # Smooth a bit to avoid exact zeros
     p = (1.0 - eps_anchor) * p + eps_anchor * (1.0 / K)
@@ -223,12 +223,12 @@ def hmm_interpolate_local_ancestry(
     - You can decode hard states via gamma_np.argmax(-1).
     """
     # Make sure obs_post is on CPU first to slice easily for batching
-    if torch.is_tensor(obs_post):
-        obs_np = obs_post.detach().cpu().numpy()
+    if isinstance(obs_post, np.ndarray):
+        obs_tensor = torch.as_tensor(obs_post, dtype=dtype)
     else:
-        obs_np = np.asarray(obs_post, dtype=np.float32)
+        obs_tensor = obs_post.detach().to(dtype)
 
-    B, L, K = obs_np.shape
+    B, L, K = obs_tensor.shape
 
     # Build shared transition matrices on device
     log_T = build_log_transitions(
@@ -243,7 +243,7 @@ def hmm_interpolate_local_ancestry(
     # Process sequences in mini-batches along B
     for b_start in range(0, B, batch_size_seqs):
         b_end = min(b_start + batch_size_seqs, B)
-        obs_batch = obs_np[b_start:b_end]
+        obs_batch = obs_tensor[b_start:b_end].to(device)
 
         # Build log emissions for this batch
         log_emission = build_log_emissions_from_anchors(
