@@ -17,15 +17,16 @@ This module provides a lightweight, NumPy-based implementation that:
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
-from cyvcf2 import VCF
 
 import dask
 import dask.array as da
 from dask.array import Array as DaskArray
+import xarray as xr
 
 ArrayLike = np.ndarray
 
@@ -410,7 +411,7 @@ def phase_local_ancestry_sample(
     return hap0_corr, hap1_corr
 
 # ============================================================================
-# Annotation utilities and building reference haplotypes from VCF
+# Annotation utilities and building reference haplotypes from Zarr
 # ============================================================================
 
 def load_sample_annotations(
@@ -448,53 +449,55 @@ def load_sample_annotations(
     return annot
 
 
-def _process_chunk(
-    vcf_path, chrom, positions_chunk, pos_to_global,
-    rep_indices, n_ref, hap_index_in_vcf
-):
+def _resolve_chrom_zarr_store(zarr_root: str, chrom: str) -> Path:
+    """Find the Zarr store for a chromosome or raise with guidance.
+
+    This first respects explicit ``*.zarr`` paths and otherwise searches for
+    ``<chrom>.zarr`` / ``chr<chrom>.zarr`` within ``zarr_root``.
     """
-    Worker function that extracts alleles for a chunk of positions.
-    Returns: (refs_chunk, chunk_positions)
-    """
-    vcf = VCF(vcf_path)
-    region = str(chrom)
-    # Output (n_ref, chunk_len)
-    chunk_len = len(positions_chunk)
-    refs_chunk = np.full((n_ref, chunk_len), -1, dtype=np.int8)
-    # Local mapping: pos -> index within chunk
-    local_pos_to_i = {int(p): i for i, p in enumerate(positions_chunk)}
-    # Iterate once over region; pick variants inside this chunk
-    for var in vcf(region):
-        pos = var.POS
-        local_i = local_pos_to_i.get(pos)
-        if local_i is None:
-            continue
-        g = var.genotypes
-        # Extract alleles for representative samples
-        alleles = np.fromiter(
-            (g[s][hap_index_in_vcf] for s in rep_indices),
-            dtype=np.int16,
-            count=n_ref
+
+    root = Path(zarr_root)
+
+    if root.suffix == ".zarr":
+        if root.exists():
+            return root
+        raise FileNotFoundError(
+            f"Reference Zarr store not found: '{root}'.\n"
+            "Generate it with convert_vcf_to_zarr / convert_vcfs_to_zarr "
+            "(or `python -m rfmix_reader.cli.prepare_reference`)."
         )
-        alleles = np.where(alleles >= 0, alleles, -1).astype(np.int8)
-        refs_chunk[:, local_i] = alleles
 
-    return refs_chunk, positions_chunk
+    chrom_clean = chrom.removeprefix("chr")
+    candidates = []
+    for label in {chrom, f"chr{chrom_clean}", chrom_clean}:
+        candidates.append(root / f"{label}.zarr")
+        candidates.append(root / label)
+
+    for path in candidates:
+        if path.exists():
+            return path
+
+    raise FileNotFoundError(
+        f"No Zarr store found for chromosome '{chrom}' under '{zarr_root}'.\n"
+        "Run convert_vcf_to_zarr / convert_vcfs_to_zarr or the CLI "
+        "(`python -m rfmix_reader.cli.prepare_reference`) to create it."
+    )
 
 
-def build_reference_haplotypes_from_vcf(
-    vcf_path: str, annot_path: str, chrom: str, positions: np.ndarray,
-    groups: Optional[list[str]] = None, hap_index_in_vcf: int = 0,
+def build_reference_haplotypes_from_zarr(
+    zarr_root: str, annot_path: str, chrom: str, positions: np.ndarray,
+    groups: Optional[list[str]] = None, hap_index_in_zarr: int = 0,
     col_sample: str = "sample_id", col_group: str = "group",
 ) -> Tuple[np.ndarray, list[str]]:
     """
-    Build reference haplotypes as fast as possible using cyvcf2 vectorized APIs.
-    Optimized for SPEED (minimal Python overhead) and low memory.
+    Build reference haplotypes directly from a chromosome-specific Zarr store.
 
     Parameters
     ----------
-    vcf_path : str
-        Path to bgzipped, indexed VCF/BCF file (for cyvcf2).
+    zarr_root : str
+        Path to a ``*.zarr`` store for the chromosome or a directory containing
+        per-chromosome Zarr stores (e.g., outputs from
+        :func:`convert_vcfs_to_zarr`).
     annot_path : str
         Path to sample annotation file (see :func:`load_sample_annotations`).
     chrom : str
@@ -504,8 +507,8 @@ def build_reference_haplotypes_from_vcf(
     groups : list of str, optional
         Group labels to use. If None, uses all unique groups from the
         annotation file.
-    hap_index_in_vcf : int, default 0
-        Which haploid allele to take (0 or 1) from the genotype.
+    hap_index_in_zarr : int, default 0
+        Which haploid allele to take (0 or 1) from the genotype ploidy axis.
     col_sample : str, default "sample_id"
         Column name for sample IDs in the annotation file.
     col_group : str, default "group"
@@ -546,55 +549,67 @@ def build_reference_haplotypes_from_vcf(
             raise ValueError(f"No samples found for group '{g}'.")
         rep_samples.append(df_g[col_sample].iloc[0])
 
-    # Open VCF and map representative samples
-    vcf = VCF(vcf_path)
-    sample_to_idx = {sid: i for i, sid in enumerate(vcf.samples)}
+    zarr_path = _resolve_chrom_zarr_store(zarr_root, chrom)
+    ds = xr.open_zarr(zarr_path)
+
+    sample_to_idx = {sid: i for i, sid in enumerate(ds["sample_id"].values)}
     rep_indices = [sample_to_idx[s] for s in rep_samples]
     n_ref = len(rep_indices)
 
-    # Sort positions for efficient lookup and map back to original order
+    variant_pos = np.asarray(ds["variant_position"].values)
+    pos_to_zarr_idx = {int(p): i for i, p in enumerate(variant_pos)}
+
     sort_idx = np.argsort(positions)
     positions_sorted = positions[sort_idx]
-    pos_to_global = {int(p): i for i, p in zip(positions_sorted, sort_idx)}
 
-    refs = np.full((n_ref, L), -1, dtype=np.int8)
+    refs_sorted = np.full((n_ref, L), -1, dtype=np.int8)
 
-    # Iterate through variants once; positions mapping keeps outputs ordered
-    for variant in vcf(str(chrom)):
-        pos = variant.POS
-        global_i = pos_to_global.get(pos)
-        if global_i is None:
-            continue
+    matched_zarr_indices: list[int] = []
+    matched_ref_positions: list[int] = []
+    for i, pos in enumerate(positions_sorted):
+        zarr_idx = pos_to_zarr_idx.get(int(pos))
+        if zarr_idx is not None:
+            matched_zarr_indices.append(zarr_idx)
+            matched_ref_positions.append(i)
 
-        gts = variant.genotypes
-        alleles = np.fromiter(
-            (gts[s][hap_index_in_vcf] for s in rep_indices),
-            dtype=np.int16,
-            count=n_ref,
+    if matched_zarr_indices:
+        geno = ds["call_genotype"].isel(
+            variants=matched_zarr_indices,
+            samples=rep_indices,
+            ploidy=hap_index_in_zarr,
         )
-        alleles = np.where(alleles >= 0, alleles, -1).astype(np.int8)
-        refs[:, global_i] = alleles
+        geno_data = geno.data
+        if hasattr(geno_data, "compute"):
+            geno_data = geno_data.compute()
+        geno_arr = np.asarray(geno_data)
+        geno_arr = np.where(geno_arr >= 0, geno_arr, -1).astype(np.int8)
+
+        for local_idx, pos_idx in enumerate(matched_ref_positions):
+            refs_sorted[:, pos_idx] = geno_arr[local_idx]
+
+    refs = np.empty_like(refs_sorted)
+    refs[:, sort_idx] = refs_sorted
 
     return refs, group_labels
 
 # ============================================================================
-# Convenience wrapper: phase using VCF-derived references
+# Convenience wrapper: phase using Zarr-derived references
 # ============================================================================
 
-def phase_local_ancestry_sample_from_vcf(
+def phase_local_ancestry_sample_from_zarr(
     hap0: np.ndarray, hap1: np.ndarray, positions: np.ndarray,
-    chrom: str, ref_vcf_path: str, sample_annot_path: str,
-    groups: Optional[list[str]] = None, 
-    config: Optional[PhasingConfig] = None, hap_index_in_vcf: int = 0,
+    chrom: str, ref_zarr_root: str, sample_annot_path: str,
+    groups: Optional[list[str]] = None,
+    config: Optional[PhasingConfig] = None, hap_index_in_zarr: int = 0,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Phase-correct local ancestry haplotypes using VCF-derived references.
+    Phase-correct local ancestry haplotypes using Zarr-derived references.
 
     This is a convenience wrapper that:
 
     1. Loads sample annotations to choose reference samples (ref0, ref1).
     2. Builds haploid reference haplotypes for those samples at the
-       positions of interest using :mod:`cyvcf2`.
+       positions of interest from a chromosome-specific Zarr store.
     3. Calls :func:`phase_local_ancestry_sample` with these references to
        perform gnomix-style tail-flip corrections.
 
@@ -606,9 +621,11 @@ def phase_local_ancestry_sample_from_vcf(
     positions : (L,) array_like of int
         1-based bp positions corresponding to hap0/hap1 entries.
     chrom : str
-        Chromosome name to use when querying the VCF (e.g. "1" or "chr1").
-    ref_vcf_path : str
-        Path to bgzipped, indexed reference VCF/BCF file.
+        Chromosome name used to resolve the reference Zarr store (e.g.,
+        "1" or "chr1").
+    ref_zarr_root : str
+        Path to the chromosome-specific Zarr store or a directory containing
+        per-chromosome Zarr stores (from ``convert_vcf_to_zarr`` or the CLI).
     sample_annot_path : str
         Path to sample annotation file (sample_id + group label).
     groups : list of str, optional
@@ -616,8 +633,8 @@ def phase_local_ancestry_sample_from_vcf(
         annotation file.
     config : PhasingConfig, optional
         Configuration for phasing (window size, thresholds, verbosity).
-    hap_index_in_vcf : int, default 0
-        Which haploid allele to take from the reference VCF genotypes.
+    hap_index_in_zarr : int, default 0
+        Which haploid allele to take from the reference genotypes.
 
     Returns
     -------
@@ -634,14 +651,12 @@ def phase_local_ancestry_sample_from_vcf(
     if hap0.shape != hap1.shape or hap0.shape[0] != positions.shape[0]:
         raise ValueError("hap0, hap1, and positions must all have length L.")
 
-    # Build reference haplotypes from VCF
-    refs, groups = build_reference_haplotypes_from_vcf(
-        vcf_path=ref_vcf_path, annot_path=sample_annot_path,
+    refs, groups = build_reference_haplotypes_from_zarr(
+        zarr_root=ref_zarr_root, annot_path=sample_annot_path,
         chrom=chrom, positions=positions, groups=groups,
-        hap_index_in_vcf=hap_index_in_vcf,
+        hap_index_in_zarr=hap_index_in_zarr,
     )
 
-    # Run gnomix-style phasing correction
     hap0_corr, hap1_corr = phase_local_ancestry_sample(
         hap0=hap0, hap1=hap1, refs=refs, config=config,
     )
@@ -795,25 +810,25 @@ def combine_haps_to_counts(
     return out
 
 # ============================================================================
-# High-level: phase a single admixed sample using RFMix + VCF
+# High-level: phase a single admixed sample using RFMix + Zarr
 # ============================================================================
 
-def phase_admix_sample_from_vcf_with_index(
+def phase_admix_sample_from_zarr_with_index(
     admix_sample: np.ndarray,           # (L, A) counts, mostly for shape / A
     X_raw: DaskArray | np.ndarray,      # (L, n_cols) raw RFMix matrix
     sample_idx: int, n_samples: int,
     positions: np.ndarray,              # (L,) positions
-    chrom: str, ref_vcf_path: str, sample_annot_path: str,
+    chrom: str, ref_zarr_root: str, sample_annot_path: str,
     config: PhasingConfig, groups: Optional[list[str]] = None,
-    hap_index_in_vcf: int = 0,
+    hap_index_in_zarr: int = 0,
 ) -> np.ndarray:
     """
-    Phase-correct local ancestry for one sample using RFMix + VCF.
+    Phase-correct local ancestry for one sample using RFMix + Zarr references.
 
     Steps
     -----
     1. Use ``X_raw`` to build hap0/hap1 ancestry labels.
-    2. Run gnomix-style phasing via :func:`phase_local_ancestry_sample_from_vcf`.
+    2. Run gnomix-style phasing via :func:`phase_local_ancestry_sample_from_zarr`.
     3. Recombine corrected hap0/hap1 into 0/1/2 counts.
 
     Parameters
@@ -830,8 +845,9 @@ def phase_admix_sample_from_vcf_with_index(
         1-based genomic positions.
     chrom : str
         Chromosome name.
-    ref_vcf_path : str
-        Path to bgzipped, indexed reference VCF/BCF file.
+    ref_zarr_root : str
+        Path to the reference Zarr store for this chromosome or a directory
+        containing per-chromosome Zarr stores.
     sample_annot_path : str
         Path to sample annotation file (sample_id + group label).
     config : PhasingConfig
@@ -839,8 +855,8 @@ def phase_admix_sample_from_vcf_with_index(
     groups : list of str, optional
         Group labels to use. If None, uses all unique groups from the
         annotation file.
-    hap_index_in_vcf : int, default 0
-        Which haploid allele to take from the reference VCF (0 or 1).
+    hap_index_in_zarr : int, default 0
+        Which haploid allele to take from the reference store (0 or 1).
 
     Returns
     -------
@@ -860,11 +876,11 @@ def phase_admix_sample_from_vcf_with_index(
     if hap0.shape[0] != L:
         raise ValueError("Length of hap0/hap1 does not match admix_sample.")
 
-    # Gnomix-style phasing using reference VCF
-    hap0_corr, hap1_corr = phase_local_ancestry_sample_from_vcf(
+    # Gnomix-style phasing using reference Zarr store
+    hap0_corr, hap1_corr = phase_local_ancestry_sample_from_zarr(
         hap0=hap0, hap1=hap1, positions=positions, chrom=chrom,
-        ref_vcf_path=ref_vcf_path, sample_annot_path=sample_annot_path,
-        groups=groups, config=config, hap_index_in_vcf=hap_index_in_vcf,
+        ref_zarr_root=ref_zarr_root, sample_annot_path=sample_annot_path,
+        groups=groups, config=config, hap_index_in_zarr=hap_index_in_zarr,
     )
 
     # Recombine corrected haplotypes to summed counts
@@ -879,9 +895,9 @@ def phase_admix_dask_with_index(
     admix: DaskArray,                # (L, S, A) summed counts
     X_raw: DaskArray | np.ndarray,   # (L, n_cols) raw RFMix matrix
     positions: np.ndarray,           # (L,)
-    chrom: str, ref_vcf_path: str, sample_annot_path: str,
+    chrom: str, ref_zarr_root: str, sample_annot_path: str,
     config: PhasingConfig, groups: Optional[list[str]] = None,
-    hap_index_in_vcf: int = 0,
+    hap_index_in_zarr: int = 0,
 ) -> DaskArray:
     """
     Phase-correct all samples in a ``(L, S, A)`` admix Dask array.
@@ -890,7 +906,7 @@ def phase_admix_dask_with_index(
     Each task:
 
     1. Materializes the sample's admixture vector ``admix[:, s, :]``.
-    2. Calls :func:`phase_admix_sample_from_vcf_with_index`.
+    2. Calls :func:`phase_admix_sample_from_zarr_with_index`.
 
     Parameters
     ----------
@@ -902,8 +918,9 @@ def phase_admix_dask_with_index(
         Genomic positions.
     chrom : str
         Chromosome name.
-    ref_vcf_path : str
-        Path to bgzipped, indexed reference VCF/BCF file.
+    ref_zarr_root : str
+        Path to the reference Zarr store for this chromosome or a directory
+        containing per-chromosome Zarr stores.
     sample_annot_path : str
         Path to sample annotation file (sample_id + group label).
     config : PhasingConfig
@@ -911,8 +928,8 @@ def phase_admix_dask_with_index(
     groups : list of str, optional
         Group labels to use. If None, uses all unique groups from the
         annotation file.
-    hap_index_in_vcf : int, default 0
-        Which haploid allele to take from the reference VCF (0 or 1).
+    hap_index_in_zarr : int, default 0
+        Which haploid allele to take from the reference store (0 or 1).
 
     Returns
     -------
@@ -932,12 +949,12 @@ def phase_admix_dask_with_index(
         @dask.delayed
         def _phase_one_sample(admix_s_block: DaskArray, sample_idx: int) -> np.ndarray:
             admix_s_np = admix_s_block.compute()
-            return phase_admix_sample_from_vcf_with_index(
+            return phase_admix_sample_from_zarr_with_index(
                 admix_sample=admix_s_np, X_raw=X_raw, sample_idx=sample_idx,
                 n_samples=n_samples, positions=positions, chrom=chrom,
-                ref_vcf_path=ref_vcf_path,
+                ref_zarr_root=ref_zarr_root,
                 sample_annot_path=sample_annot_path, config=config,
-                groups=groups, hap_index_in_vcf=hap_index_in_vcf,
+                groups=groups, hap_index_in_zarr=hap_index_in_zarr,
             )
 
         delayed_results.append(_phase_one_sample(admix_s, s))
