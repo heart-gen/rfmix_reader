@@ -573,8 +573,11 @@ def build_reference_haplotypes_from_zarr(
             matched_ref_positions.append(i)
 
     if matched_zarr_indices:
+        matched_zarr_indices_arr = np.asarray(matched_zarr_indices, dtype=np.int64)
+        matched_ref_positions_arr = np.asarray(matched_ref_positions, dtype=np.int64)
+
         geno = ds["call_genotype"].isel(
-            variants=matched_zarr_indices,
+            variants=matched_zarr_indices_arr,
             samples=rep_indices,
             ploidy=hap_index_in_zarr,
         )
@@ -584,8 +587,7 @@ def build_reference_haplotypes_from_zarr(
         geno_arr = np.asarray(geno_data)
         geno_arr = np.where(geno_arr >= 0, geno_arr, -1).astype(np.int8)
 
-        for local_idx, pos_idx in enumerate(matched_ref_positions):
-            refs_sorted[:, pos_idx] = geno_arr[local_idx]
+        refs_sorted[:, matched_ref_positions_arr] = geno_arr.T
 
     refs = np.empty_like(refs_sorted)
     refs[:, sort_idx] = refs_sorted
