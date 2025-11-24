@@ -285,18 +285,21 @@ def apply_phase_track(
     hap1 = np.asarray(hap1).copy()
     phase_track = np.asarray(phase_track)
 
-    W = phase_track.shape[0]
-
     # Identify window boundaries where phase state changes
     change_points = np.where(np.diff(phase_track) != 0)[0] + 1  # window indices
-    # Convert window indices to SNP indices
-    flip_positions = [int(w * window_size) for w in change_points if w < W]
 
-    for pos in flip_positions:
-        # swap tails from pos onward
-        tmp = hap0[pos:].copy()
-        hap0[pos:] = hap1[pos:]
-        hap1[pos:] = tmp
+    if change_points.size:
+        # Convert window indices to SNP indices (start of the window)
+        flip_positions = change_points * window_size
+
+        # Build a boolean flip mask using cumulative XOR of change points
+        flip_mask = np.zeros(hap0.shape[0] + 1, dtype=bool)
+        flip_mask[flip_positions] ^= True
+        flip_mask = np.logical_xor.accumulate(flip_mask)[:-1]
+
+        tmp = hap0[flip_mask].copy()
+        hap0[flip_mask] = hap1[flip_mask]
+        hap1[flip_mask] = tmp
 
     return hap0, hap1
 
