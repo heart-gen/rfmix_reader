@@ -14,6 +14,8 @@ from pandas import DataFrame
 from dask.array import Array
 from typing import Literal, Optional
 
+from ._hmm_lai import hmm_interpolate, split_to_haplotypes
+
 try:
     from torch.cuda import is_available as cuda_is_available
 except ModuleNotFoundError:
@@ -40,7 +42,7 @@ __all__ = [
     "_print_logger"
 ]
 
-InterpMethod = Literal["linear", "nearest", "stepwise"]
+InterpMethod = Literal["linear", "nearest", "stepwise", "hmm"]
 
 def _to_host(x):
     """Convert an array-module array back to a NumPy array on host."""
@@ -81,6 +83,8 @@ def _normalize_method(method: str) -> str:
         return "nearest"
     if m in ("step", "stepwise", "nearest_segment", "nearest-segment"):
         return "stepwise"
+    if m in ("hmm", "hmm_lai"):
+        return "hmm"
     raise ValueError(f"Unknown interpolation method: {method}")
 
 
@@ -102,6 +106,7 @@ def _interpolate_1d(
     Returns
     -------
     col_imputed : same type as arr_mod
+        Interpolated values, either float (posteriors) or int (hard states).
     """
     mod = arr_mod
     col = mod.asarray(col, dtype=mod.float32)
@@ -116,7 +121,7 @@ def _interpolate_1d(
         return col # All NaNs, nothing to impute
 
     method = _normalize_method(method)
-
+    
     if method == "linear":
         xp_valid = xp[valid]
         y_valid = col[valid]
@@ -162,12 +167,13 @@ def _interpolate_1d(
 
 def interpolate_block(
     block, *, method: InterpMethod = "linear",
-    pos: Optional[np.ndarray] = None,
+    pos: Optional[np.ndarray] = None, recomb_rate: float = 1e-8,
+    eps_anchor: float = 1e-3, return_hard: bool = False, device: str = "cuda",
 ):
     """
     Block-wise interpolation for a haplotype / ancestry block.
 
-    `method` can be "linear", "nearest", or "stepwise". If `pos` is given,
+    `method` can be "linear", "nearest", "stepwise" or "hmm". If `pos` is given,
     interpolation is performed in bp space; otherwise it is done in index
     space (0..n_loci-1).
 
@@ -176,12 +182,23 @@ def interpolate_block(
     mod = arr_mod
     block = mod.asarray(block, dtype=mod.float32)
     loci_dim, sample_dim, ancestry_dim = block.shape
+
+    if method == "hmm":
+        if pos is None:
+            raise ValueError("`pos` must be provided for HMM interpolation.")
+        block_np = block.get() if hasattr(block, "get") else np.asarray(block)
+        gamma = hmm_interpolate(
+            pos_bp=pos, obs_post=block_np.transpose(1, 0, 2),
+            recomb_rate=recomb_rate, eps_anchor=eps_anchor, device=device,
+        )
+        if return_hard:
+            hard_calls = np.argmax(gamma, axis=1).T
+            return np.eye(K, dtype=np.float32)[hard_calls]
+        return gamma.transpose(1, 0, 2)
+
+    # Other methods 1D interpolation
     flat = block.reshape(loci_dim, -1)  # (loci, samples*ancestries)
-
-    x = None
-    if pos is not None:
-        x = mod.asarray(pos, dtype=mod.float32)
-
+    x = None if pos is not None else mod.asarray(pos, dtype=mod.float32)
     for j in range(flat.shape[1]):
         flat[:, j] = _interpolate_1d(flat[:, j], x=x, method=method)
 

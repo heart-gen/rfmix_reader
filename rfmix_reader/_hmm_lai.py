@@ -5,6 +5,7 @@ from typing import Tuple
 
 __all__ = [
     "hmm_interpolate",
+    "split_to_haplotypes",
 ]
 
 def build_log_emissions_from_anchors(
@@ -44,7 +45,7 @@ def build_log_emissions_from_anchors(
 
     # mask where all ancestries are NaN
     nan_mask = torch.isnan(obs_post)                  # (B,L,K)
-    has_anchor = ~nan_mask.all(dim=-1)               # (B,L)
+    has_anchor = ~nan_mask.all(dim=-1)                # (B,L)
 
     # Replace NaNs with 0 for now
     obs_filled = obs_post.clone()
@@ -263,3 +264,59 @@ def hmm_interpolate(
         torch.cuda.empty_cache()
 
     return gamma_out
+
+
+def split_to_haplotypes(
+    admix_summed: np.ndarray, hap_index: np.ndarray,
+    missing_as_nan: bool = True,
+) -> np.ndarray:
+    """
+    Convert individual-level summed ancestry (admix_summed) into
+    haplotype-level anchor posteriors suitable for `hmm_interpolate`.
+
+    Parameters
+    ----------
+    admix_summed : np.ndarray, shape (L, nsamples, npops)
+        Summed ancestry counts/probabilities across the 2 haplotypes
+        for each sample and ancestry.
+
+    hap_index : np.ndarray, shape (nsamples, npops, 2)
+        Mapping from (sample, ancestry, hap) -> original column index in X.
+        Not strictly needed for building obs_post, but used to define
+        the hap-ordering and to map results back later if desired.
+
+    missing_as_nan : bool, default True
+        If True, loci where total ancestry sum is 0 will be marked as
+        missing (all NaNs) so that the HMM treats them as uninformative.
+
+    Returns
+    -------
+    obs_post_haps : np.ndarray, shape (B, L, K)
+        where B = 2 * nsamples, K = npops. For each sample j, its two
+        haplotype sequences are at indices 2*j and 2*j+1. At locus t
+        the probability vector over ancestries is proportional to the
+        summed counts in admix_summed[t, j, :].
+    """
+    A = np.asarray(admix_summed, dtype=np.float32)      # (L, nsamples, npops)
+    L, nsamples, npops = A.shape
+
+    # Move sample to axis 0 for convenience: (nsamples, L, npops)
+    A_samp = np.transpose(A, (1, 0, 2))
+
+    # Sum over ancestries at each (sample, locus)
+    row_sums = A_samp.sum(axis=-1, keepdims=True)      # (nsamples, L, 1)
+
+    # Identify positions with no ancestry info (sum == 0)
+    zero_mask = (row_sums == 0.0)
+
+    # Avoid division by zero
+    row_sums_safe = row_sums.copy()
+    row_sums_safe[zero_mask] = 1.0
+
+    # Convert counts to per-haplotype ancestry distribution
+    P = A_samp / row_sums_safe
+
+    if missing_as_nan:
+        P[zero_mask.repeat(npops, axis=2)] = np.nan
+
+    return P.repeat(2, axis=0)
