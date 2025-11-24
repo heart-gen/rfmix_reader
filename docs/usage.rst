@@ -69,6 +69,18 @@ RFMix output directory.
        binary_dir="../examples/two_populations/out/binary_files",
    )
 
+To phase-correct local ancestry before stacking across chromosomes, pass
+``phase=True`` along with the required reference inputs:
+
+.. code:: python
+
+   loci_df, g_anc, admix = read_rfmix(
+       "../examples/two_populations/out/",
+       phase=True,
+       phase_vcf_path="/path/to/reference.vcf.gz",
+       phase_sample_annot_path="/path/to/sample_annot.tsv",
+   )
+
 ``g_anc`` is the canonical variable name returned by ``read_rfmix`` and
 is used throughout the visualization helpers described later.
 

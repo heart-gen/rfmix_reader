@@ -2,17 +2,19 @@
 Adapted from `_read.py` script in the `pandas-plink` package.
 Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_read.py
 """
+from __future__ import annotations
 import warnings
 from re import search
 from tqdm import tqdm
 from glob import glob
-from numpy import int32
+from numpy import int32, array
 from collections import OrderedDict as odict
 from typing import Optional, List, Tuple, Dict
 from dask.array import Array, concatenate, stack
 from os.path import basename, dirname, join, exists
 
 from ..io import BinaryFileNotFoundError, Chunk
+from ..processing import PhasingConfig, phase_admix_dask_with_index
 from .fb_read import read_fb
 from ..utils import _read_file, create_binaries, get_prefixes, set_gpu_environment
 
@@ -35,7 +37,17 @@ def read_rfmix(
         file_prefix: str, binary_dir: str = "./binary_files",
         generate_binary: bool = False, verbose: bool = True,
         return_hap_matrix: bool = False,
-) -> Tuple[DataFrame, DataFrame, Array]:
+        return_original: bool = False,
+        phase: bool = False,
+        phase_vcf_path: Optional[str] = None,
+        phase_sample_annot_path: Optional[str] = None,
+        phase_groups: Optional[List[str]] = None,
+        phase_config: Optional[PhasingConfig] = None,
+        phase_hap_index_in_vcf: int = 0,
+) -> (
+    Tuple[DataFrame, DataFrame, Array]
+    | Tuple[DataFrame, DataFrame, Array, Array]
+):
     """
     Read RFMix files into data frames and a Dask array.
 
@@ -54,6 +66,28 @@ def read_rfmix(
         Default:`True`.
     return_hap_index : bool, optional
         Return the haplotypes index for reconstruction of hap0 / hap1.
+    return_original : bool, optional
+        Return the original RFMix matrix ``X_raw`` along with the summed
+        ancestry counts. Ignored when ``phase=True``.
+    phase : bool, optional
+        If :const:`True`, phase-correct local ancestry per chromosome chunk
+        using the routines in :mod:`rfmix_reader.processing.phase` before
+        stacking across chromosomes. Default is :const:`False` to preserve
+        legacy behavior.
+    phase_vcf_path : str, optional
+        Path to the bgzipped reference VCF/BCF used for phasing. Required when
+        ``phase`` is :const:`True`.
+    phase_sample_annot_path : str, optional
+        Path to the sample annotation file (sample_id + group label) for
+        phasing. Required when ``phase`` is :const:`True`.
+    phase_groups : list[str], optional
+        Restrict phasing to this subset of group labels. Defaults to all
+        ancestry columns inferred from the ``rfmix.Q`` files when
+        :data:`None`.
+    phase_config : PhasingConfig, optional
+        Optional configuration object for phasing parameters.
+    phase_hap_index_in_vcf : int, optional
+        Which haploid allele to pull from the reference VCF (``0`` or ``1``).
 
     Returns
     -------
@@ -64,6 +98,10 @@ def read_rfmix(
     local_array : :class:`dask.array.Array`
         Local ancestry per population stacked (variants, samples, ancestries).
         This is in order of the populations see `g_anc`.
+    X_raw : :class:`dask.array.Array`, optional
+        Returned only when ``return_original`` is :const:`True` and
+        ``phase=False``. The unphased RFMix matrix prior to haplotype
+        summarization.
     return_hap_matrix : bool
         Whether to return local ancestry with haplotypes (hap0 / hap1) level
         information.
@@ -84,17 +122,27 @@ def read_rfmix(
     # Get file prefixes
     fn = get_prefixes(file_prefix, "rfmix", verbose)
 
+    if phase:
+        if phase_vcf_path is None or phase_sample_annot_path is None:
+            raise ValueError(
+                "Phasing requires both `phase_vcf_path` and "
+                "`phase_sample_annot_path` to be provided."
+            )
+        if phase_config is None:
+            phase_config = PhasingConfig()
+
     # Load loci information
     pbar = tqdm(desc="Mapping loci information", total=len(fn), disable=not verbose)
     loci_dfs = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
     pbar.close()
 
     # Adjust loci indices and concatenate
-    nmarkers = {}; index_offset = 0
+    nmarkers = {}; index_offset = 0; loci_by_fn = {}
     for i, bi in enumerate(loci_dfs):
         nmarkers[fn[i]["fb.tsv"]] = bi.shape[0]
         bi["i"] += index_offset
         index_offset += bi.shape[0]
+        loci_by_fn[fn[i]["fb.tsv"]] = bi
     loci_df = concat(loci_dfs, axis=0, ignore_index=True)
 
     # Load global ancestry per chromosome
@@ -107,6 +155,9 @@ def read_rfmix(
     pops = g_anc[0].drop(["sample_id", "chrom"], axis=1).columns.values
     g_anc = concat(g_anc, axis=0, ignore_index=True)
 
+    if phase and phase_groups is None:
+        phase_groups = list(pops)
+
     # Loading local ancestry by loci
     if generate_binary:
         create_binaries(file_prefix, binary_dir)
@@ -115,12 +166,25 @@ def read_rfmix(
                 disable=not verbose)
     local_data = _read_file(
         fn,
-        lambda f: _read_fb(f["fb.tsv"], nsamples,
-                           nmarkers[f["fb.tsv"]], pops,
-                           binary_dir, Chunk()),
+        lambda f: _read_fb(
+            f["fb.tsv"], nsamples, nmarkers[f["fb.tsv"]], pops,
+            binary_dir, Chunk(),
+            phase=phase,
+            chrom=str(loci_by_fn[f["fb.tsv"]]["chromosome"].iloc[0]),
+            positions=loci_by_fn[f["fb.tsv"]]["physical_position"],
+            ref_vcf_path=phase_vcf_path,
+            sample_annot_path=phase_sample_annot_path,
+            phase_groups=phase_groups,
+            phase_config=phase_config,
+            hap_index_in_vcf=phase_hap_index_in_vcf,
+        ),
         pbar,
     )
     pbar.close()
+
+    if phase:
+        local_array = concatenate(local_data, axis=0)
+        return loci_df, g_anc, local_array
 
     # Unpack data
     admix_list = [admix for admix, X_raw in local_data]
@@ -264,8 +328,23 @@ def _read_Q_noi(fn: str) -> DataFrame:
         raise OSError(f"Error reading file {fn}: {e}") from e
 
 
-def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
-             temp_dir: str, chunk: Optional[Chunk] = None) -> Array:
+def _read_fb(
+    fn: str,
+    nsamples: int,
+    nloci: int,
+    pops: list,
+    temp_dir: str,
+    chunk: Optional[Chunk] = None,
+    *,
+    phase: bool = False,
+    chrom: Optional[str] = None,
+    positions=None,
+    ref_vcf_path: Optional[str] = None,
+    sample_annot_path: Optional[str] = None,
+    phase_groups: Optional[List[str]] = None,
+    phase_config: Optional[PhasingConfig] = None,
+    hap_index_in_vcf: int = 0,
+) -> Array | Tuple[Array, Array]:
     """
     Read the forward-backward matrix from a file as a Dask Array.
 
@@ -276,10 +355,25 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
     nloci (int): The number of loci in the dataset.
     pops (list): A list of population labels.
     chunk (Chunk, optional): A Chunk object specifying the chunk size for reading.
+    phase (bool, optional): Whether to phase-correct the local ancestry.
+    chrom (str, optional): Chromosome label for this chunk (required for phasing).
+    positions (array-like, optional): Physical positions for this chunk
+        (required for phasing).
+    ref_vcf_path (str, optional): Path to the reference VCF used for phasing.
+    sample_annot_path (str, optional): Path to the sample annotation TSV used
+        for grouping reference haplotypes.
+    phase_groups (list[str], optional): Subset of groups to use during phasing.
+        Defaults to all ancestry groups present in the ``rfmix.Q`` files when
+        not provided.
+    phase_config (PhasingConfig, optional): Configuration options for phasing.
+    hap_index_in_vcf (int, optional): Which haploid allele to read from the
+        reference VCF during phasing.
 
     Returns:
     -------
-    dask.array.Array: The forward-backward matrix as a Dask Array.
+    dask.array.Array or tuple: The forward-backward matrix as a Dask Array
+    (with the raw matrix) when ``phase`` is :const:`False`; otherwise the
+    phased local ancestry counts only.
     """
     npops = len(pops)
     nrows = nloci
@@ -297,7 +391,38 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
     else:
         raise BinaryFileNotFoundError(binary_fn, temp_dir)
     # Subset populations and sum adjacent columns
-    return _subset_populations(X, npops), X
+    admix = _subset_populations(X, npops)
+
+    if phase:
+        if chrom is None or positions is None:
+            raise ValueError("Phasing requires `chrom` and `positions` for each chunk.")
+        if ref_vcf_path is None or sample_annot_path is None:
+            raise ValueError(
+                "Phasing requires both `ref_vcf_path` and `sample_annot_path` to be set."
+            )
+
+        if hasattr(positions, "to_numpy"):
+            pos_array = positions.to_numpy()
+        elif hasattr(positions, "to_arrow"):
+            pos_array = positions.to_arrow().to_numpy()
+        else:
+            pos_array = array(positions)
+
+        config = phase_config or PhasingConfig()
+        phased = phase_admix_dask_with_index(
+            admix=admix,
+            X_raw=X,
+            positions=pos_array,
+            chrom=chrom,
+            ref_vcf_path=ref_vcf_path,
+            sample_annot_path=sample_annot_path,
+            config=config,
+            groups=phase_groups,
+            hap_index_in_vcf=hap_index_in_vcf,
+        )
+        return phased
+
+    return admix, X
 
 
 def _subset_populations(X: Array, npops: int) -> Array:
