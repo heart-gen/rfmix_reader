@@ -1,5 +1,5 @@
 import pytest
-import rfmix_reader._constants as consts
+import rfmix_reader.constants as consts
 
 # ---------------------------
 # CONSTANTS TESTS

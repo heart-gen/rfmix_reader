@@ -1,6 +1,7 @@
 import argparse
+
 from . import __version__
-from ._utils import create_binaries
+from .utils import create_binaries
 
 def main():
     parser = argparse.ArgumentParser(

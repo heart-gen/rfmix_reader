@@ -1,5 +1,5 @@
 import pytest
-from rfmix_reader._chunk import Chunk
+from rfmix_reader.chunk import Chunk
 
 def test_default_chunk_values():
     """Check default values of Chunk."""

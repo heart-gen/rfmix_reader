@@ -4,12 +4,12 @@ import pytest
 import pandas as pd
 import os
 
-from rfmix_reader._read_simu import (
-    read_simu,
-    _parse_pop_labels,
-    _map_pop_to_codes,
-    _build_mapper,
+from rfmix_reader.read_simu import (
     MISSING,
+    _build_mapper,
+    _map_pop_to_codes,
+    _parse_pop_labels,
+    read_simu,
 )
 
 @pytest.fixture

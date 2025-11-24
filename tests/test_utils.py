@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-import rfmix_reader._utils as utils
+import rfmix_reader.utils as utils
 
 
 def test__read_file_with_and_without_pbar(tmp_path):

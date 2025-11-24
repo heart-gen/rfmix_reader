@@ -1,5 +1,5 @@
 import pytest
-import rfmix_reader._errorhandling as errors
+import rfmix_reader.errors as errors
 
 # ---------------------------
 # ERRORHANDLING TESTS
