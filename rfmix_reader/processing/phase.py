@@ -593,26 +593,12 @@ def build_reference_haplotypes_from_zarr(
             matched_zarr_indices.append(zarr_idx)
             matched_ref_positions.append(i)
 
-    matched_count = len(matched_ref_positions)
-    missing_loci = set(int(p) for p in positions_sorted) - set(
-        int(positions_sorted[i]) for i in matched_ref_positions
-    )
-    missing_count = len(missing_loci)
-    missing_fraction = missing_count / L if L else 0.0
-
-    if missing_fraction > missing_loci_threshold:
-        message = (
-            "Fraction of requested loci missing from reference Zarr exceeds "
-            f"threshold: {missing_count}/{L} ({missing_fraction:.3f} > "
-            f"{missing_loci_threshold})."
-        )
-        if raise_on_missing:
-            raise ValueError(message)
-        logging.getLogger(__name__).warning(message)
-
     if matched_zarr_indices:
+        matched_zarr_indices_arr = np.asarray(matched_zarr_indices, dtype=np.int64)
+        matched_ref_positions_arr = np.asarray(matched_ref_positions, dtype=np.int64)
+
         geno = ds["call_genotype"].isel(
-            variants=matched_zarr_indices,
+            variants=matched_zarr_indices_arr,
             samples=rep_indices,
             ploidy=hap_index_in_zarr,
         )
@@ -622,22 +608,12 @@ def build_reference_haplotypes_from_zarr(
         geno_arr = np.asarray(geno_data)
         geno_arr = np.where(geno_arr >= 0, geno_arr, -1).astype(np.int8)
 
-        for local_idx, pos_idx in enumerate(matched_ref_positions):
-            refs_sorted[:, pos_idx] = geno_arr[local_idx]
+        refs_sorted[:, matched_ref_positions_arr] = geno_arr.T
 
     refs = np.empty_like(refs_sorted)
     refs[:, sort_idx] = refs_sorted
 
-    match_stats = {
-        "total_requested": L,
-        "matched_count": matched_count,
-        "matched_fraction": matched_count / L if L else 0.0,
-        "missing_count": missing_count,
-        "missing_fraction": float(missing_fraction),
-        "missing_loci": missing_loci,
-    }
-
-    return refs, group_labels, match_stats
+    return refs, group_labels
 
 # ============================================================================
 # Convenience wrapper: phase using Zarr-derived references
@@ -701,7 +677,7 @@ def phase_local_ancestry_sample_from_zarr(
     if hap0.shape != hap1.shape or hap0.shape[0] != positions.shape[0]:
         raise ValueError("hap0, hap1, and positions must all have length L.")
 
-    refs, groups, match_stats = build_reference_haplotypes_from_zarr(
+    refs, groups = build_reference_haplotypes_from_zarr(
         zarr_root=ref_zarr_root, annot_path=sample_annot_path,
         chrom=chrom, positions=positions, groups=groups,
         hap_index_in_zarr=hap_index_in_zarr,
@@ -711,7 +687,7 @@ def phase_local_ancestry_sample_from_zarr(
         hap0=hap0, hap1=hap1, refs=refs, config=config,
     )
 
-    return hap0_corr, hap1_corr, match_stats
+    return hap0_corr, hap1_corr
 
 # ============================================================================
 # Metrics: switch error counting
@@ -927,7 +903,7 @@ def phase_admix_sample_from_zarr_with_index(
         raise ValueError("Length of hap0/hap1 does not match admix_sample.")
 
     # Gnomix-style phasing using reference Zarr store
-    hap0_corr, hap1_corr, _match_stats = phase_local_ancestry_sample_from_zarr(
+    hap0_corr, hap1_corr = phase_local_ancestry_sample_from_zarr(
         hap0=hap0, hap1=hap1, positions=positions, chrom=chrom,
         ref_zarr_root=ref_zarr_root, sample_annot_path=sample_annot_path,
         groups=groups, config=config, hap_index_in_zarr=hap_index_in_zarr,
