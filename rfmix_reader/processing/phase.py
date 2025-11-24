@@ -16,10 +16,8 @@ This module provides a lightweight, NumPy-based implementation that:
 """
 from __future__ import annotations
 
-from functools import partial
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
-from multiprocessing import Pool, cpu_count
 
 import numpy as np
 import pandas as pd
@@ -484,58 +482,10 @@ def _process_chunk(
     return refs_chunk, positions_chunk
 
 
-# --- TOP-LEVEL WORKER (must be defined at module level to be picklable) ---
-
-def _extract_chunk_worker(args):
-    """
-    Worker wrapper so multiprocessing can pickle the function.
-    args is a tuple containing:
-        (vcf_path, chrom, positions_chunk, rep_indices, n_ref, hap_index)
-    """
-    (
-        vcf_path, chrom, positions_chunk,
-        rep_indices, n_ref, hap_index_in_vcf
-    ) = args
-
-    import numpy as np
-    from cyvcf2 import VCF
-
-    positions_chunk = np.asarray(positions_chunk, dtype=np.int64)
-    chunk_len = len(positions_chunk)
-
-    # Output array for this chunk
-    refs_chunk = np.full((n_ref, chunk_len), -1, dtype=np.int8)
-
-    # Local lookup table
-    local_pos_to_i = {int(p): i for i, p in enumerate(positions_chunk)}
-
-    vcf = VCF(vcf_path)
-
-    # Iterate over the requested chromosome region
-    for variant in vcf(str(chrom)):
-        pos = variant.POS
-        local_i = local_pos_to_i.get(pos)
-        if local_i is None:
-            continue
-
-        gts = variant.genotypes
-        # Extract alleles for all ref samples
-        alleles = np.fromiter(
-            (gts[s][hap_index_in_vcf] for s in rep_indices),
-            dtype=np.int16,
-            count=n_ref
-        )
-        alleles = np.where(alleles >= 0, alleles, -1).astype(np.int8)
-        refs_chunk[:, local_i] = alleles
-
-    return positions_chunk, refs_chunk
-
-
 def build_reference_haplotypes_from_vcf(
     vcf_path: str, annot_path: str, chrom: str, positions: np.ndarray,
     groups: Optional[list[str]] = None, hap_index_in_vcf: int = 0,
     col_sample: str = "sample_id", col_group: str = "group",
-    n_processes: Optional[int] = None, chunk_size: int = 200_000,
 ) -> Tuple[np.ndarray, list[str]]:
     """
     Build reference haplotypes as fast as possible using cyvcf2 vectorized APIs.
@@ -602,38 +552,28 @@ def build_reference_haplotypes_from_vcf(
     rep_indices = [sample_to_idx[s] for s in rep_samples]
     n_ref = len(rep_indices)
 
-    # Sort positions and chunk
+    # Sort positions for efficient lookup and map back to original order
     sort_idx = np.argsort(positions)
     positions_sorted = positions[sort_idx]
-
-    # Create chunks of approximately chunk_size SNPs
-    chunks = [
-        positions_sorted[i:i + chunk_size]
-        for i in range(0, L, chunk_size)
-    ]
-    worker_args = [
-        (
-            vcf_path,
-            chrom,
-            chunk,
-            rep_indices,
-            n_ref,
-            hap_index_in_vcf
-        )
-        for chunk in chunks
-    ]
-    if n_processes is None:
-        n_processes = max(1, cpu_count() - 1)
-
-    with Pool(processes=n_processes) as pool:
-        results = pool.map(_extract_chunk_worker, worker_args)
-
-    # Assemble final output
-    refs = np.full((n_ref, L), -1, dtype=np.int8)
     pos_to_global = {int(p): i for i, p in zip(positions_sorted, sort_idx)}
-    for pos_chunk, refs_chunk in results:
-        for j, p in enumerate(pos_chunk):
-            refs[:, pos_to_global[int(p)]] = refs_chunk[:, j]
+
+    refs = np.full((n_ref, L), -1, dtype=np.int8)
+
+    # Iterate through variants once; positions mapping keeps outputs ordered
+    for variant in vcf(str(chrom)):
+        pos = variant.POS
+        global_i = pos_to_global.get(pos)
+        if global_i is None:
+            continue
+
+        gts = variant.genotypes
+        alleles = np.fromiter(
+            (gts[s][hap_index_in_vcf] for s in rep_indices),
+            dtype=np.int16,
+            count=n_ref,
+        )
+        alleles = np.where(alleles >= 0, alleles, -1).astype(np.int8)
+        refs[:, global_i] = alleles
 
     return refs, group_labels
 
