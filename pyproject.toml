@@ -48,6 +48,7 @@ repository = "https://github.com/heart-gen/rfmix_reader.git"
 
 [tool.poetry.scripts]
 create-binaries = "rfmix_reader.cli.create_binaries:main"
+prepare-reference = "rfmix_reader.cli.prepare_reference:main"
 
 [tool.poetry.group.test.dependencies]
 pytest = "^8"
