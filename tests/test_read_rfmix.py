@@ -5,8 +5,8 @@ import numpy as np
 import pandas as pd
 import dask.array as da
 
-from rfmix_reader.chunk import Chunk
-import rfmix_reader.read_rfmix as rfmix
+from rfmix_reader.io import Chunk
+import rfmix_reader.readers.read_rfmix as rfmix
 
 
 def make_dummy_tsv(tmp_path, fname="chr21.fb.tsv"):
