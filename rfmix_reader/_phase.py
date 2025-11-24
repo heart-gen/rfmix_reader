@@ -16,8 +16,10 @@ This module provides a lightweight, NumPy-based implementation that:
 """
 from __future__ import annotations
 
+from functools import partial
 from dataclasses import dataclass
 from typing import List, Tuple, Optional
+from multiprocessing import Pool, cpu_count
 
 import numpy as np
 import pandas as pd
@@ -441,92 +443,103 @@ def load_sample_annotations(
         DataFrame with columns [col_sample, col_group].
     """
     annot = pd.read_csv(
-        annot_path,
-        sep=sep,
-        header=None,
+        annot_path, sep=sep, header=None,
         names=[col_sample, col_group],
         dtype={col_sample: str, col_group: str},
     )
     return annot
 
 
-def choose_reference_samples(
-    annot: pd.DataFrame, group0: Optional[str] = None, group1: Optional[str] = None,
-    col_sample: str = "sample_id", col_group: str = "group",
-) -> Tuple[str, str]:
+def _process_chunk(
+    vcf_path, chrom, positions_chunk, pos_to_global,
+    rep_indices, n_ref, hap_index_in_vcf
+):
     """
-    Choose two reference sample IDs from annotation table.
-
-    Parameters
-    ----------
-    annot : pandas.DataFrame
-        Output of :func:`load_sample_annotations`.
-    group0, group1 : str, optional
-        Group labels to choose ref0 and ref1 from.
-        If ``group1`` is None, both references are drawn from ``group0``.
-        If ``group0`` is None, uses the most frequent group in ``annot``.
-    col_sample, col_group : str
-        Column names for sample ID and group label.
-
-    Returns
-    -------
-    ref0_id, ref1_id : str
-        Sample IDs to be used as reference haplotypes.
+    Worker function that extracts alleles for a chunk of positions.
+    Returns: (refs_chunk, chunk_positions)
     """
-    df = annot
-
-    if group0 is None:
-        # pick most frequent group
-        group0 = df[col_group].value_counts().idxmax()
-    if group1 is None:
-        group1 = group0
-
-    df0 = df[df[col_group] == group0]
-    df1 = df[df[col_group] == group1]
-
-    if df0.empty:
-        raise ValueError(f"No samples found for group0='{group0}'.")
-    if df1.empty:
-        raise ValueError(f"No samples found for group1='{group1}'.")
-
-    # simple choice: take first sample in each group
-    ref0_id = df0[col_sample].iloc[0]
-    # ensure ref1 is not identical if groups are same and we have >=2 samples
-    if group1 == group0 and len(df1) > 1:
-        ref1_id = df1[col_sample].iloc[1]
-    else:
-        ref1_id = df1[col_sample].iloc[0]
-
-    if ref0_id == ref1_id:
-        raise ValueError(
-            "ref0 and ref1 ended up being the same sample; "
-            "provide distinct groups or more samples."
+    vcf = VCF(vcf_path)
+    region = str(chrom)
+    # Output (n_ref, chunk_len)
+    chunk_len = len(positions_chunk)
+    refs_chunk = np.full((n_ref, chunk_len), -1, dtype=np.int8)
+    # Local mapping: pos -> index within chunk
+    local_pos_to_i = {int(p): i for i, p in enumerate(positions_chunk)}
+    # Iterate once over region; pick variants inside this chunk
+    for var in vcf(region):
+        pos = var.POS
+        local_i = local_pos_to_i.get(pos)
+        if local_i is None:
+            continue
+        g = var.genotypes
+        # Extract alleles for representative samples
+        alleles = np.fromiter(
+            (g[s][hap_index_in_vcf] for s in rep_indices),
+            dtype=np.int16,
+            count=n_ref
         )
+        alleles = np.where(alleles >= 0, alleles, -1).astype(np.int8)
+        refs_chunk[:, local_i] = alleles
 
-    return ref0_id, ref1_id
+    return refs_chunk, positions_chunk
+
+
+# --- TOP-LEVEL WORKER (must be defined at module level to be picklable) ---
+
+def _extract_chunk_worker(args):
+    """
+    Worker wrapper so multiprocessing can pickle the function.
+    args is a tuple containing:
+        (vcf_path, chrom, positions_chunk, rep_indices, n_ref, hap_index)
+    """
+    (
+        vcf_path, chrom, positions_chunk,
+        rep_indices, n_ref, hap_index_in_vcf
+    ) = args
+
+    import numpy as np
+    from cyvcf2 import VCF
+
+    positions_chunk = np.asarray(positions_chunk, dtype=np.int64)
+    chunk_len = len(positions_chunk)
+
+    # Output array for this chunk
+    refs_chunk = np.full((n_ref, chunk_len), -1, dtype=np.int8)
+
+    # Local lookup table
+    local_pos_to_i = {int(p): i for i, p in enumerate(positions_chunk)}
+
+    vcf = VCF(vcf_path)
+
+    # Iterate over the requested chromosome region
+    for variant in vcf(str(chrom)):
+        pos = variant.POS
+        local_i = local_pos_to_i.get(pos)
+        if local_i is None:
+            continue
+
+        gts = variant.genotypes
+        # Extract alleles for all ref samples
+        alleles = np.fromiter(
+            (gts[s][hap_index_in_vcf] for s in rep_indices),
+            dtype=np.int16,
+            count=n_ref
+        )
+        alleles = np.where(alleles >= 0, alleles, -1).astype(np.int8)
+        refs_chunk[:, local_i] = alleles
+
+    return positions_chunk, refs_chunk
 
 
 def build_reference_haplotypes_from_vcf(
     vcf_path: str, annot_path: str, chrom: str, positions: np.ndarray,
     groups: Optional[list[str]] = None, hap_index_in_vcf: int = 0,
     col_sample: str = "sample_id", col_group: str = "group",
+    n_processes: Optional[int] = None, chunk_size: int = 200_000,
 ) -> Tuple[np.ndarray, list[str]]:
     """
-    Build multiple reference haplotypes (refs) from an indexed VCF, one
-    hapolotype per ancestry (or group) label.
-
-    The reference haplotypes are haploid sequences (one allele per site),
-    which are then used as ``refs`` in gnomix-style phase correction.
-
-    Strategy
-    --------
-    1. Load sample annotations.
-    2. Determine which groups to use:
-       * If ``groups`` is None, use all unique values in ``col_group``.
-       * Otherwise, restrict to the requested groups.
-    3. For each group, pick one representative sample (first occurrence).
-    4. Extract the chosen haploid allele (0/1/2/...) for each reference
-       sample at the provided positions.
+    Build reference haplotypes as fast as possible using cyvcf2 vectorized APIs.
+    Optimized for SPEED (minimal Python overhead) and low memory.
 
     Parameters
     ----------
@@ -556,13 +569,16 @@ def build_reference_haplotypes_from_vcf(
     group_labels : list of str
         Group labels (in the same order as the first axis of ``refs``).
     """
+    if hasattr(positions, "to_numpy"):
+        positions = positions.to_numpy()
     positions = np.asarray(positions, dtype=np.int64)
     L = positions.shape[0]
 
-    annot = load_sample_annotations(annot_path, col_sample=col_sample,
-                                    col_group=col_group)
+    # Load annotations and choose representative samples
+    annot = load_sample_annotations(
+        annot_path, col_sample=col_sample, col_group=col_group
+    )
 
-    # Determine which groups to use
     if groups is None:
         group_labels = sorted(annot[col_group].unique().tolist())
     else:
@@ -573,7 +589,6 @@ def build_reference_haplotypes_from_vcf(
                 f"Requested groups not found in annotation: {sorted(missing)}"
             )
 
-    # For each group, pick a representative sample (first in table)
     rep_samples: list[str] = []
     for g in group_labels:
         df_g = annot[annot[col_group] == g]
@@ -581,36 +596,44 @@ def build_reference_haplotypes_from_vcf(
             raise ValueError(f"No samples found for group '{g}'.")
         rep_samples.append(df_g[col_sample].iloc[0])
 
+    # Open VCF and map representative samples
     vcf = VCF(vcf_path)
     sample_to_idx = {sid: i for i, sid in enumerate(vcf.samples)}
-
-    # Map rep_samples -> VCF indices
-    rep_indices: list[int] = []
-    for sid in rep_samples:
-        if sid not in sample_to_idx:
-            raise ValueError(f"Reference sample '{sid}' not found in VCF.")
-        rep_indices.append(sample_to_idx[sid])
-
+    rep_indices = [sample_to_idx[s] for s in rep_samples]
     n_ref = len(rep_indices)
 
-    # Prepare refs: -1 means "missing / not found"
+    # Sort positions and chunk
+    sort_idx = np.argsort(positions)
+    positions_sorted = positions[sort_idx]
+
+    # Create chunks of approximately chunk_size SNPs
+    chunks = [
+        positions_sorted[i:i + chunk_size]
+        for i in range(0, L, chunk_size)
+    ]
+    worker_args = [
+        (
+            vcf_path,
+            chrom,
+            chunk,
+            rep_indices,
+            n_ref,
+            hap_index_in_vcf
+        )
+        for chunk in chunks
+    ]
+    if n_processes is None:
+        n_processes = max(1, cpu_count() - 1)
+
+    with Pool(processes=n_processes) as pool:
+        results = pool.map(_extract_chunk_worker, worker_args)
+
+    # Assemble final output
     refs = np.full((n_ref, L), -1, dtype=np.int8)
-
-    # map position -> index in positions array
-    pos_to_idx = {int(p): i for i, p in enumerate(positions)}
-
-    region_str = str(chrom)
-    for variant in vcf(region_str):
-        pos = int(variant.POS)
-        if pos not in pos_to_idx:
-            continue
-        idx = pos_to_idx[pos]
-
-        gts = variant.genotypes  # (n_samples, 3 or 4) -> [a1, a2, phased, ...]
-        for r_idx, sample_idx_vcf in enumerate(rep_indices):
-            gt = gts[sample_idx_vcf]
-            allele = gt[hap_index_in_vcf] if gt[hap_index_in_vcf] >= 0 else -1
-            refs[r_idx, idx] = allele
+    pos_to_global = {int(p): i for i, p in zip(positions_sorted, sort_idx)}
+    for pos_chunk, refs_chunk in results:
+        for j, p in enumerate(pos_chunk):
+            refs[:, pos_to_global[int(p)]] = refs_chunk[:, j]
 
     return refs, group_labels
 
@@ -740,9 +763,9 @@ def count_switch_errors(
 
     return n_switches
 
-# =============================================================================
+# ============================================================================
 # RFMix utilities: reconstructing haps & recombining counts
-# =============================================================================
+# ============================================================================
 
 def build_hap_labels_from_rfmix(
     X_raw: DaskArray | np.ndarray, sample_idx: int, n_anc: int,
@@ -915,13 +938,9 @@ def phase_admix_sample_from_vcf_with_index(
 def phase_admix_dask_with_index(
     admix: DaskArray,                # (L, S, A) summed counts
     X_raw: DaskArray | np.ndarray,   # (L, n_cols) raw RFMix matrix
-    hap_index: np.ndarray,           # (S, A, 2)
     positions: np.ndarray,           # (L,)
-    chrom: str,
-    ref_vcf_path: str,
-    sample_annot_path: str,
-    config: PhasingConfig,
-    groups: Optional[list[str]] = None,
+    chrom: str, ref_vcf_path: str, sample_annot_path: str,
+    config: PhasingConfig, groups: Optional[list[str]] = None,
     hap_index_in_vcf: int = 0,
 ) -> DaskArray:
     """
@@ -939,8 +958,6 @@ def phase_admix_dask_with_index(
         Summed local ancestry counts (0,1,2) for all samples.
     X_raw : (L, n_cols) dask.array.Array or np.ndarray
         Original RFMix matrix.
-    hap_index : (S, A, 2) np.ndarray
-        Column mapping from sample/ancestry to RFMix columns.
     positions : (L,) array_like of int
         Genomic positions.
     chrom : str
