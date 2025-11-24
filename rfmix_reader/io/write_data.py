@@ -27,7 +27,7 @@ else:
     from dask.dataframe import from_pandas, concat
     from pandas import DataFrame, Series, read_parquet
 
-from .imputation import interpolate_array
+from ..processing import interpolate_array
 
 __all__ = ["write_data", "write_imputed"]
 
