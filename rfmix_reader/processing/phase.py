@@ -891,6 +891,37 @@ def phase_admix_sample_from_zarr_with_index(
 # High-level: phase all samples in a Dask (L, S, A) array
 # ============================================================================
 
+def _phase_one_sample(
+    admix_s_block: DaskArray,
+    sample_idx: int,
+    X_raw: DaskArray | np.ndarray,
+    n_samples: int,
+    positions: np.ndarray,
+    chrom: str,
+    ref_zarr_root: str,
+    sample_annot_path: str,
+    config: PhasingConfig,
+    groups: Optional[list[str]],
+    hap_index_in_zarr: int,
+) -> np.ndarray:
+    """Phase-correct a single sample slice from a Dask array."""
+
+    admix_s_np = admix_s_block.compute()
+    return phase_admix_sample_from_zarr_with_index(
+        admix_sample=admix_s_np,
+        X_raw=X_raw,
+        sample_idx=sample_idx,
+        n_samples=n_samples,
+        positions=positions,
+        chrom=chrom,
+        ref_zarr_root=ref_zarr_root,
+        sample_annot_path=sample_annot_path,
+        config=config,
+        groups=groups,
+        hap_index_in_zarr=hap_index_in_zarr,
+    )
+
+
 def phase_admix_dask_with_index(
     admix: DaskArray,                # (L, S, A) summed counts
     X_raw: DaskArray | np.ndarray,   # (L, n_cols) raw RFMix matrix
@@ -945,19 +976,21 @@ def phase_admix_dask_with_index(
     delayed_results = []
     for s in range(n_samples):
         admix_s = admix[:, s, :]  # (L, A) dask slice
-
-        @dask.delayed
-        def _phase_one_sample(admix_s_block: DaskArray, sample_idx: int) -> np.ndarray:
-            admix_s_np = admix_s_block.compute()
-            return phase_admix_sample_from_zarr_with_index(
-                admix_sample=admix_s_np, X_raw=X_raw, sample_idx=sample_idx,
-                n_samples=n_samples, positions=positions, chrom=chrom,
+        delayed_results.append(
+            dask.delayed(_phase_one_sample)(
+                admix_s_block=admix_s,
+                sample_idx=s,
+                X_raw=X_raw,
+                n_samples=n_samples,
+                positions=positions,
+                chrom=chrom,
                 ref_zarr_root=ref_zarr_root,
-                sample_annot_path=sample_annot_path, config=config,
-                groups=groups, hap_index_in_zarr=hap_index_in_zarr,
+                sample_annot_path=sample_annot_path,
+                config=config,
+                groups=groups,
+                hap_index_in_zarr=hap_index_in_zarr,
             )
-
-        delayed_results.append(_phase_one_sample(admix_s, s))
+        )
 
     # delayed_results is a list of (L, A) arrays, one per sample
     stacked = dask.delayed(lambda arrs: np.stack(arrs, axis=1))(delayed_results)  # (L, S, A)
