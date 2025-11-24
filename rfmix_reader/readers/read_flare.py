@@ -12,7 +12,7 @@ from typing import List, Tuple, Iterator
 from collections import OrderedDict as odict
 from dask.array import Array, concatenate, from_delayed, stack
 
-from .utils import _read_file, get_prefixes, set_gpu_environment
+from ..utils import _read_file, get_prefixes, set_gpu_environment
 
 try:
     from torch.cuda import is_available as gpu_available

@@ -4,7 +4,7 @@ import pytest
 import pandas as pd
 import os
 
-from rfmix_reader.read_simu import (
+from rfmix_reader.readers.read_simu import (
     MISSING,
     _build_mapper,
     _map_pop_to_codes,

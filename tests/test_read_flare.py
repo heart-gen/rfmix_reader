@@ -4,7 +4,7 @@ import cudf
 import pytest
 import pandas as pd
 import dask.array as da
-import rfmix_reader.read_flare as flare
+import rfmix_reader.readers.read_flare as flare
 
 
 @pytest.fixture
