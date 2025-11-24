@@ -329,16 +329,9 @@ def _read_Q_noi(fn: str) -> DataFrame:
 
 
 def _read_fb(
-    fn: str,
-    nsamples: int,
-    nloci: int,
-    pops: list,
-    temp_dir: str,
-    chunk: Optional[Chunk] = None,
-    *,
-    phase: bool = False,
-    chrom: Optional[str] = None,
-    positions=None,
+    fn: str, nsamples: int, nloci: int, pops: list, temp_dir: str,
+    chunk: Optional[Chunk] = None, *, phase: bool = False,
+    chrom: Optional[str] = None, positions=None,
     ref_vcf_path: Optional[str] = None,
     sample_annot_path: Optional[str] = None,
     phase_groups: Optional[List[str]] = None,
