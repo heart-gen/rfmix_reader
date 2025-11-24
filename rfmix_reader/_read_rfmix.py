@@ -115,7 +115,7 @@ def read_rfmix(
 
     pbar = tqdm(desc="Mapping local ancestry files", total=len(fn),
                 disable=not verbose)
-    local_array, X_raw = _read_file(
+    local_data = _read_file(
         fn,
         lambda f: _read_fb(f["fb.tsv"], nsamples,
                            nmarkers[f["fb.tsv"]], pops,
@@ -123,9 +123,15 @@ def read_rfmix(
         pbar,
     )
     pbar.close()
-    local_array = concatenate(local_array, axis=0)
+
+    # Unpack data
+    admix_list = [admix for admix, X_raw in local_data]
+    X_raw_list = [X_raw for admix, X_raw in local_data]
+
+    # Stack across chromosomes
+    local_array = concatenate(admix_list, axis=0)
     if return_original:
-        X_raw = concatenate(X_raw, axis=0)
+        X_raw = concatenate(X_raw_list, axis=0)
         return loci_df, g_anc, local_array, X_raw
     return loci_df, g_anc, local_array
 

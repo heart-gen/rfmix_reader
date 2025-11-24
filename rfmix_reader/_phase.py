@@ -745,22 +745,24 @@ def count_switch_errors(
 # =============================================================================
 
 def build_hap_labels_from_rfmix(
-    X_raw: DaskArray | np.ndarray, hap_index: np.ndarray, sample_idx: int,
+    X_raw: DaskArray | np.ndarray, sample_idx: int, n_anc: int,
+    n_samples: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Reconstruct hap0/hap1 ancestry labels for a single sample from RFMix.
+    Reconstruct hap0/hap1 ancestry labels for a sample directly from the
+    raw RFMix fb matrix.
 
     Parameters
     ----------
     X_raw : (L, n_cols) dask.array or np.ndarray
         Original RFMix matrix before summing haps. Columns correspond to
         (ancestry, hap, sample) combinations.
-    hap_index : (n_samples, n_anc, 2) np.ndarray
-        Output from RFMix's population subsetting. ``hap_index[s, a, 0/1]``
-        gives the column index in ``X_raw`` for hap0 / hap1 of sample ``s``
-        and ancestry ``a``.
     sample_idx : int
         Index of the sample to reconstruct.
+    n_anc : int
+        Number of ancestries.
+    n_samples : int
+        Number of total samples.
 
     Returns
     -------
@@ -768,32 +770,25 @@ def build_hap_labels_from_rfmix(
         Per-locus ancestry labels (0..n_anc-1) for hap0 and hap1.
         ``-1`` indicates missing (no ancestry column > 0 at that locus).
     """
-    hap_index = np.asarray(hap_index)
-    hap_idx_s = hap_index[sample_idx]  # (n_anc, 2)
-    cols_h0 = hap_idx_s[:, 0]
-    cols_h1 = hap_idx_s[:, 1]
+    base = sample_idx * (n_anc * 2)
+    cols_h0 = base + np.arange(n_anc) * 2
+    cols_h1 = base + np.arange(n_anc) * 2 + 1
 
     # Extract only the relevant columns.
     if isinstance(X_raw, da.Array):
         H0 = X_raw[:, cols_h0].compute()
         H1 = X_raw[:, cols_h1].compute()
     else:
-        X = np.asarray(X_raw)
-        H0 = X[:, cols_h0]
-        H1 = X[:, cols_h1]
-
-    H0 = np.asarray(H0)
-    H1 = np.asarray(H1)
+        H0 = np.asarray(X_raw)[:, cols_h0]
+        H1 = np.asarray(X_raw)[:, cols_h1]
 
     # Ancestry label per hap = argmax over ancestries
     hap0_labels = np.argmax(H0, axis=1).astype(np.int16)
     hap1_labels = np.argmax(H1, axis=1).astype(np.int16)
 
     # Mark loci that are all-zero (no assignment) as -1
-    mask0 = (H0.sum(axis=1) == 0)
-    mask1 = (H1.sum(axis=1) == 0)
-    hap0_labels[mask0] = -1
-    hap1_labels[mask1] = -1
+    hap0_labels[H0.sum(axis=1) == 0] = -1
+    hap1_labels[H1.sum(axis=1) == 0] = -1
 
     return hap0_labels, hap1_labels
 
@@ -843,14 +838,10 @@ def combine_haps_to_counts(
 def phase_admix_sample_from_vcf_with_index(
     admix_sample: np.ndarray,           # (L, A) counts, mostly for shape / A
     X_raw: DaskArray | np.ndarray,      # (L, n_cols) raw RFMix matrix
-    hap_index: np.ndarray,              # (n_samples, A, 2)
-    sample_idx: int,
+    sample_idx: int, n_samples: int,
     positions: np.ndarray,              # (L,) positions
-    chrom: str,
-    ref_vcf_path: str,
-    sample_annot_path: str,
-    config: PhasingConfig,
-    groups: Optional[list[str]] = None,
+    chrom: str, ref_vcf_path: str, sample_annot_path: str,
+    config: PhasingConfig, groups: Optional[list[str]] = None,
     hap_index_in_vcf: int = 0,
 ) -> np.ndarray:
     """
@@ -858,7 +849,7 @@ def phase_admix_sample_from_vcf_with_index(
 
     Steps
     -----
-    1. Use ``X_raw`` + ``hap_index`` to build hap0/hap1 ancestry labels.
+    1. Use ``X_raw`` to build hap0/hap1 ancestry labels.
     2. Run gnomix-style phasing via :func:`phase_local_ancestry_sample_from_vcf`.
     3. Recombine corrected hap0/hap1 into 0/1/2 counts.
 
@@ -868,10 +859,10 @@ def phase_admix_sample_from_vcf_with_index(
         Summed local ancestry (0/1/2) for this sample; used for L and A.
     X_raw : (L, n_cols) dask.array or np.ndarray
         Original RFMix hap-by-ancestry matrix.
-    hap_index : (n_samples, A, 2) np.ndarray
-        Column mapping output by RFMix's population subsetting.
     sample_idx : int
         Sample index (0..n_samples-1).
+    n_samples : int
+        Total number of samples.
     positions : (L,) array_like of int
         1-based genomic positions.
     chrom : str
@@ -900,7 +891,7 @@ def phase_admix_sample_from_vcf_with_index(
 
     # Reconstruct hap0/hap1 ancestry labels from raw RFMix output
     hap0, hap1 = build_hap_labels_from_rfmix(
-        X_raw=X_raw, hap_index=hap_index, sample_idx=sample_idx,
+        X_raw=X_raw, sample_idx=sample_idx, n_anc=A, n_samples=n_samples
     )
 
     if hap0.shape[0] != L:
@@ -985,8 +976,8 @@ def phase_admix_dask_with_index(
         def _phase_one_sample(admix_s_block: DaskArray, sample_idx: int) -> np.ndarray:
             admix_s_np = admix_s_block.compute()
             return phase_admix_sample_from_vcf_with_index(
-                admix_sample=admix_s_np, X_raw=X_raw, hap_index=hap_index,
-                sample_idx=sample_idx, positions=positions, chrom=chrom,
+                admix_sample=admix_s_np, X_raw=X_raw, sample_idx=sample_idx,
+                n_samples=n_samples, positions=positions, chrom=chrom,
                 ref_vcf_path=ref_vcf_path,
                 sample_annot_path=sample_annot_path, config=config,
                 groups=groups, hap_index_in_vcf=hap_index_in_vcf,
