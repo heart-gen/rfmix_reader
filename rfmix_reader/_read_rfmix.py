@@ -36,7 +36,7 @@ __all__ = ["read_rfmix"]
 def read_rfmix(
         file_prefix: str, binary_dir: str = "./binary_files",
         generate_binary: bool = False, verbose: bool = True,
-        return_hap_index: bool = False,
+        return_hap_matrix: bool = False,
 ) -> Tuple[DataFrame, DataFrame, Array]:
     """
     Read RFMix files into data frames and a Dask array.
@@ -66,6 +66,9 @@ def read_rfmix(
     local_array : :class:`dask.array.Array`
         Local ancestry per population stacked (variants, samples, ancestries).
         This is in order of the populations see `g_anc`.
+    return_hap_matrix : bool
+        Whether to return local ancestry with haplotypes (hap0 / hap1) level
+        information.
 
     Notes
     -----
@@ -97,7 +100,8 @@ def read_rfmix(
     loci_df = concat(loci_dfs, axis=0, ignore_index=True)
 
     # Load global ancestry per chromosome
-    pbar = tqdm(desc="Mapping global ancestry files", total=len(fn), disable=not verbose)
+    pbar = tqdm(desc="Mapping global ancestry files", total=len(fn),
+                disable=not verbose)
     g_anc = _read_file(fn, lambda f: _read_Q(f["rfmix.Q"]), pbar)
     pbar.close()
 
@@ -109,8 +113,9 @@ def read_rfmix(
     if generate_binary:
         create_binaries(file_prefix, binary_dir)
 
-    pbar = tqdm(desc="Mapping local ancestry files", total=len(fn), disable=not verbose)
-    local_array, hap_indices = _read_file(
+    pbar = tqdm(desc="Mapping local ancestry files", total=len(fn),
+                disable=not verbose)
+    local_array, X_raw = _read_file(
         fn,
         lambda f: _read_fb(f["fb.tsv"], nsamples,
                            nmarkers[f["fb.tsv"]], pops,
@@ -119,8 +124,9 @@ def read_rfmix(
     )
     pbar.close()
     local_array = concatenate(local_array, axis=0)
-    if return_hap_index:
-        return loci_df, g_anc, local_array, hap_indices[0]
+    if return_original:
+        X_raw = concatenate(X_raw, axis=0)
+        return loci_df, g_anc, local_array, X_raw
     return loci_df, g_anc, local_array
 
 
@@ -287,7 +293,7 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
     else:
         raise BinaryFileNotFoundError(binary_fn, temp_dir)
     # Subset populations and sum adjacent columns
-    return _subset_populations(X, npops)
+    return _subset_populations(X, npops), X
 
 
 def _subset_populations(X: Array, npops: int) -> Array:
@@ -319,7 +325,6 @@ def _subset_populations(X: Array, npops: int) -> Array:
 
     nsamples = ncols // (2 * npops)
     pop_subset = []
-    hap_index = np.empty((nsamples, npops, 2), dtype=int32)
 
     for pop_start in range(npops):
         X0 = X[:, pop_start::npops] # Subset based on populations
@@ -329,15 +334,7 @@ def _subset_populations(X: Array, npops: int) -> Array:
         X0_summed = X0[:, ::2] + X0[:, 1::2] # Sum adjacent columns
         pop_subset.append(X0_summed)
 
-        s_idx = np.arange(nsamples, dtype=int32)
-        cols_h0 = pop_start + (2 * s_idx) * npops
-        cols_h1 = pop_start + (2 * s_idx + 1) * npops
-
-        hap_index[:, pop_start, 0] = cols_h0
-        hap_index[:, pop_start, 1] = cols_h1
-
-    admix_summed = stack(pop_subset, axis=2)
-    return admix_summed, hap_index
+    return stack(pop_subset, axis=2)
 
 
 def _types(fn: str) -> dict:
