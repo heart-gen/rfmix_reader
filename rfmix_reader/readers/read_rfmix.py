@@ -40,6 +40,7 @@ def read_rfmix(
         return_original: bool = False,
         phase: bool = False,
         phase_vcf_path: Optional[str] = None,
+        phase_ref_zarr_root: Optional[str] = None,
         phase_sample_annot_path: Optional[str] = None,
         phase_groups: Optional[List[str]] = None,
         phase_config: Optional[PhasingConfig] = None,
@@ -74,9 +75,11 @@ def read_rfmix(
         using the routines in :mod:`rfmix_reader.processing.phase` before
         stacking across chromosomes. Default is :const:`False` to preserve
         legacy behavior.
+    phase_ref_zarr_root : str, optional
+        Path to the reference Zarr store (or directory of per-chromosome
+        stores) used for phasing. Required when ``phase`` is :const:`True``.
     phase_vcf_path : str, optional
-        Path to the bgzipped reference VCF/BCF used for phasing. Required when
-        ``phase`` is :const:`True`.
+        Deprecated alias for ``phase_ref_zarr_root``.
     phase_sample_annot_path : str, optional
         Path to the sample annotation file (sample_id + group label) for
         phasing. Required when ``phase`` is :const:`True`.
@@ -123,9 +126,11 @@ def read_rfmix(
     fn = get_prefixes(file_prefix, "rfmix", verbose)
 
     if phase:
-        if phase_vcf_path is None or phase_sample_annot_path is None:
+        phase_ref_zarr_root = phase_ref_zarr_root or phase_vcf_path
+
+        if phase_ref_zarr_root is None or phase_sample_annot_path is None:
             raise ValueError(
-                "Phasing requires both `phase_vcf_path` and "
+                "Phasing requires both a reference Zarr root and "
                 "`phase_sample_annot_path` to be provided."
             )
         if phase_config is None:
@@ -172,7 +177,7 @@ def read_rfmix(
             phase=phase,
             chrom=str(loci_by_fn[f["fb.tsv"]]["chromosome"].iloc[0]),
             positions=loci_by_fn[f["fb.tsv"]]["physical_position"],
-            ref_vcf_path=phase_vcf_path,
+            ref_zarr_root=phase_ref_zarr_root,
             sample_annot_path=phase_sample_annot_path,
             phase_groups=phase_groups,
             phase_config=phase_config,
@@ -332,7 +337,7 @@ def _read_fb(
     fn: str, nsamples: int, nloci: int, pops: list, temp_dir: str,
     chunk: Optional[Chunk] = None, *, phase: bool = False,
     chrom: Optional[str] = None, positions=None,
-    ref_vcf_path: Optional[str] = None,
+    ref_zarr_root: Optional[str] = None,
     sample_annot_path: Optional[str] = None,
     phase_groups: Optional[List[str]] = None,
     phase_config: Optional[PhasingConfig] = None,
@@ -352,7 +357,7 @@ def _read_fb(
     chrom (str, optional): Chromosome label for this chunk (required for phasing).
     positions (array-like, optional): Physical positions for this chunk
         (required for phasing).
-    ref_vcf_path (str, optional): Path to the reference VCF used for phasing.
+    ref_zarr_root (str, optional): Path to the reference Zarr store used for phasing.
     sample_annot_path (str, optional): Path to the sample annotation TSV used
         for grouping reference haplotypes.
     phase_groups (list[str], optional): Subset of groups to use during phasing.
@@ -389,9 +394,9 @@ def _read_fb(
     if phase:
         if chrom is None or positions is None:
             raise ValueError("Phasing requires `chrom` and `positions` for each chunk.")
-        if ref_vcf_path is None or sample_annot_path is None:
+        if ref_zarr_root is None or sample_annot_path is None:
             raise ValueError(
-                "Phasing requires both `ref_vcf_path` and `sample_annot_path` to be set."
+                "Phasing requires both `ref_zarr_root` and `sample_annot_path` to be set."
             )
 
         if hasattr(positions, "to_numpy"):
@@ -407,7 +412,7 @@ def _read_fb(
             X_raw=X,
             positions=pos_array,
             chrom=chrom,
-            ref_vcf_path=ref_vcf_path,
+            ref_zarr_root=ref_zarr_root,
             sample_annot_path=sample_annot_path,
             config=config,
             groups=phase_groups,
