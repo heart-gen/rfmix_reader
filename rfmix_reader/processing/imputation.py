@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import zarr
 import numpy as np
+import warnings
 from tqdm import tqdm
 from time import strftime
 from pandas import DataFrame
@@ -169,6 +170,7 @@ def interpolate_block(
     block, *, method: InterpMethod = "linear",
     pos: Optional[np.ndarray] = None, recomb_rate: float = 1e-8,
     eps_anchor: float = 1e-3, return_hard: bool = False, device: str = "cuda",
+    allow_hmm: bool = False,
 ):
     """
     Block-wise interpolation for a haplotype / ancestry block.
@@ -176,6 +178,11 @@ def interpolate_block(
     `method` can be "linear", "nearest", "stepwise" or "hmm". If `pos` is given,
     interpolation is performed in bp space; otherwise it is done in index
     space (0..n_loci-1).
+
+    HMM interpolation requires haplotype-level anchors. When using
+    `method="hmm"`, set `allow_hmm=True` only if the input block has already
+    been converted to haplotypes (e.g., via `split_to_haplotypes`). This pathway
+    is experimental and may be removed in a future release.
 
     Returns a float32 array in the same array module (NumPy or CuPy).
     """
@@ -186,6 +193,22 @@ def interpolate_block(
     if method == "hmm":
         if pos is None:
             raise ValueError("`pos` must be provided for HMM interpolation.")
+        if not allow_hmm:
+            raise RuntimeError(
+                "HMM interpolation requires haplotype-level anchors and is "
+                "disabled by default. Convert inputs with `split_to_haplotypes` "
+                "and re-run with `allow_hmm=True` if you understand the "
+                "biological limitations. This pathway is deprecated and may be "
+                "removed in the next release."
+            )
+        warnings.warn(
+            "HMM interpolation assumes haplotype-level anchors; using "
+            "summed diploid inputs may yield biologically inaccurate results. "
+            "This pathway is deprecated and may be removed in a future "
+            "release.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         block_np = block.get() if hasattr(block, "get") else np.asarray(block)
         gamma = hmm_interpolate(
             pos_bp=pos, obs_post=block_np.transpose(1, 0, 2),
@@ -278,6 +301,7 @@ def interpolate_array(
     variant_loci_df: DataFrame, admix: Array, zarr_outdir: str,
     chunk_size: int = 50_000, batch_size: int = 10_000,
     interpolation: str = "linear", use_bp_positions: bool = False,
+    allow_hmm: bool = False,
 ) -> zarr.Array:
     """
     Interpolate missing local ancestry entries on the variant grid.
@@ -302,6 +326,9 @@ def interpolate_array(
         Batch size for processing local ancestry data. Default is 10,000.
     interpolation : {"linear","nearest","stepwise"}, default "linear"
         Interpolation scheme.
+        ``"hmm"`` is available for experimentation but requires
+        `allow_hmm=True` and haplotype-level inputs created with
+        `split_to_haplotypes`.
     use_bp_positions : bool, default False
         If True, use `variant_loci_df['pos']` as the x-axis for interpolation.
         If False, loci are treated as equally spaced (index-based).
@@ -352,7 +379,9 @@ def interpolate_array(
         end = min(start + chunk_size, total_rows)
         chunk = arr_mod.array(z[start:end, :, :], dtype=arr_mod.float32)
         pos_chunk = None if pos is None else pos[start:end]
-        interp_chunk = interpolate_block(chunk, method=method, pos=pos_chunk)
+        interp_chunk = interpolate_block(
+            chunk, method=method, pos=pos_chunk, allow_hmm=allow_hmm,
+        )
         z[start:end, :, :] = _to_host(interp_chunk)
 
     _print_logger("Interpolation complete!")
