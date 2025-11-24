@@ -44,6 +44,18 @@ will transparently build the binaries in the background.
       binary_dir="../examples/two_populations/out/binary_files",
   )
 
+To phase-correct local ancestry before stacking across chromosomes, pass
+=phase=True= with the required reference inputs:
+
+#+begin_src python :results output
+  loci_df, g_anc, admix = read_rfmix(
+      "../examples/two_populations/out/",
+      phase=True,
+      phase_vcf_path="/path/to/reference.vcf.gz",
+      phase_sample_annot_path="/path/to/sample_annot.tsv",
+  )
+#+end_src
+
 ** Reading FLARE output
 =read_flare= mirrors the =read_rfmix= interface but expects FLARE's
 =*.anc.vcf.gz= and =global.anc.gz= pairs. The resulting =(loci_df, g_anc,

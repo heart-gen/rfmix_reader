@@ -62,6 +62,15 @@ loci_df, g_anc, local_array = read_rfmix(file_path)
 print(loci_df.head())
 print(g_anc.head())
 print(local_array.shape)
+
+# Optionally phase each chromosome chunk using reference data
+# (requires a bgzipped, indexed VCF plus sample annotations)
+# phased_loci, phased_g_anc, phased_admix = read_rfmix(
+#     file_path,
+#     phase=True,
+#     phase_vcf_path="/path/to/reference.vcf.gz",
+#     phase_sample_annot_path="/path/to/sample_annot.tsv",
+# )
 ```
 
 ---
