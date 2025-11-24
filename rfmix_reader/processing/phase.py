@@ -187,14 +187,19 @@ def assign_reference_per_window(
 
     for w_idx, sl in enumerate(wslices):
         h_win = hap[sl]
-        mismatches = np.full(n_ref, np.inf, dtype=float)
+        r_win = refs[:, sl]
+        mask_valid = (r_win >= 0)
 
-        for r in range(n_ref):
-            r_win = refs[r, sl]
-            mask_valid = (r_win >= 0)
-            if not np.any(mask_valid):
-                continue
-            mismatches[r] = np.mean(h_win[mask_valid] != r_win[mask_valid])
+        valid_counts = mask_valid.sum(axis=1)
+        mismatch_counts = np.sum((r_win != h_win) & mask_valid, axis=1)
+
+        mismatches = np.full(n_ref, np.inf, dtype=float)
+        np.divide(
+            mismatch_counts,
+            valid_counts,
+            out=mismatches,
+            where=valid_counts > 0,
+        )
 
         best_r = int(np.argmin(mismatches))
         best_mism = mismatches[best_r]
