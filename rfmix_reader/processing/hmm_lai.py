@@ -1,4 +1,5 @@
 import math
+import warnings
 import torch
 import numpy as np
 from typing import Tuple
@@ -226,7 +227,17 @@ def hmm_interpolate(
     - This function builds log-emissions and log-transitions once, then
       runs forward-backward in batches along the sequence dimension.
     - You can decode hard states via gamma_np.argmax(-1).
+    - Biological accuracy currently assumes haplotype-level anchors. Supplying
+      diploid-summed posteriors can bias results; use `split_to_haplotypes`
+      before calling if inputs are sample-level.
     """
+    warnings.warn(
+        "`hmm_interpolate` assumes haplotype-level anchor probabilities. "
+        "Providing diploid-summed inputs may be biologically inaccurate. "
+        "This helper is experimental and may be removed in a future release.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     # Make sure obs_post is on CPU first to slice easily for batching
     if isinstance(obs_post, np.ndarray):
         obs_tensor = torch.as_tensor(obs_post, dtype=dtype)

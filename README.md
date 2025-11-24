@@ -141,6 +141,11 @@ z = interpolate_array(variant_loci_df, admix, "/path/to/output")
 print(z.shape)
 ```
 
+> ⚠️ HMM-based interpolation is experimental, assumes haplotype-level anchors
+> built with `split_to_haplotypes`, and is disabled by default. Attempting to
+> run the HMM on diploid-summed inputs can produce biologically inaccurate
+> trajectories. This pathway may be removed in an upcoming release.
+
 ### Reading Haptools simulations
 
 Use `read_simu` to load BGZF-compressed VCF files created by
