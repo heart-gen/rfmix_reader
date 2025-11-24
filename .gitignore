@@ -164,3 +164,4 @@ cython_debug/
 *.sis.tsv
 rfmix_reader/_version.py
 docs/api/generated/
+binary_files/
