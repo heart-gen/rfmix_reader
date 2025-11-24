@@ -7,7 +7,7 @@ import matplotlib
 matplotlib.use("Agg")  # headless backend
 import matplotlib.pyplot as plt
 
-import rfmix_reader._visualization as viz
+import rfmix_reader.visualization as viz
 
 def make_ganc_df():
     return pd.DataFrame({

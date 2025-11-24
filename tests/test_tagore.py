@@ -7,7 +7,7 @@ import matplotlib
 matplotlib.use("Agg")  # headless backend
 import matplotlib.pyplot as plt
 
-import rfmix_reader._tagore as tagore
+import rfmix_reader.tagore as tagore
 
 def test__printif(capsys):
     tagore._printif("hi", verbose=True)

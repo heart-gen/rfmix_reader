@@ -1,7 +1,7 @@
 import sys
 import pytest
 
-import rfmix_reader._cli as cli
+import rfmix_reader.cli as cli
 
 
 # ---------------------------

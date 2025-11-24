@@ -29,28 +29,28 @@ __all__ = [
 
 # Map public names for lazy loading
 _lazy = {
-    "Chunk": ("._chunk", "Chunk"),
-    "read_fb": ("._fb_read", "read_fb"),
-    "read_simu": ("._read_simu", "read_simu"),
-    "read_rfmix": ("._read_rfmix", "read_rfmix"),
-    "read_flare": ("._read_flare", "read_flare"),
-    "write_data": ("._write_data", "write_data"),
-    "admix_to_bed_individual": ("._loci_bed", "admix_to_bed_individual"),
-    "CHROM_SIZES": ("._constants", "CHROM_SIZES"),
-    "COORDINATES": ("._constants", "COORDINATES"),
-    "BinaryFileNotFoundError": ("._errorhandling", "BinaryFileNotFoundError"),
-    "interpolate_array": ("._imputation", "interpolate_array"),
-    "get_pops": ("._utils", "get_pops"),
-    "get_prefixes": ("._utils", "get_prefixes"),
-    "create_binaries": ("._utils", "create_binaries"),
-    "get_sample_names": ("._utils", "get_sample_names"),
-    "set_gpu_environment": ("._utils", "set_gpu_environment"),
-    "delete_files_or_directories": ("._utils", "delete_files_or_directories"),
-    "save_multi_format": ("._visualization", "save_multi_format"),
-    "generate_tagore_bed": ("._visualization", "generate_tagore_bed"),
-    "plot_global_ancestry": ("._visualization", "plot_global_ancestry"),
-    "plot_ancestry_by_chromosome": ("._visualization", "plot_ancestry_by_chromosome"),
-    "plot_local_ancestry_tagore": ("._tagore", "plot_local_ancestry_tagore"),
+    "Chunk": (".chunk", "Chunk"),
+    "read_fb": (".fb_read", "read_fb"),
+    "read_simu": (".read_simu", "read_simu"),
+    "read_rfmix": (".read_rfmix", "read_rfmix"),
+    "read_flare": (".read_flare", "read_flare"),
+    "write_data": (".write_data", "write_data"),
+    "admix_to_bed_individual": (".loci_bed", "admix_to_bed_individual"),
+    "CHROM_SIZES": (".constants", "CHROM_SIZES"),
+    "COORDINATES": (".constants", "COORDINATES"),
+    "BinaryFileNotFoundError": (".errors", "BinaryFileNotFoundError"),
+    "interpolate_array": (".imputation", "interpolate_array"),
+    "get_pops": (".utils", "get_pops"),
+    "get_prefixes": (".utils", "get_prefixes"),
+    "create_binaries": (".utils", "create_binaries"),
+    "get_sample_names": (".utils", "get_sample_names"),
+    "set_gpu_environment": (".utils", "set_gpu_environment"),
+    "delete_files_or_directories": (".utils", "delete_files_or_directories"),
+    "save_multi_format": (".visualization", "save_multi_format"),
+    "generate_tagore_bed": (".visualization", "generate_tagore_bed"),
+    "plot_global_ancestry": (".visualization", "plot_global_ancestry"),
+    "plot_ancestry_by_chromosome": (".visualization", "plot_ancestry_by_chromosome"),
+    "plot_local_ancestry_tagore": (".tagore", "plot_local_ancestry_tagore"),
 }
 
 def __getattr__(name: str):
@@ -71,22 +71,28 @@ def __dir__():
 
 # Make type checkers happy without importing heavy deps at runtime
 if TYPE_CHECKING:
-    from ._chunk import Chunk
-    from ._fb_read import read_fb
-    from ._read_simu import read_simu
-    from ._read_rfmix import read_rfmix
-    from ._read_flare import read_flare
-    from ._write_data import write_data
-    from ._loci_bed import admix_to_bed_individual
-    from ._constants import CHROM_SIZES, COORDINATES
-    from ._errorhandling import BinaryFileNotFoundError
-    from ._imputation import interpolate_array
-    from ._utils import (
-        get_pops, get_prefixes, create_binaries, get_sample_names,
-        set_gpu_environment, delete_files_or_directories,
+    from .chunk import Chunk
+    from .constants import CHROM_SIZES, COORDINATES
+    from .errors import BinaryFileNotFoundError
+    from .fb_read import read_fb
+    from .imputation import interpolate_array
+    from .loci_bed import admix_to_bed_individual
+    from .read_flare import read_flare
+    from .read_rfmix import read_rfmix
+    from .read_simu import read_simu
+    from .tagore import plot_local_ancestry_tagore
+    from .utils import (
+        create_binaries,
+        delete_files_or_directories,
+        get_pops,
+        get_prefixes,
+        get_sample_names,
+        set_gpu_environment,
     )
-    from ._visualization import (
-        save_multi_format, generate_tagore_bed,
-        plot_global_ancestry, plot_ancestry_by_chromosome,
+    from .visualization import (
+        generate_tagore_bed,
+        plot_ancestry_by_chromosome,
+        plot_global_ancestry,
+        save_multi_format,
     )
-    from ._tagore import plot_local_ancestry_tagore
+    from .write_data import write_data

@@ -14,7 +14,7 @@ from pandas import DataFrame
 from dask.array import Array
 from typing import Literal, Optional
 
-from ._hmm_lai import hmm_interpolate, split_to_haplotypes
+from .hmm_lai import hmm_interpolate, split_to_haplotypes
 
 try:
     from torch.cuda import is_available as cuda_is_available

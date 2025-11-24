@@ -16,7 +16,7 @@ from dask.array import Array, concatenate, from_delayed
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from os.path import isdir, join, isfile, dirname, basename, exists
 
-from ._utils import _read_file
+from .utils import _read_file
 
 __all__ = ["read_simu"]
 

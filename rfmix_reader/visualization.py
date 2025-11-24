@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from typing import Tuple, Union, List, Optional
 
-from ._utils import get_pops
-from ._loci_bed import admix_to_bed_individual
+from .loci_bed import admix_to_bed_individual
+from .utils import get_pops
 
 try:
     from torch.cuda import is_available

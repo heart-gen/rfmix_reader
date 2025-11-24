@@ -12,11 +12,10 @@ from typing import Optional, List, Tuple, Dict
 from dask.array import Array, concatenate, stack
 from os.path import basename, dirname, join, exists
 
-from ._chunk import Chunk
-from ._fb_read import read_fb
-from ._utils import set_gpu_environment
-from ._errorhandling import BinaryFileNotFoundError
-from ._utils import get_prefixes, create_binaries, _read_file
+from .chunk import Chunk
+from .errors import BinaryFileNotFoundError
+from .fb_read import read_fb
+from .utils import _read_file, create_binaries, get_prefixes, set_gpu_environment
 
 try:
     from torch.cuda import is_available as gpu_available
