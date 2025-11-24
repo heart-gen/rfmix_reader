@@ -16,9 +16,10 @@ This module provides a lightweight, NumPy-based implementation that:
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Tuple, Optional
+from typing import List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -488,7 +489,8 @@ def build_reference_haplotypes_from_zarr(
     zarr_root: str, annot_path: str, chrom: str, positions: np.ndarray,
     groups: Optional[list[str]] = None, hap_index_in_zarr: int = 0,
     col_sample: str = "sample_id", col_group: str = "group",
-) -> Tuple[np.ndarray, list[str]]:
+    missing_loci_threshold: float = 0.05, raise_on_missing: bool = False,
+) -> Tuple[np.ndarray, list[str], dict[str, object]]:
     """
     Build reference haplotypes directly from a chromosome-specific Zarr store.
 
@@ -513,6 +515,12 @@ def build_reference_haplotypes_from_zarr(
         Column name for sample IDs in the annotation file.
     col_group : str, default "group"
         Column name for group labels in the annotation file.
+    missing_loci_threshold : float, default 0.05
+        Fraction of requested loci allowed to be missing from the reference
+        store before emitting a warning or raising an error.
+    raise_on_missing : bool, default False
+        If True, raise a ValueError when ``missing_loci_threshold`` is
+        exceeded; otherwise a warning is logged.
 
     Returns
     -------
@@ -521,6 +529,10 @@ def build_reference_haplotypes_from_zarr(
         missing). Each row corresponds to one group in ``group_labels``.
     group_labels : list of str
         Group labels (in the same order as the first axis of ``refs``).
+    match_stats : dict
+        Dictionary with keys ``total_requested``, ``matched_count``,
+        ``matched_fraction``, ``missing_count``, ``missing_fraction`` and
+        ``missing_loci`` providing diagnostics for downstream validation.
     """
     if hasattr(positions, "to_numpy"):
         positions = positions.to_numpy()
@@ -553,6 +565,15 @@ def build_reference_haplotypes_from_zarr(
     ds = xr.open_zarr(zarr_path)
 
     sample_to_idx = {sid: i for i, sid in enumerate(ds["sample_id"].values)}
+    missing_rep_samples = [s for s in rep_samples if s not in sample_to_idx]
+    if missing_rep_samples:
+        missing_fmt = ", ".join(missing_rep_samples)
+        raise ValueError(
+            "Representative samples not found in Zarr store: "
+            f"{missing_fmt}. "
+            "Regenerate the Zarr store or update the sample annotations to match."
+        )
+
     rep_indices = [sample_to_idx[s] for s in rep_samples]
     n_ref = len(rep_indices)
 
@@ -603,7 +624,7 @@ def phase_local_ancestry_sample_from_zarr(
     chrom: str, ref_zarr_root: str, sample_annot_path: str,
     groups: Optional[list[str]] = None,
     config: Optional[PhasingConfig] = None, hap_index_in_zarr: int = 0,
-) -> Tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray, dict[str, object]]:
     """
     Phase-correct local ancestry haplotypes using Zarr-derived references.
 
@@ -642,6 +663,9 @@ def phase_local_ancestry_sample_from_zarr(
     -------
     hap0_corr, hap1_corr : (L,) np.ndarray of int
         Phase-corrected local ancestry haplotypes.
+    match_stats : dict
+        Diagnostics from :func:`build_reference_haplotypes_from_zarr` about
+        matched and missing loci.
     """
     if config is None:
         config = PhasingConfig()
@@ -893,6 +917,37 @@ def phase_admix_sample_from_zarr_with_index(
 # High-level: phase all samples in a Dask (L, S, A) array
 # ============================================================================
 
+def _phase_one_sample(
+    admix_s_block: DaskArray,
+    sample_idx: int,
+    X_raw: DaskArray | np.ndarray,
+    n_samples: int,
+    positions: np.ndarray,
+    chrom: str,
+    ref_zarr_root: str,
+    sample_annot_path: str,
+    config: PhasingConfig,
+    groups: Optional[list[str]],
+    hap_index_in_zarr: int,
+) -> np.ndarray:
+    """Phase-correct a single sample slice from a Dask array."""
+
+    admix_s_np = admix_s_block.compute()
+    return phase_admix_sample_from_zarr_with_index(
+        admix_sample=admix_s_np,
+        X_raw=X_raw,
+        sample_idx=sample_idx,
+        n_samples=n_samples,
+        positions=positions,
+        chrom=chrom,
+        ref_zarr_root=ref_zarr_root,
+        sample_annot_path=sample_annot_path,
+        config=config,
+        groups=groups,
+        hap_index_in_zarr=hap_index_in_zarr,
+    )
+
+
 def phase_admix_dask_with_index(
     admix: DaskArray,                # (L, S, A) summed counts
     X_raw: DaskArray | np.ndarray,   # (L, n_cols) raw RFMix matrix
@@ -947,19 +1002,21 @@ def phase_admix_dask_with_index(
     delayed_results = []
     for s in range(n_samples):
         admix_s = admix[:, s, :]  # (L, A) dask slice
-
-        @dask.delayed
-        def _phase_one_sample(admix_s_block: DaskArray, sample_idx: int) -> np.ndarray:
-            admix_s_np = admix_s_block.compute()
-            return phase_admix_sample_from_zarr_with_index(
-                admix_sample=admix_s_np, X_raw=X_raw, sample_idx=sample_idx,
-                n_samples=n_samples, positions=positions, chrom=chrom,
+        delayed_results.append(
+            dask.delayed(_phase_one_sample)(
+                admix_s_block=admix_s,
+                sample_idx=s,
+                X_raw=X_raw,
+                n_samples=n_samples,
+                positions=positions,
+                chrom=chrom,
                 ref_zarr_root=ref_zarr_root,
-                sample_annot_path=sample_annot_path, config=config,
-                groups=groups, hap_index_in_zarr=hap_index_in_zarr,
+                sample_annot_path=sample_annot_path,
+                config=config,
+                groups=groups,
+                hap_index_in_zarr=hap_index_in_zarr,
             )
-
-        delayed_results.append(_phase_one_sample(admix_s, s))
+        )
 
     # delayed_results is a list of (L, A) arrays, one per sample
     stacked = dask.delayed(lambda arrs: np.stack(arrs, axis=1))(delayed_results)  # (L, S, A)
