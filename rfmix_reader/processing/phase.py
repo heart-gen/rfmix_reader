@@ -565,6 +565,15 @@ def build_reference_haplotypes_from_zarr(
     ds = xr.open_zarr(zarr_path)
 
     sample_to_idx = {sid: i for i, sid in enumerate(ds["sample_id"].values)}
+    missing_rep_samples = [s for s in rep_samples if s not in sample_to_idx]
+    if missing_rep_samples:
+        missing_fmt = ", ".join(missing_rep_samples)
+        raise ValueError(
+            "Representative samples not found in Zarr store: "
+            f"{missing_fmt}. "
+            "Regenerate the Zarr store or update the sample annotations to match."
+        )
+
     rep_indices = [sample_to_idx[s] for s in rep_samples]
     n_ref = len(rep_indices)
 
