@@ -24,7 +24,6 @@ from typing import List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-import dask
 import dask.array as da
 from dask.array import Array as DaskArray
 import xarray as xr
@@ -925,37 +924,6 @@ def phase_admix_sample_from_zarr_with_index(
 # High-level: phase all samples in a Dask (L, S, A) array
 # ============================================================================
 
-def _phase_one_sample(
-    admix_s_block: DaskArray,
-    sample_idx: int,
-    X_raw: DaskArray | np.ndarray,
-    n_samples: int,
-    positions: np.ndarray,
-    chrom: str,
-    ref_zarr_root: str,
-    sample_annot_path: str,
-    config: PhasingConfig,
-    groups: Optional[list[str]],
-    hap_index_in_zarr: int,
-) -> np.ndarray:
-    """Phase-correct a single sample slice from a Dask array."""
-
-    admix_s_np = admix_s_block.compute()
-    return phase_admix_sample_from_zarr_with_index(
-        admix_sample=admix_s_np,
-        X_raw=X_raw,
-        sample_idx=sample_idx,
-        n_samples=n_samples,
-        positions=positions,
-        chrom=chrom,
-        ref_zarr_root=ref_zarr_root,
-        sample_annot_path=sample_annot_path,
-        config=config,
-        groups=groups,
-        hap_index_in_zarr=hap_index_in_zarr,
-    )
-
-
 def phase_admix_dask_with_index(
     admix: DaskArray,                # (L, S, A) summed counts
     X_raw: DaskArray | np.ndarray,   # (L, n_cols) raw RFMix matrix
@@ -967,11 +935,10 @@ def phase_admix_dask_with_index(
     """
     Phase-correct all samples in a ``(L, S, A)`` admix Dask array.
 
-    This function builds a Dask graph with one delayed phasing task per sample.
-    Each task:
-
-    1. Materializes the sample's admixture vector ``admix[:, s, :]``.
-    2. Calls :func:`phase_admix_sample_from_zarr_with_index`.
+    This function rechunks the input so each Dask block contains one sample
+    and applies :func:`phase_admix_sample_from_zarr_with_index` via
+    :func:`dask.array.map_blocks`, propagating the sample index through
+    ``block_info``.
 
     Parameters
     ----------
@@ -1006,15 +973,20 @@ def phase_admix_dask_with_index(
 
     n_loci, n_samples, n_anc = admix.shape
 
-    # Create one delayed phasing task per sample
-    delayed_results = []
-    for s in range(n_samples):
-        admix_s = admix[:, s, :]  # (L, A) dask slice
-        delayed_results.append(
-            dask.delayed(_phase_one_sample)(
-                admix_s_block=admix_s,
-                sample_idx=s,
+    # Ensure each block spans a single sample so block_info contains the sample index.
+    admix_single_sample = admix.rechunk((n_loci, 1, n_anc))
+
+    def _phase_block(admix_block: np.ndarray, block_info=None) -> np.ndarray:
+        block_location = block_info[0]["array-location"]
+        sample_slice = block_location[1]
+        sample_indices = range(sample_slice.start, sample_slice.stop)
+
+        phased_block = np.empty_like(admix_block, dtype=np.int8)
+        for offset, sample_idx in enumerate(sample_indices):
+            phased_block[:, offset, :] = phase_admix_sample_from_zarr_with_index(
+                admix_sample=admix_block[:, offset, :],
                 X_raw=X_raw,
+                sample_idx=sample_idx,
                 n_samples=n_samples,
                 positions=positions,
                 chrom=chrom,
@@ -1024,12 +996,14 @@ def phase_admix_dask_with_index(
                 groups=groups,
                 hap_index_in_zarr=hap_index_in_zarr,
             )
-        )
 
-    # delayed_results is a list of (L, A) arrays, one per sample
-    stacked = dask.delayed(lambda arrs: np.stack(arrs, axis=1))(delayed_results)  # (L, S, A)
+        return phased_block
 
-    # Build a Dask array from the delayed stacked result
-    admix_corr = da.from_delayed(stacked, shape=(n_loci, n_samples, n_anc), dtype=np.int8)
+    phased = da.map_blocks(
+        _phase_block,
+        admix_single_sample,
+        dtype=np.int8,
+        chunks=admix_single_sample.chunks,
+    )
 
-    return admix_corr
+    return phased
