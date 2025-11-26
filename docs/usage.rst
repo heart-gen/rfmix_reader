@@ -141,6 +141,15 @@ To phase-correct local ancestry before stacking across chromosomes, pass
        phase_sample_annot_path="/path/to/sample_annot.tsv",
    )
 
+When ``phase=True``, pre-convert the reference VCF/BCF files into Zarr
+stores with the ``prepare-reference`` CLI to avoid repeated on-the-fly
+decoding. The conversion step is relatively slow but only needs to be
+run once (like ``create-binaries``):
+
+.. code:: shell
+
+   prepare-reference ./reference_zarr/ /data/chr*.vcf.gz
+
 Step-by-step phasing tutorial
 -----------------------------
 
