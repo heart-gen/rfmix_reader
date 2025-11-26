@@ -13,13 +13,20 @@ This module provides a lightweight, NumPy-based implementation that:
     2. Compares haplotypes to two references in sliding windows.
     3. Builds a "phase track" of where to flip suffixes.
     4. Applies tail flips to obtain phase-corrected haplotypes.
+
+Reference haplotypes are read from *VCF-Zarr* stores produced by
+`vcf2zarr` (bio2zarr) or `sgkit.io.vcf.vcf_reader.vcf_to_zarr`, which
+follow the VCF-Zarr spec:
+
+    - coords:  variant_position, sample_id
+    - data:    call_genotype (variants, samples, ploidy)
 """
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -29,10 +36,7 @@ from dask.array import Array as DaskArray
 import xarray as xr
 
 ArrayLike = np.ndarray
-
-# ============================================================================
-# Configuration
-# ============================================================================
+logger = logging.getLogger(__name__)
 
 @dataclass
 class PhasingConfig:
@@ -59,12 +63,9 @@ class PhasingConfig:
     max_mismatch_frac: float = 0.5
     verbose: bool = False
 
-# ============================================================================
-# Heterozygous region detection
-# ============================================================================
 
 def find_heterozygous_blocks(
-    hap0: ArrayLike, hap1: ArrayLike, min_block_len: int = 1,
+    hap0: ArrayLike, hap1: ArrayLike, min_block_len: int = 1
 ) -> List[slice]:
     """
     Find contiguous blocks where ``hap0 != hap1`` (heterozygous ancestry).
@@ -97,7 +98,6 @@ def find_heterozygous_blocks(
     if not np.any(het):
         return []
 
-    # boundaries where heterozygous mask changes
     boundaries = np.concatenate(
         ([0], np.where(het[:-1] != het[1:])[0] + 1, [len(het)])
     )
@@ -110,9 +110,6 @@ def find_heterozygous_blocks(
 
     return blocks
 
-# ============================================================================
-# Windowing and reference assignment
-# ============================================================================
 
 def window_slices(n: int, window_size: int) -> List[slice]:
     """
@@ -138,17 +135,13 @@ def window_slices(n: int, window_size: int) -> List[slice]:
 
 
 def assign_reference_per_window(
-    hap: ArrayLike, refs: ArrayLike, window_size: int,
-    max_mismatch_frac: float,
+    hap: ArrayLike, refs: ArrayLike, window_size: int, max_mismatch_frac: float,
 ) -> np.ndarray:
     """
     For each window, decide which reference ``hap`` matches.
 
-    This is analogous in spirit to gnomix's ``get_ref_map``, which tracks which
-    of two reference haplotypes a given haplotype is following.
-
-    The references can be allele-coded or ancestry-coded; only the pattern of
-    matches/mismatches is used.
+    Conceptually similar to gnomix's ``get_ref_map`` – we track which of the
+    reference haplotypes a given haplotype is following.
 
     Parameters
     ----------
@@ -187,7 +180,7 @@ def assign_reference_per_window(
     for w_idx, sl in enumerate(wslices):
         h_win = hap[sl]
         r_win = refs[:, sl]
-        mask_valid = (r_win >= 0)
+        mask_valid = r_win >= 0
 
         valid_counts = mask_valid.sum(axis=1)
         mismatch_counts = np.sum((r_win != h_win) & mask_valid, axis=1)
@@ -203,30 +196,21 @@ def assign_reference_per_window(
         best_r = int(np.argmin(mismatches))
         best_mism = mismatches[best_r]
 
-        # If no reference had any valid sites or all mismatch too much
         if (not np.isfinite(best_mism)) or (best_mism >= max_mismatch_frac):
             ref_track[w_idx] = 0
         else:
-            # 1-based index for compatibility with build_phase_track_from_ref
-            ref_track[w_idx] = best_r + 1
+            ref_track[w_idx] = best_r + 1  # 1-based
 
     return ref_track
 
-# ============================================================================
-# Phase track and tail flipping
-# ============================================================================
 
 def build_phase_track_from_ref(ref_track: np.ndarray) -> np.ndarray:
     """
     Build a window-level "phase flip track" from reference assignments.
 
-    The idea is: if the reference assignment for a haplotype changes
-    frequently (e.g. 1 -> 2 or 2 -> 1), that indicates a possible phase flip
-    between the two haplotypes.
-
-    We construct a cumulative 0/1 track where each change in reference
-    assignment toggles the phase. Ambiguous windows (label 0) simply inherit
-    the current phase state.
+    When the reference assignment changes (1 -> 2 or 2 -> 1), that signals a
+    possible phase flip. We build a cumulative 0/1 track where each change
+    toggles the phase.
 
     Parameters
     ----------
@@ -251,10 +235,8 @@ def build_phase_track_from_ref(ref_track: np.ndarray) -> np.ndarray:
         ref = int(ref_track[w])
         if ref in (1, 2):
             if last_ref == 0:
-                # first informative window
                 last_ref = ref
             elif ref != last_ref:
-                # reference changed -> toggle phase downstream
                 current_phase ^= 1
                 last_ref = ref
         phase_track[w] = current_phase
@@ -265,11 +247,8 @@ def build_phase_track_from_ref(ref_track: np.ndarray) -> np.ndarray:
 def apply_phase_track(
     hap0: ArrayLike, hap1: ArrayLike, phase_track: np.ndarray, window_size: int,
 ) -> Tuple[ArrayLike, ArrayLike]:
-    """Apply tail flips between ``hap0`` and ``hap1`` according to phase_track.
-
-    This is analogous to gnomix's ``correct_phase_error``, which uses a
-    0/1 "track" over windows to decide where to swap suffixes between the two
-    haplotypes.
+    """
+    Apply tail flips between ``hap0`` and ``hap1`` according to phase_track.
 
     Parameters
     ----------
@@ -290,14 +269,11 @@ def apply_phase_track(
     hap1 = np.asarray(hap1).copy()
     phase_track = np.asarray(phase_track)
 
-    # Identify window boundaries where phase state changes
-    change_points = np.where(np.diff(phase_track) != 0)[0] + 1  # window indices
+    change_points = np.where(np.diff(phase_track) != 0)[0] + 1
 
     if change_points.size:
-        # Convert window indices to SNP indices (start of the window)
         flip_positions = change_points * window_size
 
-        # Build a boolean flip mask using cumulative XOR of change points
         flip_mask = np.zeros(hap0.shape[0] + 1, dtype=bool)
         flip_mask[flip_positions] ^= True
         flip_mask = np.logical_xor.accumulate(flip_mask)[:-1]
@@ -308,9 +284,6 @@ def apply_phase_track(
 
     return hap0, hap1
 
-# ============================================================================
-# High-level orchestrator for one sample (local ancestry arrays)
-# ============================================================================
 
 def phase_local_ancestry_sample(
     hap0: ArrayLike, hap1: ArrayLike, refs: ArrayLike,
@@ -319,23 +292,19 @@ def phase_local_ancestry_sample(
     """
     Perform gnomix-style phasing corrections for a single individual.
 
-    The steps are:
-
+    Steps
+    -----
     1. Identify heterozygous blocks where hap0 != hap1.
-    2. For each block, compare hap0 against all R references in sliding
-       windows using :func:`assign_reference_per_window_multi`.
-    3. Build a phase track using :func:`build_phase_track_from_ref`.
-    4. Apply tail flips within each block using :func:`apply_phase_track`.
+    2. For each block, compare hap0 against references in windows.
+    3. Build a phase track from reference changes.
+    4. Apply tail flips within each block.
 
     Parameters
     ----------
     hap0, hap1 : (L,) array_like of int
-        Two haplotypes for the individual (e.g. maternal/paternal) with
-        ancestry labels at each locus.
+        Two haplotypes for the individual with ancestry labels at each locus.
     refs : (R, L) array_like of int
-        Reference haplotypes. These might correspond to different ancestry
-        groups (or multiple samples per group). Only their match/mismatch
-        patterns are used.
+        Reference haplotypes.
     config : PhasingConfig, optional
         Configuration for window size, thresholds, etc.
 
@@ -355,7 +324,6 @@ def phase_local_ancestry_sample(
         raise ValueError("refs must be 2D with shape (n_ref, L).")
 
     n_ref, L = refs.shape
-
     if hap0.shape != hap1.shape or hap0.shape[0] != L:
         raise ValueError("hap0, hap1, and refs must all have length L.")
 
@@ -367,8 +335,10 @@ def phase_local_ancestry_sample(
     )
 
     if config.verbose:
-        print(f"[phase_local_ancestry_sample] "
-              f"{len(het_blocks)} heterozygous blocks")
+        logger.info(
+            "[phase_local_ancestry_sample] %d heterozygous blocks",
+            len(het_blocks),
+        )
 
     hap0_corr = hap0.copy()
     hap1_corr = hap1.copy()
@@ -377,27 +347,30 @@ def phase_local_ancestry_sample(
         start, end = block.start, block.stop
 
         if config.verbose:
-            print(f"  - block {block_idx}: {start}..{end} (len={end-start})")
+            logger.info(
+                "  - block %d: %d..%d (len=%d)",
+                block_idx,
+                start,
+                end,
+                end - start,
+            )
 
-        # Extract block
         h0_blk = hap0_corr[start:end]
         h1_blk = hap1_corr[start:end]
-        refs_blk = refs[:, start:end]  # (R, block_len)
+        refs_blk = refs[:, start:end]
 
-        # For simplicity, build reference assignment based on one haplotype
         ref_track = assign_reference_per_window(
-            hap=h0_blk, refs=refs_blk,
+            hap=h0_blk,
+            refs=refs_blk,
             window_size=config.window_size,
             max_mismatch_frac=config.max_mismatch_frac,
         )
 
         phase_track = build_phase_track_from_ref(ref_track)
 
-        # Apply flips inside this block only
         local_L = end - start
         local_W = int(np.ceil(local_L / config.window_size))
 
-        # Ensure phase_track has the correct number of windows
         if phase_track.shape[0] != local_W:
             if phase_track.shape[0] > local_W:
                 phase_track = phase_track[:local_W]
@@ -418,9 +391,6 @@ def phase_local_ancestry_sample(
 
     return hap0_corr, hap1_corr
 
-# ============================================================================
-# Annotation utilities and building reference haplotypes from Zarr
-# ============================================================================
 
 def load_sample_annotations(
     annot_path: str, sep: str = r"\s+", col_sample: str = "sample_id",
@@ -429,25 +399,20 @@ def load_sample_annotations(
     """
     Load sample annotation file mapping sample_id -> group (e.g., ancestry).
 
-    Expected format by default: two columns (no header)::
+    Expected default format: two columns (no header)::
 
         sample_id   group
 
     Parameters
     ----------
     annot_path : str
-        Path to text file with sample annotations.
-    sep : str, default r"\s+"
-        Field separator pattern (passed to :func:`pandas.read_csv`).
-    col_sample : str, default "sample_id"
-        Column name to assign to sample IDs.
-    col_group : str, default "group"
-        Column name to assign to group labels (e.g., EUR/AFR/etc.).
+    sep : str
+    col_sample : str
+    col_group : str
 
     Returns
     -------
     annot : pandas.DataFrame
-        DataFrame with columns [col_sample, col_group].
     """
     annot = pd.read_csv(
         annot_path, sep=sep, header=None,
@@ -458,12 +423,15 @@ def load_sample_annotations(
 
 
 def _resolve_chrom_zarr_store(zarr_root: str, chrom: str) -> Path:
-    """Find the Zarr store for a chromosome or raise with guidance.
-
-    This first respects explicit ``*.zarr`` paths and otherwise searches for
-    ``<chrom>.zarr`` / ``chr<chrom>.zarr`` within ``zarr_root``.
     """
+    Find the VCF-Zarr store for a chromosome or raise with guidance.
 
+    Rules
+    -----
+    - If ``zarr_root`` is a ``*.zarr`` path and exists, use it.
+    - Otherwise search within ``zarr_root`` for:
+        <chrom>.zarr, chr<chrom>.zarr, <chrom>, chr<chrom>
+    """
     root = Path(zarr_root)
 
     if root.suffix == ".zarr":
@@ -497,56 +465,48 @@ def build_reference_haplotypes_from_zarr(
     groups: Optional[list[str]] = None, hap_index_in_zarr: int = 0,
     col_sample: str = "sample_id", col_group: str = "group",
     missing_loci_threshold: float = 0.05, raise_on_missing: bool = False,
-) -> Tuple[np.ndarray, list[str], dict[str, object]]:
+) -> Tuple[np.ndarray, list[str], Dict[str, object]]:
     """
-    Build reference haplotypes directly from a chromosome-specific Zarr store.
+    Build reference haplotypes directly from a chromosome-specific VCF-Zarr store.
 
     Parameters
     ----------
     zarr_root : str
         Path to a ``*.zarr`` store for the chromosome or a directory containing
-        per-chromosome Zarr stores (e.g., outputs from
-        :func:`convert_vcfs_to_zarr`).
+        per-chromosome Zarr stores.
     annot_path : str
         Path to sample annotation file (see :func:`load_sample_annotations`).
     chrom : str
         Chromosome name to extract (e.g., "1", "chr1").
     positions : array_like of int, shape (L,)
-        Positions (1-based bp) for which we want reference alleles.
+        1-based bp positions for which we want reference alleles.
     groups : list of str, optional
-        Group labels to use. If None, uses all unique groups from the
-        annotation file.
+        Group labels to use. If None, uses all unique groups.
     hap_index_in_zarr : int, default 0
-        Which haploid allele to take (0 or 1) from the genotype ploidy axis.
+        Which haploid allele to take (0 or 1) from the ploidy axis.
     col_sample : str, default "sample_id"
-        Column name for sample IDs in the annotation file.
     col_group : str, default "group"
-        Column name for group labels in the annotation file.
     missing_loci_threshold : float, default 0.05
-        Fraction of requested loci allowed to be missing from the reference
-        store before emitting a warning or raising an error.
+        Max allowed fraction of requested loci that may be missing.
     raise_on_missing : bool, default False
-        If True, raise a ValueError when ``missing_loci_threshold`` is
-        exceeded; otherwise a warning is logged.
+        If True, raise when missing fraction exceeds threshold; otherwise log.
 
     Returns
     -------
     refs : (R, L) np.ndarray of int8
         Haploid reference haplotypes as allele codes (0, 1, 2, or -1 for
         missing). Each row corresponds to one group in ``group_labels``.
-    group_labels : list of str
-        Group labels (in the same order as the first axis of ``refs``).
+    group_labels : list[str]
+        Group labels (same order as refs axis 0).
     match_stats : dict
-        Dictionary with keys ``total_requested``, ``matched_count``,
-        ``matched_fraction``, ``missing_count``, ``missing_fraction`` and
-        ``missing_loci`` providing diagnostics for downstream validation.
+        Keys: total_requested, matched_count, matched_fraction,
+              missing_count, missing_fraction, missing_loci
     """
     if hasattr(positions, "to_numpy"):
         positions = positions.to_numpy()
     positions = np.asarray(positions, dtype=np.int64)
     L = positions.shape[0]
 
-    # Load annotations and choose representative samples
     annot = load_sample_annotations(
         annot_path, col_sample=col_sample, col_group=col_group
     )
@@ -555,10 +515,11 @@ def build_reference_haplotypes_from_zarr(
         group_labels = sorted(annot[col_group].unique().tolist())
     else:
         group_labels = list(groups)
-        missing = set(group_labels) - set(annot[col_group].unique())
-        if missing:
+        missing_groups = set(group_labels) - set(annot[col_group].unique())
+        if missing_groups:
             raise ValueError(
-                f"Requested groups not found in annotation: {sorted(missing)}"
+                f"Requested groups not found in annotation: "
+                f"{sorted(missing_groups)}"
             )
 
     rep_samples: list[str] = []
@@ -571,10 +532,19 @@ def build_reference_haplotypes_from_zarr(
     zarr_path = _resolve_chrom_zarr_store(zarr_root, chrom)
     ds = xr.open_zarr(zarr_path)
 
-    sample_to_idx = {sid: i for i, sid in enumerate(ds["sample_id"].values)}
-    missing_rep_samples = [s for s in rep_samples if s not in sample_to_idx]
-    if missing_rep_samples:
-        missing_fmt = ", ".join(missing_rep_samples)
+    # Dimension names in VCF-Zarr: variants, samples, ploidy
+    # Coordinates: sample_id, variant_position
+    if "sample_id" not in ds:
+        raise KeyError(
+            "Zarr store missing 'sample_id' coordinate. "
+            "Ensure it was written with vcf2zarr / vcf_to_zarr."
+        )
+    sample_to_idx = {
+        sid: i for i, sid in enumerate(ds["sample_id"].values.astype(str))
+    }
+    missing_rep = [s for s in rep_samples if s not in sample_to_idx]
+    if missing_rep:
+        missing_fmt = ", ".join(missing_rep)
         raise ValueError(
             "Representative samples not found in Zarr store: "
             f"{missing_fmt}. "
@@ -584,7 +554,17 @@ def build_reference_haplotypes_from_zarr(
     rep_indices = [sample_to_idx[s] for s in rep_samples]
     n_ref = len(rep_indices)
 
-    variant_pos = np.asarray(ds["variant_position"].values)
+    # Positions: prefer 'variant_position' (VCF-Zarr spec).
+    if "variant_position" in ds:
+        variant_pos = np.asarray(ds["variant_position"].values, dtype=np.int64)
+    elif "variants/POS" in ds:
+        variant_pos = np.asarray(ds["variants/POS"].values, dtype=np.int64)
+    else:
+        raise KeyError(
+            "Zarr store missing 'variant_position' (or 'variants/POS'). "
+            "This does not look like a VCF-Zarr store."
+        )
+
     pos_to_zarr_idx = {int(p): i for i, p in enumerate(variant_pos)}
 
     sort_idx = np.argsort(positions)
@@ -595,14 +575,52 @@ def build_reference_haplotypes_from_zarr(
     matched_zarr_indices: list[int] = []
     matched_ref_positions: list[int] = []
     for i, pos in enumerate(positions_sorted):
-        zarr_idx = pos_to_zarr_idx.get(int(pos))
-        if zarr_idx is not None:
-            matched_zarr_indices.append(zarr_idx)
+        zidx = pos_to_zarr_idx.get(int(pos))
+        if zidx is not None:
+            matched_zarr_indices.append(zidx)
             matched_ref_positions.append(i)
 
+    matched_count = len(matched_zarr_indices)
+    missing_count = L - matched_count
+    matched_fraction = matched_count / L if L > 0 else 0.0
+    missing_fraction = missing_count / L if L > 0 else 0.0
+
+    match_stats: Dict[str, object] = {
+        "total_requested": int(L),
+        "matched_count": int(matched_count),
+        "matched_fraction": float(matched_fraction),
+        "missing_count": int(missing_count),
+        "missing_fraction": float(missing_fraction),
+        "missing_loci": positions_sorted[
+            [i for i in range(L) if i not in set(matched_ref_positions)]
+        ]
+        if missing_count > 0
+        else np.array([], dtype=np.int64),
+    }
+
+    if missing_fraction > missing_loci_threshold:
+        msg = (
+            f"Reference Zarr store for chrom={chrom} is missing "
+            f"{missing_fraction:.1%} of requested loci "
+            f"({missing_count}/{L})."
+        )
+        if raise_on_missing:
+            raise ValueError(msg)
+        logger.warning(msg)
+
     if matched_zarr_indices:
-        matched_zarr_indices_arr = np.asarray(matched_zarr_indices, dtype=np.int64)
-        matched_ref_positions_arr = np.asarray(matched_ref_positions, dtype=np.int64)
+        matched_zarr_indices_arr = np.asarray(
+            matched_zarr_indices, dtype=np.int64
+        )
+        matched_ref_positions_arr = np.asarray(
+            matched_ref_positions, dtype=np.int64
+        )
+
+        if "call_genotype" not in ds:
+            raise KeyError(
+                "Zarr store missing 'call_genotype'. "
+                "Ensure it was written following the VCF-Zarr spec."
+            )
 
         geno = ds["call_genotype"].isel(
             variants=matched_zarr_indices_arr,
@@ -620,59 +638,41 @@ def build_reference_haplotypes_from_zarr(
     refs = np.empty_like(refs_sorted)
     refs[:, sort_idx] = refs_sorted
 
-    return refs, group_labels
+    return refs, group_labels, match_stats
 
-# ============================================================================
-# Convenience wrapper: phase using Zarr-derived references
-# ============================================================================
 
 def phase_local_ancestry_sample_from_zarr(
-    hap0: np.ndarray, hap1: np.ndarray, positions: np.ndarray,
-    chrom: str, ref_zarr_root: str, sample_annot_path: str,
-    groups: Optional[list[str]] = None,
+    hap0: np.ndarray, hap1: np.ndarray, positions: np.ndarray, chrom: str,
+    ref_zarr_root: str, sample_annot_path: str, groups: Optional[list[str]] = None,
     config: Optional[PhasingConfig] = None, hap_index_in_zarr: int = 0,
-) -> Tuple[np.ndarray, np.ndarray, dict[str, object]]:
+) -> Tuple[np.ndarray, np.ndarray, Dict[str, object]]:
     """
-    Phase-correct local ancestry haplotypes using Zarr-derived references.
+    Phase-correct local ancestry haplotypes using VCF-Zarr-derived references.
 
-    This is a convenience wrapper that:
-
-    1. Loads sample annotations to choose reference samples (ref0, ref1).
-    2. Builds haploid reference haplotypes for those samples at the
-       positions of interest from a chromosome-specific Zarr store.
-    3. Calls :func:`phase_local_ancestry_sample` with these references to
-       perform gnomix-style tail-flip corrections.
+    Steps
+    -----
+    1. Load sample annotations and choose representative samples per group.
+    2. Build haploid reference haplotypes from a chromosome-specific VCF-Zarr
+       store at the target positions.
+    3. Run gnomix-style tail-flip phasing.
 
     Parameters
     ----------
     hap0, hap1 : (L,) array_like of int
-        Local ancestry haplotypes for the individual (e.g. 0/1/2 for
-        ancestry labels) on a given chromosome.
     positions : (L,) array_like of int
-        1-based bp positions corresponding to hap0/hap1 entries.
     chrom : str
-        Chromosome name used to resolve the reference Zarr store (e.g.,
-        "1" or "chr1").
     ref_zarr_root : str
-        Path to the chromosome-specific Zarr store or a directory containing
-        per-chromosome Zarr stores (from ``convert_vcf_to_zarr`` or the CLI).
     sample_annot_path : str
-        Path to sample annotation file (sample_id + group label).
     groups : list of str, optional
-        Group labels to use. If None, uses all unique groups from the
-        annotation file.
     config : PhasingConfig, optional
-        Configuration for phasing (window size, thresholds, verbosity).
     hap_index_in_zarr : int, default 0
-        Which haploid allele to take from the reference genotypes.
 
     Returns
     -------
     hap0_corr, hap1_corr : (L,) np.ndarray of int
         Phase-corrected local ancestry haplotypes.
     match_stats : dict
-        Diagnostics from :func:`build_reference_haplotypes_from_zarr` about
-        matched and missing loci.
+        Diagnostics about matched/missing loci in the reference.
     """
     if config is None:
         config = PhasingConfig()
@@ -684,49 +684,40 @@ def phase_local_ancestry_sample_from_zarr(
     if hap0.shape != hap1.shape or hap0.shape[0] != positions.shape[0]:
         raise ValueError("hap0, hap1, and positions must all have length L.")
 
-    refs, groups = build_reference_haplotypes_from_zarr(
-        zarr_root=ref_zarr_root, annot_path=sample_annot_path,
-        chrom=chrom, positions=positions, groups=groups,
+    refs, group_labels, match_stats = build_reference_haplotypes_from_zarr(
+        zarr_root=ref_zarr_root,
+        annot_path=sample_annot_path,
+        chrom=chrom,
+        positions=positions,
+        groups=groups,
         hap_index_in_zarr=hap_index_in_zarr,
     )
 
+    if config.verbose:
+        logger.info(
+            "[phase_local_ancestry_sample_from_zarr] Using groups: %s",
+            ", ".join(group_labels),
+        )
+
     hap0_corr, hap1_corr = phase_local_ancestry_sample(
-        hap0=hap0, hap1=hap1, refs=refs, config=config,
+        hap0=hap0,
+        hap1=hap1,
+        refs=refs,
+        config=config,
     )
 
-    return hap0_corr, hap1_corr
+    return hap0_corr, hap1_corr, match_stats
 
-# ============================================================================
-# Metrics: switch error counting
-# ============================================================================
 
 def count_switch_errors(
-    M_pred: ArrayLike, P_pred: ArrayLike, M_true: ArrayLike,
+    M_pred: ArrayLike, P_pred: ArrayLike, M_true: ArrayLike, 
     P_true: ArrayLike,
 ) -> int:
     """
     Count minimal number of phase switches between predicted and truth.
 
     Counts the minimal number of suffix flips needed to turn
-    ``(M_pred, P_pred)`` into ``(M_true, P_true)``. This is functionally
-    similar to gnomix's ``find_switches``.
-
-    Parameters
-    ----------
-    M_pred, P_pred : (L,) array_like of int
-        Predicted ancestry haplotypes.
-    M_true, P_true : (L,) array_like of int
-        Ground-truth ancestry haplotypes.
-
-    Returns
-    -------
-    n_switches : int
-        Number of phase switch points.
-
-    Raises
-    ------
-    RuntimeError
-        If suffix swapping cannot transform the prediction into the truth.
+    ``(M_pred, P_pred)`` into ``(M_true, P_true)``.
     """
     M_pred = np.asarray(M_pred).copy()
     P_pred = np.asarray(P_pred).copy()
@@ -740,7 +731,6 @@ def count_switch_errors(
     L = M_pred.shape[0]
     for i in range(L):
         if M_pred[i] != M_true[i]:
-            # swap tails from i onward
             M_tmp = M_pred[i:].copy()
             M_pred[i:] = P_pred[i:]
             P_pred[i:] = M_tmp
@@ -751,17 +741,12 @@ def count_switch_errors(
 
     return n_switches
 
-# ============================================================================
-# RFMix utilities: reconstructing haps & recombining counts
-# ============================================================================
 
 def build_hap_labels_from_rfmix(
-    X_raw: DaskArray | np.ndarray, sample_idx: int, n_anc: int,
-    n_samples: int,
+    X_raw: DaskArray | np.ndarray, sample_idx: int, n_anc: int, n_samples: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Reconstruct hap0/hap1 ancestry labels for a sample directly from the
-    raw RFMix fb matrix.
+    Reconstruct hap0/hap1 ancestry labels for a sample from the raw RFMix fb matrix.
 
     Parameters
     ----------
@@ -769,11 +754,8 @@ def build_hap_labels_from_rfmix(
         Original RFMix matrix before summing haps. Columns correspond to
         (ancestry, hap, sample) combinations.
     sample_idx : int
-        Index of the sample to reconstruct.
     n_anc : int
-        Number of ancestries.
     n_samples : int
-        Number of total samples.
 
     Returns
     -------
@@ -785,7 +767,6 @@ def build_hap_labels_from_rfmix(
     cols_h0 = base + np.arange(n_anc) * 2
     cols_h1 = base + np.arange(n_anc) * 2 + 1
 
-    # Extract only the relevant columns.
     if isinstance(X_raw, da.Array):
         H0 = X_raw[:, cols_h0].compute()
         H1 = X_raw[:, cols_h1].compute()
@@ -793,11 +774,9 @@ def build_hap_labels_from_rfmix(
         H0 = np.asarray(X_raw)[:, cols_h0]
         H1 = np.asarray(X_raw)[:, cols_h1]
 
-    # Ancestry label per hap = argmax over ancestries
     hap0_labels = np.argmax(H0, axis=1).astype(np.int16)
     hap1_labels = np.argmax(H1, axis=1).astype(np.int16)
 
-    # Mark loci that are all-zero (no assignment) as -1
     hap0_labels[H0.sum(axis=1) == 0] = -1
     hap1_labels[H1.sum(axis=1) == 0] = -1
 
@@ -813,15 +792,11 @@ def combine_haps_to_counts(
     Parameters
     ----------
     hap0, hap1 : (L,) array_like of int
-        Per-locus ancestry labels for each haplotype (0..n_anc-1 or -1).
     n_anc : int
-        Number of ancestry classes.
 
     Returns
     -------
     out : (L, n_anc) np.ndarray of int8
-        Summed counts for each ancestry (0, 1, or 2 per locus). Missing
-        labels (``-1``) are ignored.
     """
     hap0 = np.asarray(hap0)
     hap1 = np.asarray(hap1)
@@ -842,54 +817,23 @@ def combine_haps_to_counts(
 
     return out
 
-# ============================================================================
-# High-level: phase a single admixed sample using RFMix + Zarr
-# ============================================================================
 
 def phase_admix_sample_from_zarr_with_index(
-    admix_sample: np.ndarray,           # (L, A) counts, mostly for shape / A
-    X_raw: DaskArray | np.ndarray,      # (L, n_cols) raw RFMix matrix
-    sample_idx: int, n_samples: int,
-    positions: np.ndarray,              # (L,) positions
+    admix_sample: np.ndarray,  # (L, A) counts
+    X_raw: DaskArray | np.ndarray,  # (L, n_cols) raw RFMix matrix
+    sample_idx: int, n_samples: int, positions: np.ndarray,  # (L,)
     chrom: str, ref_zarr_root: str, sample_annot_path: str,
     config: PhasingConfig, groups: Optional[list[str]] = None,
     hap_index_in_zarr: int = 0,
 ) -> np.ndarray:
     """
-    Phase-correct local ancestry for one sample using RFMix + Zarr references.
+    Phase-correct local ancestry for one sample using RFMix + VCF-Zarr references.
 
     Steps
     -----
     1. Use ``X_raw`` to build hap0/hap1 ancestry labels.
     2. Run gnomix-style phasing via :func:`phase_local_ancestry_sample_from_zarr`.
     3. Recombine corrected hap0/hap1 into 0/1/2 counts.
-
-    Parameters
-    ----------
-    admix_sample : (L, A) np.ndarray of int
-        Summed local ancestry (0/1/2) for this sample; used for L and A.
-    X_raw : (L, n_cols) dask.array or np.ndarray
-        Original RFMix hap-by-ancestry matrix.
-    sample_idx : int
-        Sample index (0..n_samples-1).
-    n_samples : int
-        Total number of samples.
-    positions : (L,) array_like of int
-        1-based genomic positions.
-    chrom : str
-        Chromosome name.
-    ref_zarr_root : str
-        Path to the reference Zarr store for this chromosome or a directory
-        containing per-chromosome Zarr stores.
-    sample_annot_path : str
-        Path to sample annotation file (sample_id + group label).
-    config : PhasingConfig
-        Phasing configuration.
-    groups : list of str, optional
-        Group labels to use. If None, uses all unique groups from the
-        annotation file.
-    hap_index_in_zarr : int, default 0
-        Which haploid allele to take from the reference store (0 or 1).
 
     Returns
     -------
@@ -901,7 +845,6 @@ def phase_admix_sample_from_zarr_with_index(
 
     L, A = admix_sample.shape
 
-    # Reconstruct hap0/hap1 ancestry labels from raw RFMix output
     hap0, hap1 = build_hap_labels_from_rfmix(
         X_raw=X_raw, sample_idx=sample_idx, n_anc=A, n_samples=n_samples
     )
@@ -909,25 +852,26 @@ def phase_admix_sample_from_zarr_with_index(
     if hap0.shape[0] != L:
         raise ValueError("Length of hap0/hap1 does not match admix_sample.")
 
-    # Gnomix-style phasing using reference Zarr store
-    hap0_corr, hap1_corr = phase_local_ancestry_sample_from_zarr(
-        hap0=hap0, hap1=hap1, positions=positions, chrom=chrom,
-        ref_zarr_root=ref_zarr_root, sample_annot_path=sample_annot_path,
-        groups=groups, config=config, hap_index_in_zarr=hap_index_in_zarr,
+    hap0_corr, hap1_corr, _match_stats = phase_local_ancestry_sample_from_zarr(
+        hap0=hap0,
+        hap1=hap1,
+        positions=positions,
+        chrom=chrom,
+        ref_zarr_root=ref_zarr_root,
+        sample_annot_path=sample_annot_path,
+        groups=groups,
+        config=config,
+        hap_index_in_zarr=hap_index_in_zarr,
     )
 
-    # Recombine corrected haplotypes to summed counts
     admix_corr = combine_haps_to_counts(hap0_corr, hap1_corr, n_anc=A)
     return admix_corr
 
-# ============================================================================
-# High-level: phase all samples in a Dask (L, S, A) array
-# ============================================================================
 
 def phase_admix_dask_with_index(
-    admix: DaskArray,                # (L, S, A) summed counts
-    X_raw: DaskArray | np.ndarray,   # (L, n_cols) raw RFMix matrix
-    positions: np.ndarray,           # (L,)
+    admix: DaskArray,  # (L, S, A) summed counts
+    X_raw: DaskArray | np.ndarray,  # (L, n_cols) raw RFMix matrix
+    positions: np.ndarray,  # (L,)
     chrom: str, ref_zarr_root: str, sample_annot_path: str,
     config: PhasingConfig, groups: Optional[list[str]] = None,
     hap_index_in_zarr: int = 0,
@@ -935,33 +879,8 @@ def phase_admix_dask_with_index(
     """
     Phase-correct all samples in a ``(L, S, A)`` admix Dask array.
 
-    This function rechunks the input so each Dask block contains one sample
-    and applies :func:`phase_admix_sample_from_zarr_with_index` via
-    :func:`dask.array.map_blocks`, propagating the sample index through
-    ``block_info``.
-
-    Parameters
-    ----------
-    admix : (L, S, A) dask.array.Array
-        Summed local ancestry counts (0,1,2) for all samples.
-    X_raw : (L, n_cols) dask.array.Array or np.ndarray
-        Original RFMix matrix.
-    positions : (L,) array_like of int
-        Genomic positions.
-    chrom : str
-        Chromosome name.
-    ref_zarr_root : str
-        Path to the reference Zarr store for this chromosome or a directory
-        containing per-chromosome Zarr stores.
-    sample_annot_path : str
-        Path to sample annotation file (sample_id + group label).
-    config : PhasingConfig
-        Phasing configuration.
-    groups : list of str, optional
-        Group labels to use. If None, uses all unique groups from the
-        annotation file.
-    hap_index_in_zarr : int, default 0
-        Which haploid allele to take from the reference store (0 or 1).
+    Rechunks so each block covers one sample, then applies
+    :func:`phase_admix_sample_from_zarr_with_index` via ``map_blocks``.
 
     Returns
     -------
@@ -973,8 +892,9 @@ def phase_admix_dask_with_index(
 
     n_loci, n_samples, n_anc = admix.shape
 
-    # Ensure each block spans a single sample so block_info contains the sample index.
     admix_single_sample = admix.rechunk((n_loci, 1, n_anc))
+
+    positions = np.asarray(positions, dtype=np.int64)
 
     def _phase_block(admix_block: np.ndarray, block_info=None) -> np.ndarray:
         block_location = block_info[0]["array-location"]
