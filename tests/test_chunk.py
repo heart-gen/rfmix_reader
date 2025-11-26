@@ -1,5 +1,8 @@
 import pytest
-from rfmix_reader.chunk import Chunk
+
+pytest.importorskip("tqdm")
+
+from rfmix_reader.io.chunk import Chunk
 
 def test_default_chunk_values():
     """Check default values of Chunk."""

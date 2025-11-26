@@ -1,9 +1,12 @@
 # tests/test_read_flare.py
 import gzip
-import cudf
 import pytest
-import pandas as pd
-import dask.array as da
+
+pytest.importorskip("cudf")
+import cudf
+pd = pytest.importorskip("pandas")
+da = pytest.importorskip("dask.array")
+
 import rfmix_reader.readers.read_flare as flare
 
 

@@ -1,8 +1,10 @@
-import textwrap
-import numpy as np
-import pytest
-import pandas as pd
 import os
+import textwrap
+
+import pytest
+
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
 
 from rfmix_reader.readers.read_simu import (
     MISSING,

@@ -1,7 +1,8 @@
 import pytest
-import numpy as np
-import pandas as pd
 from pathlib import Path
+
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
 
 import rfmix_reader.utils as utils
 
