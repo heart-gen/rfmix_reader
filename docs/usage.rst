@@ -81,6 +81,70 @@ To phase-correct local ancestry before stacking across chromosomes, pass
        phase_sample_annot_path="/path/to/sample_annot.tsv",
    )
 
+Step-by-step phasing tutorial
+-----------------------------
+
+The phasing helpers wrap the RFMix VCF and sample annotations so you can
+align haplotypes across chromosomes before downstream analysis. Follow
+the checklist below when working with RFMix outputs. FLARE outputs are
+already phased and should **skip** this entire section.
+
+1. **Prepare phasing inputs**
+
+   - Confirm that each RFMix ``*.fb.tsv`` file has a matching binary copy
+     in ``binary_dir``. If not, generate them with
+     ``rfmix_reader.create_binaries`` or the ``create-binaries`` CLI
+     shown above.
+   - Collect the phased reference VCF that matches the cohort. The path
+     to this file is passed via ``phase_vcf_path``.
+   - Provide the sample annotation TSV expected by RFMix, typically
+     containing ``ID`` and population columns. Point
+     ``phase_sample_annot_path`` to this file.
+
+2. **Invoke phasing**
+
+   - **Python API:** set ``phase=True`` when calling ``read_rfmix`` and
+     pass both file paths.
+
+     .. code:: python
+
+        loci_df, g_anc, admix = read_rfmix(
+            "../examples/two_populations/out/",
+            binary_dir="../examples/two_populations/out/binary_files",
+            phase=True,
+            phase_vcf_path="/path/to/reference.vcf.gz",
+            phase_sample_annot_path="/path/to/sample_annot.tsv",
+        )
+
+   - **Command-line:** use the CLI entry point to phase during binary
+     creation. The arguments mirror the Python call.
+
+     .. code:: shell
+
+        create-binaries \
+            --binary_dir ../examples/two_populations/out/binary_files \
+            --phase \
+            --phase_vcf_path /path/to/reference.vcf.gz \
+            --phase_sample_annot_path /path/to/sample_annot.tsv \
+            ../examples/two_populations/out/
+
+3. **Interpret the phased output**
+
+   - ``loci_df`` is unchanged aside from any chromosome renaming you
+     might perform.
+   - ``g_anc`` remains the global ancestry table but now aligns with the
+     phased haplotypes produced per chromosome.
+   - ``admix`` stores phase-corrected local ancestry calls. The
+     population-major column ordering is preserved, so downstream code
+     that expects ``(sample, population)`` pairing continues to work.
+
+4. **Troubleshooting tips**
+
+   - If the phased VCF lacks contig lengths or sample names differ from
+     the RFMix annotations, fix those before retrying. Alignment is
+     strict because the phasing step matches haplotype labels between the
+     reference VCF and the RFMix outputs.
+
 ``g_anc`` is the canonical variable name returned by ``read_rfmix`` and
 is used throughout the visualization helpers described later.
 
