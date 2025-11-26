@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import List, Optional, Sequence
 
-from bio2zarr.vcf as v2z
+import bio2zarr.vcf as v2z
 
 def convert_vcf_to_zarr(
     vcf_path: str, out_path: str, *, chunk_length: int = 100_000,
