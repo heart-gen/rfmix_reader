@@ -155,6 +155,91 @@ print(z.shape)
 > run the HMM on diploid-summed inputs can produce biologically inaccurate
 > trajectories. This pathway may be removed in an upcoming release.
 
+### Phasing workflow (`rfmix_reader.processing.phase`)
+
+`rfmix_reader.processing.phase` implements gnomix-style tail-flip corrections for
+local ancestry haplotypes. The workflow is orchestrated through the
+`phase_admix_dask_with_index` pipeline (used internally by `read_rfmix`) and is
+configurable via `PhasingConfig`.
+
+#### What `read_rfmix` does when `phase=True`
+
+* Validates required phasing inputs (reference Zarr root + sample annotations)
+  and builds a default `PhasingConfig` if one is not provided.
+* Loads unphased per-chromosome local ancestry (`fb.tsv`) along with the raw
+  RFMix matrix needed to reconstruct haplotypes.
+* Calls `phase_admix_dask_with_index` to rechunk by sample, reconstruct
+  haplotype-level ancestry from the raw matrix, and apply tail-flip corrections
+  against reference haplotypes from VCF-Zarr stores.
+* Returns a phased `(loci_df, g_anc, phased_admix)` tuple where `phased_admix`
+  is a Dask array of shape `(L, S, A)`.
+
+#### Required reference inputs
+
+* **VCF-Zarr reference** (`phase_ref_zarr_root` or deprecated `phase_vcf_path`):
+  either a single `*.zarr` store or a directory containing per-chromosome
+  stores (e.g., `1.zarr`, `chr1.zarr`).
+* **Sample annotations** (`phase_sample_annot_path`): two-column file mapping
+  `sample_id` to `group` (ancestry label). One representative sample per group
+  is pulled to build reference haplotypes.
+* **Group filtering (optional)** (`phase_groups`): restrict phasing to a subset
+  of group labels. Defaults to the ancestry columns inferred from `rfmix.Q`.
+
+#### Outputs and diagnostics
+
+* `phased_admix`: phase-corrected ancestry counts (`int8`) aligned to the input
+  loci; shape `(L, S, A)`.
+* `PhasingConfig`: tune window size, heterozygous block length, mismatch
+  tolerance, and verbosity for debugging per-sample/reference matches.
+* Reference matching statistics (counts of matched/missing loci per chromosome)
+  are logged from `phase.py` when mismatches exceed the configurable threshold.
+
+#### Runnable examples
+
+```python
+from rfmix_reader import read_rfmix, PhasingConfig
+
+# Basic phasing with default parameters
+loci_df, g_anc, phased_admix = read_rfmix(
+    "examples/two_populations/out/",
+    phase=True,
+    phase_ref_zarr_root="/refs/1kg_chr_zarr/",  # directory containing <chrom>.zarr
+    phase_sample_annot_path="/refs/1kg_annotations.tsv",
+)
+
+# Custom phasing options and group filtering
+config = PhasingConfig(window_size=100, min_block_len=10, max_mismatch_frac=0.3)
+loci_df, g_anc, phased_admix = read_rfmix(
+    "examples/three_populations/out/",
+    phase=True,
+    phase_ref_zarr_root="/refs/1kg_chr_zarr/",
+    phase_sample_annot_path="/refs/1kg_annotations.tsv",
+    phase_groups=["AFR", "EUR", "NAT"],
+    phase_config=config,
+    phase_hap_index_in_vcf=1,  # use the second haploid allele in the VCF-Zarr
+)
+
+# Direct access to the phasing primitives
+from rfmix_reader.processing.phase import phase_admix_dask_with_index
+
+# Start from unphased outputs (return_original=True) and phase manually
+loci_df, g_anc, admix, X_raw = read_rfmix(
+    "examples/two_populations/out/",
+    return_original=True,
+)
+
+phased = phase_admix_dask_with_index(
+    admix=admix,  # (L, S, A) Dask array of summed counts
+    X_raw=X_raw,  # raw RFMix matrix for reconstructing hap0/hap1
+    positions=loci_df.physical_position.to_numpy(),
+    chrom=str(loci_df.chromosome.iloc[0]),
+    ref_zarr_root="/refs/1kg_chr_zarr/",
+    sample_annot_path="/refs/1kg_annotations.tsv",
+    config=config,
+    groups=["AFR", "EUR"],
+)
+```
+
 ### Reading Haptools simulations
 
 Use `read_simu` to load BGZF-compressed VCF files created by
