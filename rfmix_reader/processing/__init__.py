@@ -3,6 +3,7 @@
 from .constants import CHROM_SIZES, COORDINATES
 from .imputation import interpolate_array
 from .phase import (
+    PhasingConfig,
     apply_phase_track,
     assign_reference_per_window,
     build_phase_track_from_ref,
@@ -15,6 +16,7 @@ from .phase import (
 __all__ = [
     "CHROM_SIZES",
     "COORDINATES",
+    "PhasingConfig",
     "interpolate_array",
     "apply_phase_track",
     "assign_reference_per_window",
