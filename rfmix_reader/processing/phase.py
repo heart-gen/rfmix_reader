@@ -38,6 +38,11 @@ import xarray as xr
 ArrayLike = np.ndarray
 logger = logging.getLogger(__name__)
 
+__all__ = [
+    "PhasingConfig",
+    "phase_admix_dask_with_index",
+]
+
 @dataclass
 class PhasingConfig:
     """

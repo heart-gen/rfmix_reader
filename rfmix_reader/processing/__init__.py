@@ -4,13 +4,7 @@ from .constants import CHROM_SIZES, COORDINATES
 from .imputation import interpolate_array
 from .phase import (
     PhasingConfig,
-    apply_phase_track,
-    assign_reference_per_window,
-    build_phase_track_from_ref,
-    build_reference_haplotypes_from_zarr,
-    find_heterozygous_blocks,
-    load_sample_annotations,
-    phase_local_ancestry_sample,
+    phase_admix_dask_with_index,
 )
 
 __all__ = [
@@ -18,11 +12,5 @@ __all__ = [
     "COORDINATES",
     "PhasingConfig",
     "interpolate_array",
-    "apply_phase_track",
-    "assign_reference_per_window",
-    "build_phase_track_from_ref",
-    "build_reference_haplotypes_from_zarr",
-    "find_heterozygous_blocks",
-    "load_sample_annotations",
-    "phase_local_ancestry_sample",
+    "phase_admix_dask_with_index",
 ]
