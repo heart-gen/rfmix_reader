@@ -14,7 +14,7 @@ from dask.array import (
     expand_dims
 )
 
-from .utils import get_pops, get_sample_names
+from ..utils import get_pops, get_sample_names
 
 try:
     from torch.cuda import is_available
