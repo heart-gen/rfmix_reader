@@ -115,6 +115,69 @@ from rfmix_reader import create_binaries
 create_binaries("two_pops/out/", binary_dir="./binary_files")
 ```
 
+### Preparing Reference Data for Phasing
+
+Use `prepare-reference` to convert bgzipped, indexed reference VCF/BCF files
+into per-chromosome VCF-Zarr stores that `phase=True` consumes during
+phasing. The command writes one `<chrom>.zarr` directory per input file.
+
+```
+prepare-reference -h
+```
+
+```
+usage: prepare-reference [-h] [--chunk-length CHUNK_LENGTH]
+                         [--samples-chunk-size SAMPLES_CHUNK_SIZE]
+                         [--worker-processes WORKER_PROCESSES]
+                         [--verbose | --no-verbose] [--version]
+                         output_dir vcf_paths [vcf_paths ...]
+
+Convert one or more bgzipped reference VCF/BCF files into Zarr stores.
+
+positional arguments:
+  output_dir            Directory where the Zarr outputs will be written.
+  vcf_paths             Paths to reference VCF/BCF files (bgzipped and
+                        indexed).
+
+options:
+  -h, --help            show this help message and exit
+  --chunk-length CHUNK_LENGTH
+                        Genomic chunk size for the output Zarr stores
+                        (default: 100000).
+  --samples-chunk-size SAMPLES_CHUNK_SIZE
+                        Chunk size for samples in the output Zarr stores
+                        (default: library chosen).
+  --worker-processes WORKER_PROCESSES
+                        Number of worker processes to use for conversion
+                        (default: 0, use library default).
+  --verbose, --no-verbose
+                        Print progress messages (default: enabled).
+  --version             Show the version of the program and exit.
+```
+
+Example end-to-end preparation:
+
+```bash
+# Sample annotations: two columns (no header): sample_id<TAB>group
+cat > sample_annotations.tsv <<'EOF'
+NA19700	AFR
+NA19701	AFR
+NA20847	EUR
+EOF
+
+# Convert chromosome VCFs into a reference store directory
+prepare-reference refs/ 1kg_chr20.vcf.gz 1kg_chr21.vcf.gz \
+  --chunk-length 50000 --samples-chunk-size 512
+
+# Use the reference store + annotations during phasing
+read_rfmix(
+    "two_pops/out/",
+    phase=True,
+    phase_ref_zarr_root="refs",
+    phase_sample_annot_path="sample_annotations.tsv",
+)
+```
+
 ### Main Function
 
 Once binaries are available, process RFMix results:
@@ -138,28 +201,152 @@ loci, g_anc, admix = read_rfmix("examples/three_populations/out/",
 
 ### Loci Imputation
 
-Impute local ancestry loci to variant positions for integration with genotype data:
+The imputation workflow now lives in ``rfmix_reader.processing.imputation`` and
+is exported as ``interpolate_array``. It interpolates the local ancestry matrix
+onto a denser variant grid and writes the result to ``<zarr_outdir>/local-ancestry.zarr``
+as a Zarr array shaped ``(variants, samples, ancestries)``.
+
+**Inputs**
+
+* ``variant_loci_df``: a pandas DataFrame defining the variant grid. Provide at
+  least ``chrom``/``pos`` and an ``i`` column that points to the source RFMix
+  row index; rows with ``i`` set to ``NaN`` are treated as missing loci to
+  interpolate. Sort the frame by genomic coordinate, and include ``pos`` if you
+  plan to interpolate in base-pair space.
+* ``admix``: the local ancestry Dask array returned by ``read_rfmix`` (shape
+  ``(loci, samples, ancestries)``).
+* ``zarr_outdir``: an output directory where the new ``local-ancestry.zarr``
+  store will be created.
+
+**Key options**
+
+* ``interpolation``: ``"linear"`` (default), ``"nearest"``, ``"stepwise"``, or
+  ``"hmm"``. HMM interpolation is experimental, requires haplotype-level inputs
+  created with ``split_to_haplotypes``, and must be explicitly enabled with
+  ``allow_hmm=True``.
+* ``use_bp_positions``: set to ``True`` to interpolate along ``variant_loci_df['pos']``
+  rather than treating loci as equally spaced indices.
+* ``chunk_size``/``batch_size``: tune how many rows are materialized at a time
+  when filling and interpolating the Zarr array.
+
+**Workflow example**
 
 ```python
-from rfmix_reader import interpolate_array
 import pandas as pd
-import dask.array as da
+from pathlib import Path
+from rfmix_reader import interpolate_array, read_rfmix
 
-variant_loci_df = pd.DataFrame({
-    "chrom": ["1", "1", "1", "1"],
-    "pos": [100, 200, 300, 400],
-    "i": [1, None, None, 2]
-})
-admix = da.random.random((2, 3))  # mock admixture data
+# Load RFMix loci and local ancestry
+loci_df, _, admix = read_rfmix("two_pops/out/", binary_dir="./binary_files")
 
-z = interpolate_array(variant_loci_df, admix, "/path/to/output")
-print(z.shape)
+# Build the variant grid by merging genotype sites with the RFMix loci index
+variants = pd.read_parquet("genotypes/variants.parquet")  # must include chrom/pos
+variants = variants.drop_duplicates(subset=["chrom", "pos"]).sort_values("pos")
+variant_loci_df = (
+    variants.merge(loci_df.to_pandas(), on=["chrom", "pos"], how="outer", indicator=True)
+            .loc[:, ["chrom", "pos", "i", "_merge"]]
+)
+
+z = interpolate_array(
+    variant_loci_df,
+    admix,
+    zarr_outdir=Path("./imputed_local_ancestry"),
+    interpolation="linear",
+    use_bp_positions=True,
+    chunk_size=50_000,
+)
+print(z)
 ```
 
-> ⚠️ HMM-based interpolation is experimental, assumes haplotype-level anchors
-> built with `split_to_haplotypes`, and is disabled by default. Attempting to
-> run the HMM on diploid-summed inputs can produce biologically inaccurate
-> trajectories. This pathway may be removed in an upcoming release.
+The interpolator uses GPU acceleration transparently when ``cupy`` and a CUDA
+PyTorch build are available; otherwise it falls back to NumPy. All methods other
+than ``"hmm"`` operate on diploid-summed trajectories and preserve the original
+ancestry dimension.
+
+### Phasing workflow (`rfmix_reader.processing.phase`)
+
+`rfmix_reader.processing.phase` implements gnomix-style tail-flip corrections for
+local ancestry haplotypes. The workflow is orchestrated through the
+`phase_admix_dask_with_index` pipeline (used internally by `read_rfmix`) and is
+configurable via `PhasingConfig`.
+
+#### What `read_rfmix` does when `phase=True`
+
+* Validates required phasing inputs (reference Zarr root + sample annotations)
+  and builds a default `PhasingConfig` if one is not provided.
+* Loads unphased per-chromosome local ancestry (`fb.tsv`) along with the raw
+  RFMix matrix needed to reconstruct haplotypes.
+* Calls `phase_admix_dask_with_index` to rechunk by sample, reconstruct
+  haplotype-level ancestry from the raw matrix, and apply tail-flip corrections
+  against reference haplotypes from VCF-Zarr stores.
+* Returns a phased `(loci_df, g_anc, phased_admix)` tuple where `phased_admix`
+  is a Dask array of shape `(L, S, A)`.
+
+#### Required reference inputs
+
+* **VCF-Zarr reference** (`phase_ref_zarr_root` or deprecated `phase_vcf_path`):
+  either a single `*.zarr` store or a directory containing per-chromosome
+  stores (e.g., `1.zarr`, `chr1.zarr`).
+* **Sample annotations** (`phase_sample_annot_path`): two-column file mapping
+  `sample_id` to `group` (ancestry label). One representative sample per group
+  is pulled to build reference haplotypes.
+* **Group filtering (optional)** (`phase_groups`): restrict phasing to a subset
+  of group labels. Defaults to the ancestry columns inferred from `rfmix.Q`.
+
+#### Outputs and diagnostics
+
+* `phased_admix`: phase-corrected ancestry counts (`int8`) aligned to the input
+  loci; shape `(L, S, A)`.
+* `PhasingConfig`: tune window size, heterozygous block length, mismatch
+  tolerance, and verbosity for debugging per-sample/reference matches.
+* Reference matching statistics (counts of matched/missing loci per chromosome)
+  are logged from `phase.py` when mismatches exceed the configurable threshold.
+
+#### Runnable examples
+
+```python
+from rfmix_reader import read_rfmix, PhasingConfig
+
+# Basic phasing with default parameters
+loci_df, g_anc, phased_admix = read_rfmix(
+    "examples/two_populations/out/",
+    phase=True,
+    phase_ref_zarr_root="/refs/1kg_chr_zarr/",  # directory containing <chrom>.zarr
+    phase_sample_annot_path="/refs/1kg_annotations.tsv",
+)
+
+# Custom phasing options and group filtering
+config = PhasingConfig(window_size=100, min_block_len=10, max_mismatch_frac=0.3)
+loci_df, g_anc, phased_admix = read_rfmix(
+    "examples/three_populations/out/",
+    phase=True,
+    phase_ref_zarr_root="/refs/1kg_chr_zarr/",
+    phase_sample_annot_path="/refs/1kg_annotations.tsv",
+    phase_groups=["AFR", "EUR", "NAT"],
+    phase_config=config,
+    phase_hap_index_in_vcf=1,  # use the second haploid allele in the VCF-Zarr
+)
+
+# Direct access to the phasing primitives
+from rfmix_reader.processing.phase import phase_admix_dask_with_index
+
+# Start from unphased outputs (return_original=True) and phase manually
+loci_df, g_anc, admix, X_raw = read_rfmix(
+    "examples/two_populations/out/",
+    return_original=True,
+)
+
+phased = phase_admix_dask_with_index(
+    admix=admix,  # (L, S, A) Dask array of summed counts
+    X_raw=X_raw,  # raw RFMix matrix for reconstructing hap0/hap1
+    positions=loci_df.physical_position.to_numpy(),
+    chrom=str(loci_df.chromosome.iloc[0]),
+    ref_zarr_root="/refs/1kg_chr_zarr/",
+    sample_annot_path="/refs/1kg_annotations.tsv",
+    config=config,
+    groups=["AFR", "EUR"],
+)
+```
 
 ### Reading Haptools simulations
 

@@ -33,6 +33,63 @@ to binary chunks with =create_binaries= to minimize later I/O.
 : Converting fb files to binary!
 100% 3/3 [05:03<00:00, 101.27s/it]
 As of =v0.1.20= you can also trigger the conversion from the CLI.
+** Preparing reference stores for phasing
+The phasing path in =read_rfmix= requires per-chromosome VCF-Zarr stores and
+sample annotations. Use the =prepare-reference= CLI to convert bgzipped,
+indexed VCF/BCF files into the ``<chrom>.zarr`` layout expected by phasing.
+
+#+begin_src shell
+  prepare-reference -h
+#+end_src
+
+#+begin_note
+#+begin_example
+usage: prepare-reference [-h] [--chunk-length CHUNK_LENGTH]
+                         [--samples-chunk-size SAMPLES_CHUNK_SIZE]
+                         [--worker-processes WORKER_PROCESSES]
+                         [--verbose | --no-verbose] [--version]
+                         output_dir vcf_paths [vcf_paths ...]
+
+Convert one or more bgzipped reference VCF/BCF files into Zarr stores.
+
+positional arguments:
+  output_dir            Directory where the Zarr outputs will be written.
+  vcf_paths             Paths to reference VCF/BCF files (bgzipped and indexed).
+
+options:
+  -h, --help            show this help message and exit
+  --chunk-length CHUNK_LENGTH
+                        Genomic chunk size for the output Zarr stores (default: 100000).
+  --samples-chunk-size SAMPLES_CHUNK_SIZE
+                        Chunk size for samples in the output Zarr stores (default: library chosen).
+  --worker-processes WORKER_PROCESSES
+                        Number of worker processes to use for conversion (default: 0, use library default).
+  --verbose, --no-verbose
+                        Print progress messages (default: enabled).
+  --version             Show the version of the program and exit.
+#+end_example
+#+end_note
+
+End-to-end setup::
+
+  # sample annotations: sample_id<TAB>group (no header)
+  cat > sample_annotations.tsv <<'EOF'
+  NA19700	AFR
+  NA19701	AFR
+  NA20847	EUR
+  EOF
+
+  # generate per-chromosome VCF-Zarr stores
+  prepare-reference refs/ 1kg_chr20.vcf.gz 1kg_chr21.vcf.gz \
+    --chunk-length 50000 --samples-chunk-size 512
+
+  # pass the store + annotations into read_rfmix phasing
+  read_rfmix(
+      "../examples/two_populations/out/",
+      phase=True,
+      phase_ref_zarr_root="refs",
+      phase_sample_annot_path="sample_annotations.tsv",
+  )
 ** Reading RFMix output
 =read_rfmix= combines the loci metadata, chromosome-level global ancestry
 files, and local ancestry chunks. If =binary_dir= is omitted the function
@@ -122,20 +179,58 @@ for population 1, then all individuals for population 2, etc.). Generate
 column labels with a list comprehension when needed.
 #+RESULTS:
 * Loci imputation
-Imputing local ancestry loci information to genotype variant locations
-improves downstream integration. The =interpolate_array= helper combines
-RFMix loci with genotype coordinates using memory-efficient
-[[https://zarr.readthedocs.io/en/stable/index.html][Zarr]] arrays.
-#+begin_src python :results none
+Imputation now lives in =rfmix_reader.processing.imputation= (re-exported as
+=interpolate_array=). It fills missing RFMix loci on an arbitrary variant grid
+and writes a Zarr store (=<zarr_outdir>/local-ancestry.zarr=) with shape
+=(variants, samples, ancestries).
 
-#+end_src
+*Inputs*
+- =variant_loci_df=: pandas DataFrame with =chrom=, =pos=, and the source RFMix
+  row index in column =i=. Any row with =i= =NaN= is treated as a missing locus
+  to be interpolated. Sort by genomic coordinate and include =pos= if you want
+  base-pair interpolation.
+- =admix=: the local ancestry array from ~read_rfmix~ (shape
+  =(loci, samples, ancestries)=).
+- =zarr_outdir=: directory where =local-ancestry.zarr= will be created.
+
+*Key options*
+- =interpolation=: ="linear"= (default), ="nearest"=, ="stepwise"=, or
+  ="hmm"=. HMM interpolation is experimental, requires haplotype-level inputs
+  built with ~split_to_haplotypes~, and must be explicitly enabled with
+  =allow_hmm=True=.
+- =use_bp_positions=True= interpolates along =variant_loci_df['pos']= instead of
+  treating loci as evenly spaced indices.
+- =chunk_size=/batch_size= tune how many rows are materialized per write or
+  interpolation step.
+
+*Workflow example*
 #+begin_src python :results none
-                       "physical_position": "pos"},
-              inplace=True)
-  variant_df = variant_df.drop_duplicates(subset=["chrom", "pos"], keep='first')
-                                     how="outer", indicator=True) \
-                              .loc[:, ["chrom", "pos", "i", "_merge"]]
+  from pathlib import Path
+  import pandas as pd
+  from rfmix_reader import interpolate_array, read_rfmix
+
+  loci_df, _, admix = read_rfmix("two_pops/out/", binary_dir="./binary_files")
+
+  variant_df = pd.read_parquet("genotypes/variants.parquet")
+  variant_df = variant_df.drop_duplicates(subset=["chrom", "pos"]).sort_values("pos")
+  variant_loci_df = (
+      variant_df.merge(loci_df.to_pandas(), on=["chrom", "pos"], how="outer", indicator=True)
+                 .loc[:, ["chrom", "pos", "i", "_merge"]]
+  )
+
+  z = interpolate_array(
+      variant_loci_df,
+      admix,
+      zarr_outdir=Path("./imputed_local_ancestry"),
+      interpolation="nearest",
+      use_bp_positions=True,
+      chunk_size=50_000,
+  )
 #+end_src
+
+~interpolate_array~ will leverage CUDA (via =cupy=) when present; otherwise it
+falls back to NumPy. Non-HMM methods operate on diploid-summed trajectories and
+preserve the original ancestry dimension.
 
 * Visualization
 =rfmix-reader= bundles several plotting/export helpers so you can inspect

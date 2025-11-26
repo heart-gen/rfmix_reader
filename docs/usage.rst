@@ -34,6 +34,66 @@ As of **v0.1.20** the same conversion can be launched via the CLI.
 
    create-binaries -h
 
+Preparing reference stores for phasing
+--------------------------------------
+
+The phasing path in ``read_rfmix`` expects per-chromosome VCF-Zarr stores and
+sample annotations. The ``prepare-reference`` CLI converts bgzipped, indexed
+VCF/BCF files into the required ``<chrom>.zarr`` directories.
+
+.. code:: shell
+
+   prepare-reference -h
+
+.. note::
+
+   .. code-block:: text
+
+      usage: prepare-reference [-h] [--chunk-length CHUNK_LENGTH]
+                               [--samples-chunk-size SAMPLES_CHUNK_SIZE]
+                               [--worker-processes WORKER_PROCESSES]
+                               [--verbose | --no-verbose] [--version]
+                               output_dir vcf_paths [vcf_paths ...]
+
+      Convert one or more bgzipped reference VCF/BCF files into Zarr stores.
+
+      positional arguments:
+        output_dir            Directory where the Zarr outputs will be written.
+        vcf_paths             Paths to reference VCF/BCF files (bgzipped and indexed).
+
+      options:
+        -h, --help            show this help message and exit
+        --chunk-length CHUNK_LENGTH
+                              Genomic chunk size for the output Zarr stores (default: 100000).
+        --samples-chunk-size SAMPLES_CHUNK_SIZE
+                              Chunk size for samples in the output Zarr stores (default: library chosen).
+        --worker-processes WORKER_PROCESSES
+                              Number of worker processes to use for conversion (default: 0, use library default).
+        --verbose, --no-verbose
+                              Print progress messages (default: enabled).
+        --version             Show the version of the program and exit.
+
+To build a phasing-ready reference set end-to-end::
+
+   # sample annotations: sample_id<TAB>group (no header)
+   cat > sample_annotations.tsv <<'EOF'
+   NA19700	AFR
+   NA19701	AFR
+   NA20847	EUR
+   EOF
+
+   # generate per-chromosome VCF-Zarr stores
+   prepare-reference refs/ 1kg_chr20.vcf.gz 1kg_chr21.vcf.gz \
+     --chunk-length 50000 --samples-chunk-size 512
+
+   # pass the store + annotations into read_rfmix phasing
+   read_rfmix(
+       "../examples/two_populations/out/",
+       phase=True,
+       phase_ref_zarr_root="refs",
+       phase_sample_annot_path="sample_annotations.tsv",
+   )
+
 .. note::
 
    .. code-block:: text
@@ -89,6 +149,70 @@ run once (like ``create-binaries``):
 .. code:: shell
 
    prepare-reference ./reference_zarr/ /data/chr*.vcf.gz
+
+Step-by-step phasing tutorial
+-----------------------------
+
+The phasing helpers wrap the RFMix VCF and sample annotations so you can
+align haplotypes across chromosomes before downstream analysis. Follow
+the checklist below when working with RFMix outputs. FLARE outputs are
+already phased and should **skip** this entire section.
+
+1. **Prepare phasing inputs**
+
+   - Confirm that each RFMix ``*.fb.tsv`` file has a matching binary copy
+     in ``binary_dir``. If not, generate them with
+     ``rfmix_reader.create_binaries`` or the ``create-binaries`` CLI
+     shown above.
+   - Collect the phased reference VCF that matches the cohort. The path
+     to this file is passed via ``phase_vcf_path``.
+   - Provide the sample annotation TSV expected by RFMix, typically
+     containing ``ID`` and population columns. Point
+     ``phase_sample_annot_path`` to this file.
+
+2. **Invoke phasing**
+
+   - **Python API:** set ``phase=True`` when calling ``read_rfmix`` and
+     pass both file paths.
+
+     .. code:: python
+
+        loci_df, g_anc, admix = read_rfmix(
+            "../examples/two_populations/out/",
+            binary_dir="../examples/two_populations/out/binary_files",
+            phase=True,
+            phase_vcf_path="/path/to/reference.vcf.gz",
+            phase_sample_annot_path="/path/to/sample_annot.tsv",
+        )
+
+   - **Command-line:** use the CLI entry point to phase during binary
+     creation. The arguments mirror the Python call.
+
+     .. code:: shell
+
+        create-binaries \
+            --binary_dir ../examples/two_populations/out/binary_files \
+            --phase \
+            --phase_vcf_path /path/to/reference.vcf.gz \
+            --phase_sample_annot_path /path/to/sample_annot.tsv \
+            ../examples/two_populations/out/
+
+3. **Interpret the phased output**
+
+   - ``loci_df`` is unchanged aside from any chromosome renaming you
+     might perform.
+   - ``g_anc`` remains the global ancestry table but now aligns with the
+     phased haplotypes produced per chromosome.
+   - ``admix`` stores phase-corrected local ancestry calls. The
+     population-major column ordering is preserved, so downstream code
+     that expects ``(sample, population)`` pairing continues to work.
+
+4. **Troubleshooting tips**
+
+   - If the phased VCF lacks contig lengths or sample names differ from
+     the RFMix annotations, fix those before retrying. Alignment is
+     strict because the phasing step matches haplotype labels between the
+     reference VCF and the RFMix outputs.
 
 ``g_anc`` is the canonical variable name returned by ``read_rfmix`` and
 is used throughout the visualization helpers described later.
@@ -257,54 +381,65 @@ labels.
 Loci imputation
 ===============
 
-Imputing local ancestry loci information to genotype variant locations
-improves integration of the local ancestry information with genotype
-data. As such, we also provide the ``interpolate_array`` function to
-efficiently interpolate missing values when local ancestry loci
-information is converted to more variable genotype variant locations. It
-leverages the power of
-`Zarr <https://zarr.readthedocs.io/en/stable/index.html>`_ arrays, making
-it suitable for handling substantial datasets while managing memory usage
-effectively.
+The imputation utilities now reside in ``rfmix_reader.processing.imputation``
+and are exposed at the top level as ``interpolate_array``. The function fills
+missing local ancestry loci on an arbitrary variant grid and writes a Zarr store
+(``<zarr_outdir>/local-ancestry.zarr``) with shape ``(variants, samples,
+ancestries)``.
 
-**Note**: Following imputation, ``variant_df`` will include genomic
-positions for both local ancestry and genotype data.
+**Inputs**
+
+* ``variant_loci_df``: pandas DataFrame describing the target variant grid.
+  Include ``chrom``/``pos`` and an ``i`` column marking the source row in the
+  RFMix output. Any row with ``i`` set to ``NaN`` is interpreted as a missing
+  locus that should be interpolated. Sort by genomic coordinate, and ensure a
+  ``pos`` column is present when using base-pair interpolation.
+* ``admix``: local ancestry array returned by :func:`read_rfmix` with shape
+  ``(loci, samples, ancestries)``.
+* ``zarr_outdir``: directory where ``local-ancestry.zarr`` will be created.
+
+**Key options**
+
+* ``interpolation`` can be ``"linear"`` (default), ``"nearest"``, ``"stepwise```,
+  or ``"hmm"``. HMM interpolation is experimental, requires haplotype-level
+  anchors generated via :func:`rfmix_reader.processing.hmm_lai.split_to_haplotypes`,
+  and must be explicitly enabled with ``allow_hmm=True``.
+* ``use_bp_positions=True`` interpolates along ``variant_loci_df['pos']`` rather
+  than treating loci as evenly spaced indices.
+* ``chunk_size`` and ``batch_size`` control how many rows are materialized per
+  interpolation or write step to balance speed and memory use.
+
+**Workflow example**
 
 .. code:: python
 
-   def _load_genotypes(plink_prefix_path):
-       from tensorqtl import pgen
-       pgr = pgen.PgenReader(plink_prefix_path)
-       variant_df = pgr.variant_df
-       variant_df.loc[:, "chrom"] = "chr" + variant_df.chrom
-       return pgr.load_genotypes(), variant_df
+   from pathlib import Path
+   import pandas as pd
+   from rfmix_reader import interpolate_array, read_rfmix
 
-   def _load_admix(prefix_path, binary_dir):
-       from rfmix_reader import read_rfmix
-       return read_rfmix(prefix_path, binary_dir=binary_dir)
+   # Local ancestry loci and trajectories
+   loci_df, _, admix = read_rfmix("two_pops/out/", binary_dir="./binary_files")
 
-.. code:: python
+   # Variant grid: provide chrom/pos plus the RFMix row index in column ``i``
+   variant_df = pd.read_parquet("genotypes/variants.parquet")
+   variant_df = variant_df.drop_duplicates(subset=["chrom", "pos"]).sort_values("pos")
+   variant_loci_df = (
+       variant_df.merge(loci_df.to_pandas(), on=["chrom", "pos"], how="outer", indicator=True)
+                  .loc[:, ["chrom", "pos", "i", "_merge"]]
+   )
 
-   from rfmix_reader import interpolate_array
-   basename = "/projects/b1213/large_projects/brain_coloc_app/input"
-   # Local ancestry
-   prefix_path = f"{basename}/local_ancestry_rfmix/_m/"
-   binary_dir = f"{basename}/local_ancestry_rfmix/_m/binary_files/"
-   loci, _, admix = _load_admix(prefix_path, binary_dir)
-   loci.rename(columns={"chromosome": "chrom",
-                        "physical_position": "pos"},
-               inplace=True)
-   # Variant data
-   plink_prefix = f"{basename}/genotypes/TOPMed_LIBD"
-   _, variant_df = _load_genotypes(plink_prefix)
-   variant_df = variant_df.drop_duplicates(subset=["chrom", "pos"],
-                                           keep='first')
-   # Keep all locations for more accurate imputation
-   variant_loci_df = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"],
-                                      how="outer", indicator=True)\
-                               .loc[:, ["chrom", "pos", "i", "_merge"]]
-   data_path = f"{basename}/local_ancestry_rfmix/_m"
-   z = interpolate_array(variant_loci_df, admix, data_path)
+   z = interpolate_array(
+       variant_loci_df,
+       admix,
+       zarr_outdir=Path("./imputed_local_ancestry"),
+       interpolation="nearest",
+       use_bp_positions=True,
+       chunk_size=50_000,
+   )
+
+``interpolate_array`` automatically uses CUDA (via ``cupy``) when available and
+falls back to NumPy otherwise. Non-HMM interpolation operates on diploid-summed
+trajectories and preserves the ancestry dimension.
 
 Visualization
 =============
