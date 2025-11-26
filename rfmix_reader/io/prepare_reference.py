@@ -35,7 +35,7 @@ def convert_vcf_to_zarr(
     vcf_path = str(vcf_path); out_path = str(out_path)
 
     v2z.convert(
-        [vcf_path], out_path, variants_chunk_length=chunk_length,
+        [vcf_path], out_path, variants_chunk_size=chunk_length,
         samples_chunk_size=samples_chunk_size,
         worker_processes=worker_processes, local_alleles=None,
         show_progress=verbose, icf_path=None,
