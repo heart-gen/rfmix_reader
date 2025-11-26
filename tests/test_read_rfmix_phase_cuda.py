@@ -1,8 +1,9 @@
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
 import pytest
+
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
 
 from rfmix_reader.io.prepare_reference import convert_vcf_to_zarr
 from rfmix_reader.readers.read_rfmix import _read_Q_noi, gpu_available, read_rfmix

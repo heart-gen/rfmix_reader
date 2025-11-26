@@ -1,8 +1,9 @@
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
 import pytest
+
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
 
 from rfmix_reader import interpolate_array, read_rfmix
 from rfmix_reader.processing.imputation import GPU_ENABLED

@@ -1,9 +1,11 @@
 import os
-import cudf
 import pytest
-import numpy as np
-import pandas as pd
-import dask.array as da
+
+pytest.importorskip("cudf")
+import cudf
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
+da = pytest.importorskip("dask.array")
 
 from rfmix_reader.io import Chunk
 import rfmix_reader.readers.read_rfmix as rfmix
