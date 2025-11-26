@@ -13,7 +13,10 @@ from rfmix_reader.readers.read_rfmix import _read_Q_noi, gpu_available, read_rfm
     not gpu_available(),
     reason="CUDA is required for phased RFMix integration test",
 )
-def test_read_rfmix_phase_cuda(tmp_path):
+def test_read_rfmix_phase_cuda(tmp_path, request):
+    if not request.config.getoption("--run-cuda-tests"):
+        pytest.skip("CUDA integration tests run only with --run-cuda-tests")
+
     ref_vcf = Path("data/1kGP_high_coverage_Illumina.chr21.filtered.SNV_INDEL_SV_phased_panel.vcf.gz")
 
     if not ref_vcf.exists():
