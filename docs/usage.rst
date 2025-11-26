@@ -248,54 +248,65 @@ labels.
 Loci imputation
 ===============
 
-Imputing local ancestry loci information to genotype variant locations
-improves integration of the local ancestry information with genotype
-data. As such, we also provide the ``interpolate_array`` function to
-efficiently interpolate missing values when local ancestry loci
-information is converted to more variable genotype variant locations. It
-leverages the power of
-`Zarr <https://zarr.readthedocs.io/en/stable/index.html>`_ arrays, making
-it suitable for handling substantial datasets while managing memory usage
-effectively.
+The imputation utilities now reside in ``rfmix_reader.processing.imputation``
+and are exposed at the top level as ``interpolate_array``. The function fills
+missing local ancestry loci on an arbitrary variant grid and writes a Zarr store
+(``<zarr_outdir>/local-ancestry.zarr``) with shape ``(variants, samples,
+ancestries)``.
 
-**Note**: Following imputation, ``variant_df`` will include genomic
-positions for both local ancestry and genotype data.
+**Inputs**
+
+* ``variant_loci_df``: pandas DataFrame describing the target variant grid.
+  Include ``chrom``/``pos`` and an ``i`` column marking the source row in the
+  RFMix output. Any row with ``i`` set to ``NaN`` is interpreted as a missing
+  locus that should be interpolated. Sort by genomic coordinate, and ensure a
+  ``pos`` column is present when using base-pair interpolation.
+* ``admix``: local ancestry array returned by :func:`read_rfmix` with shape
+  ``(loci, samples, ancestries)``.
+* ``zarr_outdir``: directory where ``local-ancestry.zarr`` will be created.
+
+**Key options**
+
+* ``interpolation`` can be ``"linear"`` (default), ``"nearest"``, ``"stepwise```,
+  or ``"hmm"``. HMM interpolation is experimental, requires haplotype-level
+  anchors generated via :func:`rfmix_reader.processing.hmm_lai.split_to_haplotypes`,
+  and must be explicitly enabled with ``allow_hmm=True``.
+* ``use_bp_positions=True`` interpolates along ``variant_loci_df['pos']`` rather
+  than treating loci as evenly spaced indices.
+* ``chunk_size`` and ``batch_size`` control how many rows are materialized per
+  interpolation or write step to balance speed and memory use.
+
+**Workflow example**
 
 .. code:: python
 
-   def _load_genotypes(plink_prefix_path):
-       from tensorqtl import pgen
-       pgr = pgen.PgenReader(plink_prefix_path)
-       variant_df = pgr.variant_df
-       variant_df.loc[:, "chrom"] = "chr" + variant_df.chrom
-       return pgr.load_genotypes(), variant_df
+   from pathlib import Path
+   import pandas as pd
+   from rfmix_reader import interpolate_array, read_rfmix
 
-   def _load_admix(prefix_path, binary_dir):
-       from rfmix_reader import read_rfmix
-       return read_rfmix(prefix_path, binary_dir=binary_dir)
+   # Local ancestry loci and trajectories
+   loci_df, _, admix = read_rfmix("two_pops/out/", binary_dir="./binary_files")
 
-.. code:: python
+   # Variant grid: provide chrom/pos plus the RFMix row index in column ``i``
+   variant_df = pd.read_parquet("genotypes/variants.parquet")
+   variant_df = variant_df.drop_duplicates(subset=["chrom", "pos"]).sort_values("pos")
+   variant_loci_df = (
+       variant_df.merge(loci_df.to_pandas(), on=["chrom", "pos"], how="outer", indicator=True)
+                  .loc[:, ["chrom", "pos", "i", "_merge"]]
+   )
 
-   from rfmix_reader import interpolate_array
-   basename = "/projects/b1213/large_projects/brain_coloc_app/input"
-   # Local ancestry
-   prefix_path = f"{basename}/local_ancestry_rfmix/_m/"
-   binary_dir = f"{basename}/local_ancestry_rfmix/_m/binary_files/"
-   loci, _, admix = _load_admix(prefix_path, binary_dir)
-   loci.rename(columns={"chromosome": "chrom",
-                        "physical_position": "pos"},
-               inplace=True)
-   # Variant data
-   plink_prefix = f"{basename}/genotypes/TOPMed_LIBD"
-   _, variant_df = _load_genotypes(plink_prefix)
-   variant_df = variant_df.drop_duplicates(subset=["chrom", "pos"],
-                                           keep='first')
-   # Keep all locations for more accurate imputation
-   variant_loci_df = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"],
-                                      how="outer", indicator=True)\
-                               .loc[:, ["chrom", "pos", "i", "_merge"]]
-   data_path = f"{basename}/local_ancestry_rfmix/_m"
-   z = interpolate_array(variant_loci_df, admix, data_path)
+   z = interpolate_array(
+       variant_loci_df,
+       admix,
+       zarr_outdir=Path("./imputed_local_ancestry"),
+       interpolation="nearest",
+       use_bp_positions=True,
+       chunk_size=50_000,
+   )
+
+``interpolate_array`` automatically uses CUDA (via ``cupy``) when available and
+falls back to NumPy otherwise. Non-HMM interpolation operates on diploid-summed
+trajectories and preserves the ancestry dimension.
 
 Visualization
 =============

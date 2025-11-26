@@ -132,28 +132,67 @@ loci, g_anc, admix = read_rfmix("examples/three_populations/out/",
 
 ### Loci Imputation
 
-Impute local ancestry loci to variant positions for integration with genotype data:
+The imputation workflow now lives in ``rfmix_reader.processing.imputation`` and
+is exported as ``interpolate_array``. It interpolates the local ancestry matrix
+onto a denser variant grid and writes the result to ``<zarr_outdir>/local-ancestry.zarr``
+as a Zarr array shaped ``(variants, samples, ancestries)``.
+
+**Inputs**
+
+* ``variant_loci_df``: a pandas DataFrame defining the variant grid. Provide at
+  least ``chrom``/``pos`` and an ``i`` column that points to the source RFMix
+  row index; rows with ``i`` set to ``NaN`` are treated as missing loci to
+  interpolate. Sort the frame by genomic coordinate, and include ``pos`` if you
+  plan to interpolate in base-pair space.
+* ``admix``: the local ancestry Dask array returned by ``read_rfmix`` (shape
+  ``(loci, samples, ancestries)``).
+* ``zarr_outdir``: an output directory where the new ``local-ancestry.zarr``
+  store will be created.
+
+**Key options**
+
+* ``interpolation``: ``"linear"`` (default), ``"nearest"``, ``"stepwise"``, or
+  ``"hmm"``. HMM interpolation is experimental, requires haplotype-level inputs
+  created with ``split_to_haplotypes``, and must be explicitly enabled with
+  ``allow_hmm=True``.
+* ``use_bp_positions``: set to ``True`` to interpolate along ``variant_loci_df['pos']``
+  rather than treating loci as equally spaced indices.
+* ``chunk_size``/``batch_size``: tune how many rows are materialized at a time
+  when filling and interpolating the Zarr array.
+
+**Workflow example**
 
 ```python
-from rfmix_reader import interpolate_array
 import pandas as pd
-import dask.array as da
+from pathlib import Path
+from rfmix_reader import interpolate_array, read_rfmix
 
-variant_loci_df = pd.DataFrame({
-    "chrom": ["1", "1", "1", "1"],
-    "pos": [100, 200, 300, 400],
-    "i": [1, None, None, 2]
-})
-admix = da.random.random((2, 3))  # mock admixture data
+# Load RFMix loci and local ancestry
+loci_df, _, admix = read_rfmix("two_pops/out/", binary_dir="./binary_files")
 
-z = interpolate_array(variant_loci_df, admix, "/path/to/output")
-print(z.shape)
+# Build the variant grid by merging genotype sites with the RFMix loci index
+variants = pd.read_parquet("genotypes/variants.parquet")  # must include chrom/pos
+variants = variants.drop_duplicates(subset=["chrom", "pos"]).sort_values("pos")
+variant_loci_df = (
+    variants.merge(loci_df.to_pandas(), on=["chrom", "pos"], how="outer", indicator=True)
+            .loc[:, ["chrom", "pos", "i", "_merge"]]
+)
+
+z = interpolate_array(
+    variant_loci_df,
+    admix,
+    zarr_outdir=Path("./imputed_local_ancestry"),
+    interpolation="linear",
+    use_bp_positions=True,
+    chunk_size=50_000,
+)
+print(z)
 ```
 
-> ⚠️ HMM-based interpolation is experimental, assumes haplotype-level anchors
-> built with `split_to_haplotypes`, and is disabled by default. Attempting to
-> run the HMM on diploid-summed inputs can produce biologically inaccurate
-> trajectories. This pathway may be removed in an upcoming release.
+The interpolator uses GPU acceleration transparently when ``cupy`` and a CUDA
+PyTorch build are available; otherwise it falls back to NumPy. All methods other
+than ``"hmm"`` operate on diploid-summed trajectories and preserve the original
+ancestry dimension.
 
 ### Reading Haptools simulations
 
