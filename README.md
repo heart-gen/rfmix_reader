@@ -71,6 +71,12 @@ print(local_array.shape)
 #     phase_vcf_path="/path/to/reference.vcf.gz",
 #     phase_sample_annot_path="/path/to/sample_annot.tsv",
 # )
+#
+# Tip: when using ``phase=True``, convert the reference VCF/BCF files to
+# Zarr ahead of time with the ``prepare-reference`` CLI for faster
+# lookups. The conversion is a one-time cost (similar to ``create-binaries``):
+#
+# prepare-reference ./reference_zarr/ /data/chr*.vcf.gz
 ```
 
 ---
