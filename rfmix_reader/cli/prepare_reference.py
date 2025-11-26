@@ -22,22 +22,28 @@ def main() -> None:
         help="Paths to reference VCF/BCF files (bgzipped and indexed).",
     )
     parser.add_argument(
-        "--fields",
-        nargs="+",
-        default=None,
-        help="VCF FORMAT/INFO fields to import. Defaults to ['GT'].",
-    )
-    parser.add_argument(
         "--chunk-length",
         type=int,
         default=100_000,
         help="Genomic chunk size for the output Zarr stores (default: 100000).",
     )
     parser.add_argument(
-        "--compressor",
-        choices=["zstd", "blosc", "lz4", "gzip"],
-        default="zstd",
-        help="Compression codec to use for the Zarr stores (default: zstd).",
+        "--samples-chunk-size",
+        type=int,
+        default=None,
+        help=(
+            "Chunk size for samples in the output Zarr stores (default: library"
+            " chosen)."
+        ),
+    )
+    parser.add_argument(
+        "--worker-processes",
+        type=int,
+        default=0,
+        help=(
+            "Number of worker processes to use for conversion (default: 0, use"
+            " library default)."
+        ),
     )
     parser.add_argument(
         "--verbose",
@@ -54,9 +60,9 @@ def main() -> None:
     convert_vcfs_to_zarr(
         args.vcf_paths,
         args.output_dir,
-        fields=args.fields,
         chunk_length=args.chunk_length,
-        compressor=args.compressor,
+        samples_chunk_size=args.samples_chunk_size,
+        worker_processes=args.worker_processes,
         verbose=args.verbose,
     )
 
