@@ -34,6 +34,66 @@ As of **v0.1.20** the same conversion can be launched via the CLI.
 
    create-binaries -h
 
+Preparing reference stores for phasing
+--------------------------------------
+
+The phasing path in ``read_rfmix`` expects per-chromosome VCF-Zarr stores and
+sample annotations. The ``prepare-reference`` CLI converts bgzipped, indexed
+VCF/BCF files into the required ``<chrom>.zarr`` directories.
+
+.. code:: shell
+
+   prepare-reference -h
+
+.. note::
+
+   .. code-block:: text
+
+      usage: prepare-reference [-h] [--chunk-length CHUNK_LENGTH]
+                               [--samples-chunk-size SAMPLES_CHUNK_SIZE]
+                               [--worker-processes WORKER_PROCESSES]
+                               [--verbose | --no-verbose] [--version]
+                               output_dir vcf_paths [vcf_paths ...]
+
+      Convert one or more bgzipped reference VCF/BCF files into Zarr stores.
+
+      positional arguments:
+        output_dir            Directory where the Zarr outputs will be written.
+        vcf_paths             Paths to reference VCF/BCF files (bgzipped and indexed).
+
+      options:
+        -h, --help            show this help message and exit
+        --chunk-length CHUNK_LENGTH
+                              Genomic chunk size for the output Zarr stores (default: 100000).
+        --samples-chunk-size SAMPLES_CHUNK_SIZE
+                              Chunk size for samples in the output Zarr stores (default: library chosen).
+        --worker-processes WORKER_PROCESSES
+                              Number of worker processes to use for conversion (default: 0, use library default).
+        --verbose, --no-verbose
+                              Print progress messages (default: enabled).
+        --version             Show the version of the program and exit.
+
+To build a phasing-ready reference set end-to-end::
+
+   # sample annotations: sample_id<TAB>group (no header)
+   cat > sample_annotations.tsv <<'EOF'
+   NA19700	AFR
+   NA19701	AFR
+   NA20847	EUR
+   EOF
+
+   # generate per-chromosome VCF-Zarr stores
+   prepare-reference refs/ 1kg_chr20.vcf.gz 1kg_chr21.vcf.gz \
+     --chunk-length 50000 --samples-chunk-size 512
+
+   # pass the store + annotations into read_rfmix phasing
+   read_rfmix(
+       "../examples/two_populations/out/",
+       phase=True,
+       phase_ref_zarr_root="refs",
+       phase_sample_annot_path="sample_annotations.tsv",
+   )
+
 .. note::
 
    .. code-block:: text
