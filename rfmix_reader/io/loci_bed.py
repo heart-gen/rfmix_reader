@@ -34,10 +34,6 @@ else:
     config.set({"dataframe.backend": "pandas"})
     config.set({"array.backend": "numpy"})
 
-__all__ = [
-    "admix_to_bed_individual"
-]
-
 def admix_to_bed_individual(
         loci: DataFrame, g_anc: DataFrame, admix: Array, sample_num: int,
         chunk_size: int = 10_000, min_segment: int = 3, verbose: bool=True
