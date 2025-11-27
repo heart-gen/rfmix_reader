@@ -13,14 +13,8 @@ from rfmix_reader.readers.read_rfmix import gpu_available
 @pytest.mark.filterwarnings("ignore:.*cupy not installed.*")
 @pytest.mark.parametrize("method", ["linear", "nearest", "stepwise"])
 def test_imputation_chr21_interpolation(tmp_path, method):
-    fb_path = Path("data/chr21.fb.tsv")
-    with fb_path.open() as fb_file:
-        first_line = fb_file.readline().strip()
-    if first_line.startswith("version https://git-lfs.github.com/spec/v1"):
-        pytest.skip("Sample data not available locally; Git LFS placeholder detected.")
-
     loci_df, g_anc, admix = read_rfmix(
-        "data/chr21",
+        "data/",
         binary_dir=tmp_path / "binary",
         generate_binary=True,
         verbose=False,
