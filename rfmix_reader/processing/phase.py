@@ -70,7 +70,7 @@ class PhasingConfig:
 
 
 def find_heterozygous_blocks(
-    hap0: ArrayLike, hap1: ArrayLike, min_block_len: int = 1
+    hap0: ArrayLike, hap1: ArrayLike, min_block_len: int = 1, max_gap: int = 1
 ) -> List[slice]:
     """
     Find contiguous blocks where ``hap0 != hap1`` (heterozygous ancestry).
@@ -87,6 +87,11 @@ def find_heterozygous_blocks(
         Minimum number of SNPs for a block to be returned. Very short
         heterozygous segments are usually noise and do not provide reliable
         evidence for phase correction.
+    max_gap : int, default 1
+        Maximum length of homozygous gap allowed when merging adjacent
+        heterozygous runs. If two heterozygous segments are separated by a
+        short homozygous stretch (``<= max_gap``), they are merged and the
+        combined span is used to evaluate ``min_block_len``.
 
     Returns
     -------
@@ -99,6 +104,9 @@ def find_heterozygous_blocks(
     if hap0.shape != hap1.shape:
         raise ValueError("hap0 and hap1 must have the same shape.")
 
+    if max_gap < 0:
+        raise ValueError("max_gap must be non-negative.")
+
     het = hap0 != hap1
     if not np.any(het):
         return []
@@ -107,13 +115,31 @@ def find_heterozygous_blocks(
         ([0], np.where(het[:-1] != het[1:])[0] + 1, [len(het)])
     )
 
-    blocks: List[slice] = []
+    runs: List[Tuple[int, int]] = []
     for b in range(len(boundaries) - 1):
         start, end = boundaries[b], boundaries[b + 1]
-        if het[start] and (end - start) >= min_block_len:
-            blocks.append(slice(start, end))
+        if het[start]:
+            runs.append((start, end))
 
-    return blocks
+    if not runs:
+        return []
+
+    merged: List[slice] = []
+    cur_start, cur_end = runs[0]
+
+    for next_start, next_end in runs[1:]:
+        gap = next_start - cur_end
+        if gap <= max_gap:
+            cur_end = next_end
+        else:
+            if (cur_end - cur_start) >= min_block_len:
+                merged.append(slice(cur_start, cur_end))
+            cur_start, cur_end = next_start, next_end
+
+    if (cur_end - cur_start) >= min_block_len:
+        merged.append(slice(cur_start, cur_end))
+
+    return merged
 
 
 def window_slices(n: int, window_size: int) -> List[slice]:
