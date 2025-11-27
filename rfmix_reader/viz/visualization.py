@@ -26,13 +26,6 @@ else:
     config.set({"dataframe.backend": "pandas"})
     config.set({"array.backend": "numpy"})
 
-__all__ = [
-    "save_multi_format",
-    "generate_tagore_bed",
-    "plot_global_ancestry",
-    "plot_ancestry_by_chromosome",
-]
-
 def plot_global_ancestry(
         g_anc: DataFrame, title: str = "Global Ancestry Proportions",
         palette: Union[str,List[str]] = 'tab10', figsize: Tuple[int,int] = (16,6),

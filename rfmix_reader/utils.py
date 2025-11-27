@@ -16,15 +16,6 @@ except ImportError:
     print("Warning: Using CPU!")
     from pandas import DataFrame
 
-__all__ = [
-    "get_pops",
-    "_read_file",
-    "get_sample_names",
-    "set_gpu_environment",
-    "delete_files_or_directories",
-    "get_prefixes", "create_binaries"
-]
-
 def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List[str]:
     """
     Apply a reader function across multiple input files.

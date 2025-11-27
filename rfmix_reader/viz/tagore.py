@@ -23,10 +23,6 @@ if is_available():
 else:
     from pandas import DataFrame
 
-__all__ = [
-    "plot_local_ancestry_tagore"
-]
-
 def _printif(message: str, verbose: bool):
     """
     Print message if a boolean (e.g. verbose) is true
