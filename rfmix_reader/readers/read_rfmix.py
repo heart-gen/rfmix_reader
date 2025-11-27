@@ -31,8 +31,6 @@ if gpu_available():
 else:
     from pandas import DataFrame, read_csv, concat, CategoricalDtype
 
-__all__ = ["read_rfmix"]
-
 def read_rfmix(
         file_prefix: str, binary_dir: str = "./binary_files",
         generate_binary: bool = False, verbose: bool = True,

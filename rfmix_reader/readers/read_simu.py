@@ -18,8 +18,6 @@ from os.path import isdir, join, isfile, dirname, basename, exists
 
 from ..utils import _read_file
 
-__all__ = ["read_simu"]
-
 MISSING = np.uint8(255)
 
 def read_simu(

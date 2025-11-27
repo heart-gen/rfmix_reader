@@ -28,8 +28,6 @@ else:
     from numpy import array, full, zeros, asarray, int8
     from pandas import DataFrame, read_csv, concat, CategoricalDtype
 
-__all__ = ["read_flare"]
-
 def read_flare(
         file_prefix: str, chunk_size: int32 = 1_000_000, verbose: bool = True,
 ) -> Tuple[DataFrame, DataFrame, Array]:
