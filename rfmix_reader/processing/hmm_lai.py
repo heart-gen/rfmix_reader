@@ -9,7 +9,7 @@ __all__ = [
     "split_to_haplotypes",
 ]
 
-def build_log_emissions_from_anchors(
+def _build_log_emissions_from_anchors(
     obs_post: np.ndarray | torch.Tensor, eps_anchor: float = 1e-3,
     device: str | torch.device = "cuda", dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
@@ -71,7 +71,7 @@ def build_log_emissions_from_anchors(
     return log_emission
 
 
-def build_log_transitions(
+def _build_log_transitions(
     pos_bp: np.ndarray | torch.Tensor, K: int, recomb_rate: float = 1e-8,
     device: str | torch.device = "cuda", dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
@@ -247,7 +247,7 @@ def hmm_interpolate(
     B, L, K = obs_tensor.shape
 
     # Build shared transition matrices on device
-    log_T = build_log_transitions(
+    log_T = _build_log_transitions(
         pos_bp=pos_bp, K=K, recomb_rate=recomb_rate,
         device=device, dtype=dtype,
     )
@@ -262,7 +262,7 @@ def hmm_interpolate(
         obs_batch = obs_tensor[b_start:b_end].to(device)
 
         # Build log emissions for this batch
-        log_emission = build_log_emissions_from_anchors(
+        log_emission = _build_log_emissions_from_anchors(
             obs_post=obs_batch, eps_anchor=eps_anchor,
             device=device, dtype=dtype,
         )

@@ -38,10 +38,6 @@ import xarray as xr
 ArrayLike = np.ndarray
 logger = logging.getLogger(__name__)
 
-__all__ = [
-    "PhasingConfig",
-    "phase_admix_dask_with_index",
-]
 
 @dataclass
 class PhasingConfig:
@@ -69,13 +65,13 @@ class PhasingConfig:
     verbose: bool = False
 
 
-def find_heterozygous_blocks(
+def _find_heterozygous_blocks(
     hap0: ArrayLike, hap1: ArrayLike, min_block_len: int = 1, max_gap: int = 1
 ) -> List[slice]:
     """
     Find contiguous blocks where ``hap0 != hap1`` (heterozygous ancestry).
 
-    This follows the same conceptual idea as gnomix's ``find_hetero_regions``,
+    This follows the same conceptual idea as gnomix's ``_find_hetero_regions``,
     which locates regions where the two haplotypes carry different ancestry
     labels and where phasing is actually informative.
 
@@ -142,7 +138,7 @@ def find_heterozygous_blocks(
     return merged
 
 
-def window_slices(n: int, window_size: int) -> List[slice]:
+def _window_slices(n: int, window_size: int) -> List[slice]:
     """
     Generate contiguous index slices of length ``window_size``.
 
@@ -165,7 +161,7 @@ def window_slices(n: int, window_size: int) -> List[slice]:
     return [slice(i, min(i + window_size, n)) for i in range(0, n, window_size)]
 
 
-def assign_reference_per_window(
+def _assign_reference_per_window(
     hap: ArrayLike, refs: ArrayLike, window_size: int, max_mismatch_frac: float,
 ) -> np.ndarray:
     """
@@ -205,7 +201,7 @@ def assign_reference_per_window(
     if hap.shape[0] != L:
         raise ValueError("hap and refs must have the same length.")
 
-    wslices = window_slices(L, window_size)
+    wslices = _window_slices(L, window_size)
     ref_track = np.zeros(len(wslices), dtype=np.int8)
 
     for w_idx, sl in enumerate(wslices):
@@ -245,7 +241,7 @@ def assign_reference_per_window(
     return ref_track
 
 
-def build_phase_track_from_ref(ref_track: np.ndarray) -> np.ndarray:
+def _build_phase_track_from_ref(ref_track: np.ndarray) -> np.ndarray:
     """
     Build a window-level "phase flip track" from reference assignments.
 
@@ -285,7 +281,7 @@ def build_phase_track_from_ref(ref_track: np.ndarray) -> np.ndarray:
     return phase_track
 
 
-def apply_phase_track(
+def _apply_phase_track(
     hap0: ArrayLike, hap1: ArrayLike, phase_track: np.ndarray, window_size: int,
 ) -> Tuple[ArrayLike, ArrayLike]:
     """
@@ -371,7 +367,7 @@ def phase_local_ancestry_sample(
     if L == 0:
         return hap0.copy(), hap1.copy()
 
-    het_blocks = find_heterozygous_blocks(
+    het_blocks = _find_heterozygous_blocks(
         hap0, hap1, min_block_len=config.min_block_len
     )
 
@@ -400,14 +396,14 @@ def phase_local_ancestry_sample(
         h1_blk = hap1_corr[start:end]
         refs_blk = refs[:, start:end]
 
-        ref_track = assign_reference_per_window(
+        ref_track = _assign_reference_per_window(
             hap=h0_blk,
             refs=refs_blk,
             window_size=config.window_size,
             max_mismatch_frac=config.max_mismatch_frac,
         )
 
-        phase_track = build_phase_track_from_ref(ref_track)
+        phase_track = _build_phase_track_from_ref(ref_track)
 
         local_L = end - start
         local_W = int(np.ceil(local_L / config.window_size))
@@ -423,7 +419,7 @@ def phase_local_ancestry_sample(
                     constant_values=pad_val,
                 )
 
-        h0_blk_corr, h1_blk_corr = apply_phase_track(
+        h0_blk_corr, h1_blk_corr = _apply_phase_track(
             h0_blk, h1_blk, phase_track, config.window_size
         )
 
@@ -433,7 +429,7 @@ def phase_local_ancestry_sample(
     return hap0_corr, hap1_corr
 
 
-def load_sample_annotations(
+def _load_sample_annotations(
     annot_path: str, sep: str = r"\s+", col_sample: str = "sample_id",
     col_group: str = "group",
 ) -> pd.DataFrame:
@@ -516,7 +512,7 @@ def build_reference_haplotypes_from_zarr(
         Path to a ``*.zarr`` store for the chromosome or a directory containing
         per-chromosome Zarr stores.
     annot_path : str
-        Path to sample annotation file (see :func:`load_sample_annotations`).
+        Path to sample annotation file (see :func:`_load_sample_annotations`).
     chrom : str
         Chromosome name to extract (e.g., "1", "chr1").
     positions : array_like of int, shape (L,)
@@ -548,7 +544,7 @@ def build_reference_haplotypes_from_zarr(
     positions = np.asarray(positions, dtype=np.int64)
     L = positions.shape[0]
 
-    annot = load_sample_annotations(
+    annot = _load_sample_annotations(
         annot_path, col_sample=col_sample, col_group=col_group
     )
 
@@ -783,7 +779,7 @@ def count_switch_errors(
     return n_switches
 
 
-def build_hap_labels_from_rfmix(
+def _build_hap_labels_from_rfmix(
     X_raw: DaskArray | np.ndarray, sample_idx: int, n_anc: int, n_samples: int,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
@@ -824,7 +820,7 @@ def build_hap_labels_from_rfmix(
     return hap0_labels, hap1_labels
 
 
-def combine_haps_to_counts(
+def _combine_haps_to_counts(
     hap0: np.ndarray, hap1: np.ndarray, n_anc: int,
 ) -> np.ndarray:
     """
@@ -886,7 +882,7 @@ def phase_admix_sample_from_zarr_with_index(
 
     L, A = admix_sample.shape
 
-    hap0, hap1 = build_hap_labels_from_rfmix(
+    hap0, hap1 = _build_hap_labels_from_rfmix(
         X_raw=X_raw, sample_idx=sample_idx, n_anc=A, n_samples=n_samples
     )
 
@@ -905,7 +901,7 @@ def phase_admix_sample_from_zarr_with_index(
         hap_index_in_zarr=hap_index_in_zarr,
     )
 
-    admix_corr = combine_haps_to_counts(hap0_corr, hap1_corr, n_anc=A)
+    admix_corr = _combine_haps_to_counts(hap0_corr, hap1_corr, n_anc=A)
     return admix_corr
 
 

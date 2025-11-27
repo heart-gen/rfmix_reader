@@ -35,14 +35,6 @@ if GPU_ENABLED:
 else:
     arr_mod = np
 
-__all__ = [
-    "interpolate_array",
-    "interpolate_block",
-    "_interpolate_col",
-    "_expand_array",
-    "_print_logger"
-]
-
 InterpMethod = Literal["linear", "nearest", "stepwise", "hmm"]
 
 def _to_host(x):
