@@ -227,6 +227,16 @@ def assign_reference_per_window(
         best_r = int(np.argmin(mismatches))
         best_mism = mismatches[best_r]
 
+        # Check for ties among references
+        ties = np.isclose(mismatches, best_mism)
+        n_ties = ties.sum()
+
+        # If tie across multiple references → ambiguous
+        if n_ties > 1:
+            ref_track[w_idx] = 0
+            continue
+
+        # if mismatch exceeds threshold → ambiguous
         if (not np.isfinite(best_mism)) or (best_mism >= max_mismatch_frac):
             ref_track[w_idx] = 0
         else:
