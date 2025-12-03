@@ -15,8 +15,6 @@ from pandas import DataFrame
 from dask.array import Array
 from typing import Literal, Optional
 
-from .hmm_lai import hmm_interpolate, split_to_haplotypes
-
 try:
     from torch.cuda import is_available as cuda_is_available
 except ModuleNotFoundError:
@@ -35,7 +33,7 @@ if GPU_ENABLED:
 else:
     arr_mod = np
 
-InterpMethod = Literal["linear", "nearest", "stepwise", "hmm"]
+InterpMethod = Literal["linear", "nearest", "stepwise"]
 
 def _to_host(x):
     """Convert an array-module array back to a NumPy array on host."""
@@ -76,8 +74,6 @@ def _normalize_method(method: str) -> str:
         return "nearest"
     if m in ("step", "stepwise", "nearest_segment", "nearest-segment"):
         return "stepwise"
-    if m in ("hmm", "hmm_lai"):
-        return "hmm"
     raise ValueError(f"Unknown interpolation method: {method}")
 
 
@@ -159,22 +155,14 @@ def _interpolate_1d(
 
 
 def interpolate_block(
-    block, *, method: InterpMethod = "linear",
-    pos: Optional[np.ndarray] = None, recomb_rate: float = 1e-8,
-    eps_anchor: float = 1e-3, return_hard: bool = False, device: str = "cuda",
-    allow_hmm: bool = False,
+    block, *, method: InterpMethod = "linear", pos: Optional[np.ndarray] = None, 
 ):
     """
     Block-wise interpolation for a haplotype / ancestry block.
 
-    `method` can be "linear", "nearest", "stepwise" or "hmm". If `pos` is given,
+    `method` can be "linear", "nearest", or "stepwise". If `pos` is given,
     interpolation is performed in bp space; otherwise it is done in index
     space (0..n_loci-1).
-
-    HMM interpolation requires haplotype-level anchors. When using
-    `method="hmm"`, set `allow_hmm=True` only if the input block has already
-    been converted to haplotypes (e.g., via `split_to_haplotypes`). This pathway
-    is experimental and may be removed in a future release.
 
     Returns a float32 array in the same array module (NumPy or CuPy).
     """
@@ -182,36 +170,6 @@ def interpolate_block(
     block = mod.asarray(block, dtype=mod.float32)
     loci_dim, sample_dim, ancestry_dim = block.shape
 
-    if method == "hmm":
-        if pos is None:
-            raise ValueError("`pos` must be provided for HMM interpolation.")
-        if not allow_hmm:
-            raise RuntimeError(
-                "HMM interpolation requires haplotype-level anchors and is "
-                "disabled by default. Convert inputs with `split_to_haplotypes` "
-                "and re-run with `allow_hmm=True` if you understand the "
-                "biological limitations. This pathway is deprecated and may be "
-                "removed in the next release."
-            )
-        warnings.warn(
-            "HMM interpolation assumes haplotype-level anchors; using "
-            "summed diploid inputs may yield biologically inaccurate results. "
-            "This pathway is deprecated and may be removed in a future "
-            "release.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        block_np = block.get() if hasattr(block, "get") else np.asarray(block)
-        gamma = hmm_interpolate(
-            pos_bp=pos, obs_post=block_np.transpose(1, 0, 2),
-            recomb_rate=recomb_rate, eps_anchor=eps_anchor, device=device,
-        )
-        if return_hard:
-            hard_calls = np.argmax(gamma, axis=1).T
-            return np.eye(K, dtype=np.float32)[hard_calls]
-        return gamma.transpose(1, 0, 2)
-
-    # Other methods 1D interpolation
     flat = block.reshape(loci_dim, -1)  # (loci, samples*ancestries)
     x = None if pos is not None else mod.asarray(pos, dtype=mod.float32)
     for j in range(flat.shape[1]):
@@ -293,7 +251,6 @@ def interpolate_array(
     variant_loci_df: DataFrame, admix: Array, zarr_outdir: str,
     chunk_size: int = 50_000, batch_size: int = 10_000,
     interpolation: str = "linear", use_bp_positions: bool = False,
-    allow_hmm: bool = False,
 ) -> zarr.Array:
     """
     Interpolate missing local ancestry entries on the variant grid.
@@ -347,7 +304,7 @@ def interpolate_array(
     >>> variant_loci_df = pd.DataFrame({'chrom': ['1', '1'], 'pos': [100, 200]})
     >>> admix = da.random.random((2, 3))
     >>> z = interpolate_array(variant_loci_df, admix, '/path/to/output',
-                              chunk_size=1)
+                              chunk_size=1, interpolation='linear')
     >>> print(z.shape)
     (2, 3)
     """
@@ -371,9 +328,7 @@ def interpolate_array(
         end = min(start + chunk_size, total_rows)
         chunk = arr_mod.array(z[start:end, :, :], dtype=arr_mod.float32)
         pos_chunk = None if pos is None else pos[start:end]
-        interp_chunk = interpolate_block(
-            chunk, method=method, pos=pos_chunk, allow_hmm=allow_hmm,
-        )
+        interp_chunk = interpolate_block(chunk, method=method, pos=pos_chunk)
         z[start:end, :, :] = _to_host(interp_chunk)
 
     _print_logger("Interpolation complete!")
