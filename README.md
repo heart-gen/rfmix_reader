@@ -155,6 +155,9 @@ EOF
 # Convert chromosome VCFs into a reference store directory
 prepare-reference refs/ 1kg_chr20.vcf.gz 1kg_chr21.vcf.gz \
   --chunk-length 50000 --samples-chunk-size 512
+```
+```python
+from rfmix_reader import phase_rfmix_chromosome_to_zarr
 
 # Use the reference store + annotations during phasing
 phase_rfmix_chromosome_to_zarr(
