@@ -15,8 +15,13 @@ from os.path import basename, dirname, join, exists
 
 from .fb_read import read_fb
 from ..io import BinaryFileNotFoundError, Chunk
-from ..processing import PhasingConfig, phase_admix_dask_with_index
-from ..utils import _read_file, create_binaries, get_prefixes, set_gpu_environment
+from ..utils import (
+    _read_file,
+    create_binaries,
+    filter_file_maps_by_chrom,
+    get_prefixes,
+    set_gpu_environment,
+)
 
 try:
     from torch.cuda import is_available as gpu_available
@@ -36,13 +41,7 @@ def read_rfmix(
         generate_binary: bool = False, verbose: bool = True,
         return_hap_matrix: bool = False,
         return_original: bool = False,
-        phase: bool = False,
-        phase_vcf_path: Optional[str] = None,
-        phase_ref_zarr_root: Optional[str] = None,
-        phase_sample_annot_path: Optional[str] = None,
-        phase_groups: Optional[List[str]] = None,
-        phase_config: Optional[PhasingConfig] = None,
-        phase_hap_index_in_zarr: int = 0,
+        chrom: Optional[str] = None,
 ) -> (
     Tuple[DataFrame, DataFrame, Array]
     | Tuple[DataFrame, DataFrame, Array, Array]
@@ -67,28 +66,10 @@ def read_rfmix(
         Return the haplotypes index for reconstruction of hap0 / hap1.
     return_original : bool, optional
         Return the original RFMix matrix ``X_raw`` along with the summed
-        ancestry counts. Ignored when ``phase=True``.
-    phase : bool, optional
-        If :const:`True`, phase-correct local ancestry per chromosome chunk
-        using the routines in :mod:`rfmix_reader.processing.phase` before
-        stacking across chromosomes. Default is :const:`False` to preserve
-        legacy behavior.
-    phase_ref_zarr_root : str, optional
-        Path to the reference Zarr store (or directory of per-chromosome
-        stores) used for phasing. Required when ``phase`` is :const:`True``.
-    phase_vcf_path : str, optional
-        Deprecated alias for ``phase_ref_zarr_root``.
-    phase_sample_annot_path : str, optional
-        Path to the sample annotation file (sample_id + group label) for
-        phasing. Required when ``phase`` is :const:`True`.
-    phase_groups : list[str], optional
-        Restrict phasing to this subset of group labels. Defaults to all
-        ancestry columns inferred from the ``rfmix.Q`` files when
-        :data:`None`.
-    phase_config : PhasingConfig, optional
-        Optional configuration object for phasing parameters.
-    phase_hap_index_in_zarr : int, optional
-        Which haploid allele to pull from the reference VCF (``0`` or ``1``).
+        ancestry counts.
+    chrom : str, optional
+        If provided, restrict reading to a single chromosome whose label
+        matches ``chrom`` (with or without the ``chr`` prefix).
 
     Returns
     -------
@@ -100,9 +81,8 @@ def read_rfmix(
         Local ancestry per population stacked (variants, samples, ancestries).
         This is in order of the populations see `g_anc`.
     X_raw : :class:`dask.array.Array`, optional
-        Returned only when ``return_original`` is :const:`True` and
-        ``phase=False``. The unphased RFMix matrix prior to haplotype
-        summarization.
+        Returned only when ``return_original`` is :const:`True`. The unphased
+        RFMix matrix prior to haplotype summarization.
     return_hap_matrix : bool
         Whether to return local ancestry with haplotypes (hap0 / hap1) level
         information.
@@ -121,18 +101,9 @@ def read_rfmix(
         set_gpu_environment()
 
     # Get file prefixes
-    fn = get_prefixes(file_prefix, "rfmix", verbose)
-
-    if phase:
-        phase_ref_zarr_root = phase_ref_zarr_root or phase_vcf_path
-
-        if phase_ref_zarr_root is None or phase_sample_annot_path is None:
-            raise ValueError(
-                "Phasing requires both a reference Zarr root and "
-                "`phase_sample_annot_path` to be provided."
-            )
-        if phase_config is None:
-            phase_config = PhasingConfig()
+    fn = filter_file_maps_by_chrom(
+        get_prefixes(file_prefix, "rfmix", verbose), chrom, kind="RFMix"
+    )
 
     # Load loci information
     pbar = tqdm(desc="Mapping loci information", total=len(fn), disable=not verbose)
@@ -158,9 +129,6 @@ def read_rfmix(
     pops = g_anc[0].drop(["sample_id", "chrom"], axis=1).columns.values
     g_anc = concat(g_anc, axis=0, ignore_index=True)
 
-    if phase and phase_groups is None:
-        phase_groups = list(pops)
-
     # Loading local ancestry by loci
     if generate_binary:
         create_binaries(file_prefix, binary_dir)
@@ -172,22 +140,10 @@ def read_rfmix(
         lambda f: _read_fb(
             f["fb.tsv"], nsamples, nmarkers[f["fb.tsv"]], pops,
             binary_dir, Chunk(),
-            phase=phase,
-            chrom=str(loci_by_fn[f["fb.tsv"]]["chromosome"].iloc[0]),
-            positions=loci_by_fn[f["fb.tsv"]]["physical_position"],
-            ref_zarr_root=phase_ref_zarr_root,
-            sample_annot_path=phase_sample_annot_path,
-            phase_groups=phase_groups,
-            phase_config=phase_config,
-            hap_index_in_zarr=phase_hap_index_in_zarr,
         ),
         pbar,
     )
     pbar.close()
-
-    if phase:
-        local_array = concatenate(local_data, axis=0)
-        return loci_df, g_anc, local_array
 
     # Unpack data
     admix_list = [admix for admix, X_raw in local_data]
@@ -333,14 +289,8 @@ def _read_Q_noi(fn: str) -> DataFrame:
 
 def _read_fb(
     fn: str, nsamples: int, nloci: int, pops: list, temp_dir: str,
-    chunk: Optional[Chunk] = None, *, phase: bool = False,
-    chrom: Optional[str] = None, positions=None,
-    ref_zarr_root: Optional[str] = None,
-    sample_annot_path: Optional[str] = None,
-    phase_groups: Optional[List[str]] = None,
-    phase_config: Optional[PhasingConfig] = None,
-    hap_index_in_zarr: int = 0,
-) -> Array | Tuple[Array, Array]:
+    chunk: Optional[Chunk] = None,
+) -> Tuple[Array, Array]:
     """
     Read the forward-backward matrix from a file as a Dask Array.
 
@@ -351,25 +301,11 @@ def _read_fb(
     nloci (int): The number of loci in the dataset.
     pops (list): A list of population labels.
     chunk (Chunk, optional): A Chunk object specifying the chunk size for reading.
-    phase (bool, optional): Whether to phase-correct the local ancestry.
-    chrom (str, optional): Chromosome label for this chunk (required for phasing).
-    positions (array-like, optional): Physical positions for this chunk
-        (required for phasing).
-    ref_zarr_root (str, optional): Path to the reference Zarr store used for phasing.
-    sample_annot_path (str, optional): Path to the sample annotation TSV used
-        for grouping reference haplotypes.
-    phase_groups (list[str], optional): Subset of groups to use during phasing.
-        Defaults to all ancestry groups present in the ``rfmix.Q`` files when
-        not provided.
-    phase_config (PhasingConfig, optional): Configuration options for phasing.
-    hap_index_in_zarr (int, optional): Which haploid allele to read from the
-        reference VCF during phasing.
 
     Returns:
     -------
-    dask.array.Array or tuple: The forward-backward matrix as a Dask Array
-    (with the raw matrix) when ``phase`` is :const:`False`; otherwise the
-    phased local ancestry counts only.
+    tuple
+        The summed forward-backward matrix and the original raw matrix.
     """
     npops = len(pops)
     nrows = nloci
@@ -388,31 +324,6 @@ def _read_fb(
         raise BinaryFileNotFoundError(binary_fn, temp_dir)
     # Subset populations and sum adjacent columns
     admix = _subset_populations(X, npops)
-
-    if phase:
-        if chrom is None or positions is None:
-            raise ValueError("Phasing requires `chrom` and `positions` for each chunk.")
-        if ref_zarr_root is None or sample_annot_path is None:
-            raise ValueError(
-                "Phasing requires both `ref_zarr_root` and `sample_annot_path` to be set."
-            )
-
-        if hasattr(positions, "to_numpy"):
-            pos_array = positions.to_numpy()
-        elif hasattr(positions, "to_arrow"):
-            pos_array = positions.to_arrow().to_numpy()
-        else:
-            pos_array = array(positions)
-
-        config = phase_config or PhasingConfig()
-        phased = phase_admix_dask_with_index(
-            admix=admix, X_raw=X, positions=pos_array,
-            chrom=chrom, ref_zarr_root=ref_zarr_root,
-            sample_annot_path=sample_annot_path,
-            config=config, groups=phase_groups,
-            hap_index_in_zarr=hap_index_in_zarr,
-        )
-        return phased
 
     return admix, X
 

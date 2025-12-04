@@ -4,9 +4,11 @@ import pytest
 
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
+xr = pytest.importorskip("xarray")
 
 from rfmix_reader.io.prepare_reference import convert_vcf_to_zarr
-from rfmix_reader.readers.read_rfmix import _read_Q_noi, gpu_available, read_rfmix
+from rfmix_reader.processing.phase import phase_rfmix_chromosome_to_zarr
+from rfmix_reader.readers.read_rfmix import _read_Q_noi, gpu_available
 
 
 @pytest.mark.skipif(
@@ -36,23 +38,28 @@ def test_read_rfmix_phase_cuda(tmp_path, request):
     sample_annot.to_csv(str(sample_annot_path), sep="\t", index=False, header=False)
 
     binary_dir = tmp_path / "binary"
-    loci_df, g_anc, local_array = read_rfmix(
-        "data/chr21",
+    out_path = tmp_path / "phased_chr21.zarr"
+    ds = phase_rfmix_chromosome_to_zarr(
+        file_prefix="data/chr21",
         binary_dir=str(binary_dir),
         generate_binary=True,
-        phase=True,
-        phase_ref_zarr_root=str(ref_zarr),
-        phase_sample_annot_path=str(sample_annot_path),
+        ref_zarr_root=str(ref_zarr),
+        sample_annot_path=str(sample_annot_path),
+        output_path=str(out_path),
+        chrom="21",
     )
 
-    nloci = len(loci_df)
+    nloci = ds.dims["variant"]
     nsamples = q_df.shape[0]
     npops = len(pop_cols)
 
-    assert nloci == local_array.shape[0]
-    assert nsamples == local_array.shape[1]
-    assert npops == local_array.shape[2]
+    assert nloci == ds.local_ancestry.shape[0]
+    assert nsamples == ds.local_ancestry.shape[1]
+    assert npops == ds.local_ancestry.shape[2]
 
-    sample_slice = local_array[: min(10, nloci), 0, :].compute()
+    reopened = xr.open_zarr(out_path)
+    sample_slice = reopened.local_ancestry.isel(sample=0).isel(
+        variant=slice(0, min(10, nloci))
+    ).data.compute()
     assert np.isfinite(sample_slice).all()
     assert set(np.unique(sample_slice)).issubset({0, 1, 2})

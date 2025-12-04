@@ -5,7 +5,7 @@ from os import makedirs
 from pathlib import Path
 from re import search as rsearch
 from numpy import float32, array
-from typing import Callable, List
+from typing import Callable, List, Optional
 from multiprocessing import Pool, cpu_count
 from subprocess import run, CalledProcessError
 from os.path import basename, dirname, join, exists
@@ -41,6 +41,93 @@ def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List[str]:
         if pbar:
             pbar.update(1)
     return data
+
+
+def _normalize_chrom_label(label: str) -> str:
+    """Normalize chromosome labels by stripping a ``chr`` prefix and lowering."""
+
+    label = label.lower()
+    return label[3:] if label.startswith("chr") else label
+
+
+def _extract_chrom_from_path(path: str) -> Optional[str]:
+    """Best-effort extraction of a chromosome label from a file path."""
+
+    base = basename(path).lower()
+    match = rsearch(r"chr([a-z0-9]+)", base)
+    if match:
+        return match.group(1)
+
+    fallback = rsearch(r"(?:[_\.])([0-9xy]+)(?:[^a-z0-9]|$)", base)
+    if fallback:
+        return fallback.group(1)
+
+    return None
+
+
+def filter_file_maps_by_chrom(
+    file_maps: List[dict], chrom: Optional[str], *, kind: str = "dataset",
+) -> List[dict]:
+    """
+    Filter file maps produced by :func:`get_prefixes` to a single chromosome.
+
+    Parameters
+    ----------
+    file_maps
+        List of dictionaries mapping suffixes to file paths.
+    chrom
+        Target chromosome label. When :data:`None`, the input is returned
+        unchanged.
+    kind
+        Label used in error messages to clarify what is being filtered.
+    """
+
+    if chrom is None:
+        return file_maps
+
+    target = _normalize_chrom_label(str(chrom))
+    filtered: List[dict] = []
+
+    for fmap in file_maps:
+        paths = list(fmap.values())
+        chrom_label = _extract_chrom_from_path(paths[0]) if paths else None
+        if chrom_label is None:
+            continue
+        if _normalize_chrom_label(chrom_label) == target:
+            filtered.append(fmap)
+
+    if not filtered:
+        raise FileNotFoundError(
+            f"No {kind} files found for chromosome '{chrom}'."
+        )
+
+    return filtered
+
+
+def filter_paths_by_chrom(
+    paths: List[str], chrom: Optional[str], *, kind: str = "VCF"
+) -> List[str]:
+    """Filter a list of file paths down to those matching ``chrom``."""
+
+    if chrom is None:
+        return paths
+
+    target = _normalize_chrom_label(str(chrom))
+    filtered: List[str] = []
+
+    for path in paths:
+        chrom_label = _extract_chrom_from_path(path)
+        if chrom_label is None:
+            continue
+        if _normalize_chrom_label(chrom_label) == target:
+            filtered.append(path)
+
+    if not filtered:
+        raise FileNotFoundError(
+            f"No {kind} files found for chromosome '{chrom}'."
+        )
+
+    return filtered
 
 
 def set_gpu_environment():

@@ -83,12 +83,13 @@ End-to-end setup::
   prepare-reference refs/ 1kg_chr20.vcf.gz 1kg_chr21.vcf.gz \
     --chunk-length 50000 --samples-chunk-size 512
 
-  # pass the store + annotations into read_rfmix phasing
-  read_rfmix(
-      "../examples/two_populations/out/",
-      phase=True,
-      phase_ref_zarr_root="refs",
-      phase_sample_annot_path="sample_annotations.tsv",
+  # phase per chromosome after reading RFMix outputs
+  phase_rfmix_chromosome_to_zarr(
+      file_prefix="../examples/two_populations/out/",
+      ref_zarr_root="refs",
+      sample_annot_path="sample_annotations.tsv",
+      output_path="./phased_chr21.zarr",
+      chrom="21",
   )
 ** Reading RFMix output
 =read_rfmix= combines the loci metadata, chromosome-level global ancestry
@@ -101,15 +102,19 @@ will transparently build the binaries in the background.
       binary_dir="../examples/two_populations/out/binary_files",
   )
 
-To phase-correct local ancestry before stacking across chromosomes, pass
-=phase=True= with the required reference inputs:
+Pass ``chrom`` if you only want to read one chromosome; phasing is now handled
+by :func:`phase_rfmix_chromosome_to_zarr` and
+:func:`merge_phased_zarrs` in ``rfmix_reader.processing.phase``.
 
 #+begin_src python :results output
-  loci_df, g_anc, admix = read_rfmix(
-      "../examples/two_populations/out/",
-      phase=True,
-      phase_vcf_path="/path/to/reference.vcf.gz",
-      phase_sample_annot_path="/path/to/sample_annot.tsv",
+  from rfmix_reader.processing.phase import phase_rfmix_chromosome_to_zarr
+
+  ds = phase_rfmix_chromosome_to_zarr(
+      file_prefix="../examples/two_populations/out/",
+      ref_zarr_root="./reference_zarr",
+      sample_annot_path="sample_annotations.tsv",
+      output_path="./phased_chr21.zarr",
+      chrom="21",
   )
 #+end_src
 
