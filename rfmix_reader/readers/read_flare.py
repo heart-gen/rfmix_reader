@@ -445,3 +445,14 @@ def _types(fn: str) -> dict:
         header.update(df.dtypes[1:].to_dict())
 
     return header
+
+
+# Convenience: expose helpers on the main reader function for easy access
+# in downstream code and tests. This mirrors patterns used in other
+# readers within the package.
+read_flare._parse_ancestry_header = _parse_ancestry_header
+read_flare._load_vcf_info = _load_vcf_info
+read_flare._read_loci = _read_loci
+read_flare._read_anc = _read_anc
+read_flare._load_haplotypes = _load_haplotypes
+read_flare.get_prefixes = get_prefixes

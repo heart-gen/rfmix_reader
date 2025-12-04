@@ -402,3 +402,15 @@ def _types(fn: str) -> dict:
     # Update the header dictionary with the data types of the remaining columns
     header.update(df.dtypes[1:].to_dict())
     return header
+
+
+# Convenience: expose helper utilities on the main reader function to make
+# them easy to reach for tests and advanced users who rely on the original
+# script-style API.
+read_rfmix._read_tsv = _read_tsv
+read_rfmix._read_csv = _read_csv
+read_rfmix._read_Q = _read_Q
+read_rfmix._read_Q_noi = _read_Q_noi
+read_rfmix._subset_populations = _subset_populations
+read_rfmix._read_fb = _read_fb
+read_rfmix.BinaryFileNotFoundError = BinaryFileNotFoundError
