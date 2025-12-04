@@ -31,9 +31,9 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
+import xarray as xr
 import dask.array as da
 from dask.array import Array as DaskArray
-import xarray as xr
 
 ArrayLike = np.ndarray
 logger = logging.getLogger(__name__)
@@ -997,12 +997,8 @@ def phase_admix_dask_with_index(
 
 
 def phase_rfmix_chromosome_to_zarr(
-    file_prefix: str,
-    ref_zarr_root: str,
-    sample_annot_path: str,
-    output_path: str,
-    *,
-    chrom: Optional[str] = None,
+    file_prefix: str, ref_zarr_root: str, sample_annot_path: str,
+    output_path: str, *, chrom: Optional[str] = None,
     groups: Optional[list[str]] = None,
     config: Optional[PhasingConfig] = None,
     hap_index_in_zarr: int = 0,
@@ -1052,7 +1048,6 @@ def phase_rfmix_chromosome_to_zarr(
         Dataset containing a ``local_ancestry`` variable with dimensions
         ``(variant, sample, ancestry)`` written to ``output_path``.
     """
-
     from ..readers.read_rfmix import read_rfmix
 
     config = config or PhasingConfig()
@@ -1132,7 +1127,6 @@ def merge_phased_zarrs(
     xarray.Dataset
         Combined dataset written to ``output_path``.
     """
-
     datasets = [xr.open_zarr(Path(p)) for p in chrom_zarr_paths]
 
     if not datasets:
