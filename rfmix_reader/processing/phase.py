@@ -861,7 +861,7 @@ def phase_admix_sample_from_zarr_with_index(
     sample_idx: int, n_samples: int, positions: np.ndarray,  # (L,)
     chrom: str, ref_zarr_root: str, sample_annot_path: str,
     config: PhasingConfig, groups: Optional[list[str]] = None,
-    hap_index_in_zarr: int = 0,
+    hap_index_in_zarr: int = 0, refs: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """
     Phase-correct local ancestry for one sample using RFMix + VCF-Zarr references.
@@ -871,6 +871,9 @@ def phase_admix_sample_from_zarr_with_index(
     1. Use ``X_raw`` to build hap0/hap1 ancestry labels.
     2. Run gnomix-style phasing via :func:`phase_local_ancestry_sample_from_zarr`.
     3. Recombine corrected hap0/hap1 into 0/1/2 counts.
+
+    If ``refs`` is provided, precomputed reference haplotypes are reused and the
+    Zarr loading step is skipped.
 
     Returns
     -------
@@ -889,17 +892,28 @@ def phase_admix_sample_from_zarr_with_index(
     if hap0.shape[0] != L:
         raise ValueError("Length of hap0/hap1 does not match admix_sample.")
 
-    hap0_corr, hap1_corr, _match_stats = phase_local_ancestry_sample_from_zarr(
-        hap0=hap0,
-        hap1=hap1,
-        positions=positions,
-        chrom=chrom,
-        ref_zarr_root=ref_zarr_root,
-        sample_annot_path=sample_annot_path,
-        groups=groups,
-        config=config,
-        hap_index_in_zarr=hap_index_in_zarr,
-    )
+    if refs is None:
+        hap0_corr, hap1_corr, _match_stats = phase_local_ancestry_sample_from_zarr(
+            hap0=hap0,
+            hap1=hap1,
+            positions=positions,
+            chrom=chrom,
+            ref_zarr_root=ref_zarr_root,
+            sample_annot_path=sample_annot_path,
+            groups=groups,
+            config=config,
+            hap_index_in_zarr=hap_index_in_zarr,
+        )
+    else:
+        if refs.shape[1] != L:
+            raise ValueError("Reference haplotypes do not match admix_sample length.")
+
+        hap0_corr, hap1_corr = phase_local_ancestry_sample(
+            hap0=hap0,
+            hap1=hap1,
+            refs=refs,
+            config=config,
+        )
 
     admix_corr = _combine_haps_to_counts(hap0_corr, hap1_corr, n_anc=A)
     return admix_corr
@@ -917,7 +931,8 @@ def phase_admix_dask_with_index(
     Phase-correct all samples in a ``(L, S, A)`` admix Dask array.
 
     Rechunks so each block covers one sample, then applies
-    :func:`phase_admix_sample_from_zarr_with_index` via ``map_blocks``.
+    :func:`phase_admix_sample_from_zarr_with_index` via ``map_blocks``. Reference
+    haplotypes are constructed once and reused across all samples.
 
     Returns
     -------
@@ -930,6 +945,21 @@ def phase_admix_dask_with_index(
     n_loci, n_samples, n_anc = admix.shape
     admix_single_sample = admix.rechunk((n_loci, 1, n_anc))
     positions = np.asarray(positions, dtype=np.int64)
+
+    refs, group_labels, _match_stats = build_reference_haplotypes_from_zarr(
+        zarr_root=ref_zarr_root,
+        annot_path=sample_annot_path,
+        chrom=chrom,
+        positions=positions,
+        groups=groups,
+        hap_index_in_zarr=hap_index_in_zarr,
+    )
+
+    if config.verbose:
+        logger.info(
+            "[phase_admix_dask_with_index] Using groups: %s",
+            ", ".join(group_labels),
+        )
 
     def _phase_block(admix_block: np.ndarray, block_info=None) -> np.ndarray:
         """Phase a single Dask block."""
@@ -948,7 +978,7 @@ def phase_admix_dask_with_index(
                 admix_sample=admix_block[:, offset, :], X_raw=X_raw,
                 sample_idx=sample_idx, n_samples=n_samples, positions=positions,
                 chrom=chrom, ref_zarr_root=ref_zarr_root,
-                sample_annot_path=sample_annot_path, config=config,
+                sample_annot_path=sample_annot_path, config=config, refs=refs,
                 groups=groups, hap_index_in_zarr=hap_index_in_zarr,
             )
 
