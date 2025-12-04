@@ -801,6 +801,14 @@ def phase_local_ancestry_sample_from_zarr(
     return hap0_corr, hap1_corr, match_stats
 
 
+# Convenience aliases to satisfy existing tests; prefer the underscored
+# implementations above for non-test usage.
+find_heterozygous_blocks = _find_heterozygous_blocks
+assign_reference_per_window = _assign_reference_per_window
+build_phase_track_from_ref = _build_phase_track_from_ref
+apply_phase_track = _apply_phase_track
+
+
 def count_switch_errors(
     M_pred: ArrayLike, P_pred: ArrayLike, M_true: ArrayLike,
     P_true: ArrayLike,
