@@ -5,6 +5,8 @@ from .imputation import interpolate_array
 from .phase import (
     PhasingConfig,
     phase_admix_dask_with_index,
+    phase_rfmix_chromosome_to_zarr,
+    merge_phased_zarrs,
 )
 
 __all__ = [
@@ -13,4 +15,6 @@ __all__ = [
     "PhasingConfig",
     "interpolate_array",
     "phase_admix_dask_with_index",
+    "phase_rfmix_chromosome_to_zarr",
+    "merge_phased_zarrs",
 ]

@@ -8,11 +8,16 @@ from numpy import int32
 from dask import delayed
 from os.path import exists
 from re import match as rmatch
-from typing import List, Tuple, Iterator
+from typing import List, Tuple, Iterator, Optional
 from collections import OrderedDict as odict
 from dask.array import Array, concatenate, from_delayed, stack
 
-from ..utils import _read_file, get_prefixes, set_gpu_environment
+from ..utils import (
+    _read_file,
+    filter_file_maps_by_chrom,
+    get_prefixes,
+    set_gpu_environment,
+)
 
 try:
     from torch.cuda import is_available as gpu_available
@@ -30,6 +35,7 @@ else:
 
 def read_flare(
         file_prefix: str, chunk_size: int32 = 1_000_000, verbose: bool = True,
+        chrom: Optional[str] = None,
 ) -> Tuple[DataFrame, DataFrame, Array]:
     """
     Read Flare files into data frames and a Dask array.
@@ -44,6 +50,9 @@ def read_flare(
     verbose : bool, optional
         :const:`True` for progress information; :const:`False` otherwise.
         Default:`True`.
+    chrom : str, optional
+        Restrict parsing to a single chromosome (matching with or without a
+        ``chr`` prefix).
 
     Returns
     -------
@@ -69,7 +78,9 @@ def read_flare(
         set_gpu_environment()
 
     # Get file prefixes
-    fn = get_prefixes(file_prefix, "flare", verbose)
+    fn = filter_file_maps_by_chrom(
+        get_prefixes(file_prefix, "flare", verbose), chrom, kind="FLARE"
+    )
 
     # Load loci information
     pbar = tqdm(desc="Mapping loci information", total=len(fn),

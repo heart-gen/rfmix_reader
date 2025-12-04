@@ -62,21 +62,8 @@ loci_df, g_anc, local_array = read_rfmix(file_path)
 print(loci_df.head())
 print(g_anc.head())
 print(local_array.shape)
-
-# Optionally phase each chromosome chunk using reference data
-# (requires a bgzipped, indexed VCF plus sample annotations)
-# phased_loci, phased_g_anc, phased_admix = read_rfmix(
-#     file_path,
-#     phase=True,
-#     phase_vcf_path="/path/to/reference.vcf.gz",
-#     phase_sample_annot_path="/path/to/sample_annot.tsv",
-# )
-#
-# Tip: when using ``phase=True``, convert the reference VCF/BCF files to
-# Zarr ahead of time with the ``prepare-reference`` CLI for faster
-# lookups. The conversion is a one-time cost (similar to ``create-binaries``):
-#
-# prepare-reference ./reference_zarr/ /data/chr*.vcf.gz
+"""See the phasing section below for how to phase per-chromosome outputs and
+write them to Zarr with `phase_rfmix_chromosome_to_zarr`."""
 ```
 
 ---
@@ -118,8 +105,8 @@ create_binaries("two_pops/out/", binary_dir="./binary_files")
 ### Preparing Reference Data for Phasing
 
 Use `prepare-reference` to convert bgzipped, indexed reference VCF/BCF files
-into per-chromosome VCF-Zarr stores that `phase=True` consumes during
-phasing. The command writes one `<chrom>.zarr` directory per input file.
+into per-chromosome VCF-Zarr stores that the phasing pipeline consumes.
+The command writes one `<chrom>.zarr` directory per input file.
 
 ```
 prepare-reference -h
@@ -170,11 +157,12 @@ prepare-reference refs/ 1kg_chr20.vcf.gz 1kg_chr21.vcf.gz \
   --chunk-length 50000 --samples-chunk-size 512
 
 # Use the reference store + annotations during phasing
-read_rfmix(
-    "two_pops/out/",
-    phase=True,
-    phase_ref_zarr_root="refs",
-    phase_sample_annot_path="sample_annotations.tsv",
+phase_rfmix_chromosome_to_zarr(
+    file_prefix="two_pops/out/",
+    ref_zarr_root="refs",
+    sample_annot_path="sample_annotations.tsv",
+    output_path="./phased_chr21.zarr",
+    chrom="21",
 )
 ```
 
@@ -265,86 +253,71 @@ ancestry dimension.
 
 ### Phasing workflow (`rfmix_reader.processing.phase`)
 
-`rfmix_reader.processing.phase` implements gnomix-style tail-flip corrections for
-local ancestry haplotypes. The workflow is orchestrated through the
-`phase_admix_dask_with_index` pipeline (used internally by `read_rfmix`) and is
-configurable via `PhasingConfig`.
-
-#### What `read_rfmix` does when `phase=True`
-
-* Validates required phasing inputs (reference Zarr root + sample annotations)
-  and builds a default `PhasingConfig` if one is not provided.
-* Loads unphased per-chromosome local ancestry (`fb.tsv`) along with the raw
-  RFMix matrix needed to reconstruct haplotypes.
-* Calls `phase_admix_dask_with_index` to rechunk by sample, reconstruct
-  haplotype-level ancestry from the raw matrix, and apply tail-flip corrections
-  against reference haplotypes from VCF-Zarr stores.
-* Returns a phased `(loci_df, g_anc, phased_admix)` tuple where `phased_admix`
-  is a Dask array of shape `(L, S, A)`.
+`rfmix_reader.processing.phase` implements gnomix-style tail-flip corrections
+for local ancestry haplotypes. Phasing now lives outside `read_rfmix` so you can
+process each chromosome independently and write outputs directly to Zarr.
 
 #### Required reference inputs
 
-* **VCF-Zarr reference** (`phase_ref_zarr_root` or deprecated `phase_vcf_path`):
-  either a single `*.zarr` store or a directory containing per-chromosome
-  stores (e.g., `1.zarr`, `chr1.zarr`).
-* **Sample annotations** (`phase_sample_annot_path`): two-column file mapping
+* **VCF-Zarr reference** (`ref_zarr_root`): either a single `*.zarr` store or a
+  directory containing per-chromosome stores (e.g., `1.zarr`, `chr1.zarr`).
+* **Sample annotations** (`sample_annot_path`): two-column file mapping
   `sample_id` to `group` (ancestry label). One representative sample per group
   is pulled to build reference haplotypes.
-* **Group filtering (optional)** (`phase_groups`): restrict phasing to a subset
-  of group labels. Defaults to the ancestry columns inferred from `rfmix.Q`.
 
-#### Outputs and diagnostics
+#### Per-chromosome pipeline
 
-* `phased_admix`: phase-corrected ancestry counts (`int8`) aligned to the input
-  loci; shape `(L, S, A)`.
-* `PhasingConfig`: tune window size, heterozygous block length, mismatch
-  tolerance, and verbosity for debugging per-sample/reference matches.
-* Reference matching statistics (counts of matched/missing loci per chromosome)
-  are logged from `phase.py` when mismatches exceed the configurable threshold.
-
-#### Runnable examples
+1. (Optional) generate RFMix binary caches with `create_binaries`.
+2. Call `phase_rfmix_chromosome_to_zarr` for each chromosome you want to
+   process.
+3. Optionally concatenate those per-chromosome Zarr stores with
+   `merge_phased_zarrs`.
 
 ```python
-from rfmix_reader import read_rfmix, PhasingConfig
-
-# Basic phasing with default parameters
-loci_df, g_anc, phased_admix = read_rfmix(
-    "examples/two_populations/out/",
-    phase=True,
-    phase_ref_zarr_root="/refs/1kg_chr_zarr/",  # directory containing <chrom>.zarr
-    phase_sample_annot_path="/refs/1kg_annotations.tsv",
+from rfmix_reader.processing.phase import (
+    PhasingConfig,
+    merge_phased_zarrs,
+    phase_rfmix_chromosome_to_zarr,
 )
 
-# Custom phasing options and group filtering
-config = PhasingConfig(window_size=100, min_block_len=10, max_mismatch_frac=0.3)
-loci_df, g_anc, phased_admix = read_rfmix(
-    "examples/three_populations/out/",
-    phase=True,
-    phase_ref_zarr_root="/refs/1kg_chr_zarr/",
-    phase_sample_annot_path="/refs/1kg_annotations.tsv",
-    phase_groups=["AFR", "EUR", "NAT"],
-    phase_config=config,
-    phase_hap_index_in_vcf=1,  # use the second haploid allele in the VCF-Zarr
+# Phase chromosome 21 and write to Zarr
+dataset = phase_rfmix_chromosome_to_zarr(
+    file_prefix="examples/two_populations/out/",
+    ref_zarr_root="/refs/1kg_chr_zarr/",
+    sample_annot_path="/refs/1kg_annotations.tsv",
+    output_path="/tmp/phased_chr21.zarr",
+    chrom="21",
 )
 
-# Direct access to the phasing primitives
-from rfmix_reader.processing.phase import phase_admix_dask_with_index
+# Merge multiple per-chromosome Zarr stores
+merged = merge_phased_zarrs(
+    ["/tmp/phased_chr21.zarr", "/tmp/phased_chr22.zarr"],
+    output_path="/tmp/phased_all.zarr",
+)
+```
 
-# Start from unphased outputs (return_original=True) and phase manually
+If you need fine-grained control, you can still start from unphased outputs and
+call `phase_admix_dask_with_index` directly:
+
+```python
+from rfmix_reader import read_rfmix
+from rfmix_reader.processing.phase import PhasingConfig, phase_admix_dask_with_index
+
 loci_df, g_anc, admix, X_raw = read_rfmix(
     "examples/two_populations/out/",
     return_original=True,
+    chrom="21",
 )
 
+config = PhasingConfig(window_size=100, min_block_len=10, max_mismatch_frac=0.3)
 phased = phase_admix_dask_with_index(
-    admix=admix,  # (L, S, A) Dask array of summed counts
-    X_raw=X_raw,  # raw RFMix matrix for reconstructing hap0/hap1
+    admix=admix,
+    X_raw=X_raw,
     positions=loci_df.physical_position.to_numpy(),
     chrom=str(loci_df.chromosome.iloc[0]),
     ref_zarr_root="/refs/1kg_chr_zarr/",
     sample_annot_path="/refs/1kg_annotations.tsv",
     config=config,
-    groups=["AFR", "EUR"],
 )
 ```
 

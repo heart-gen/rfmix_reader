@@ -86,12 +86,13 @@ To build a phasing-ready reference set end-to-end::
    prepare-reference refs/ 1kg_chr20.vcf.gz 1kg_chr21.vcf.gz \
      --chunk-length 50000 --samples-chunk-size 512
 
-   # pass the store + annotations into read_rfmix phasing
-   read_rfmix(
-       "../examples/two_populations/out/",
-       phase=True,
-       phase_ref_zarr_root="refs",
-       phase_sample_annot_path="sample_annotations.tsv",
+   # phase each chromosome and write to Zarr
+   phase_rfmix_chromosome_to_zarr(
+       file_prefix="../examples/two_populations/out/",
+       ref_zarr_root="refs",
+       sample_annot_path="sample_annotations.tsv",
+       output_path="./phased_chr21.zarr",
+       chrom="21",
    )
 
 .. note::
@@ -129,34 +130,50 @@ RFMix output directory.
        binary_dir="../examples/two_populations/out/binary_files",
    )
 
-To phase-correct local ancestry before stacking across chromosomes, pass
-``phase=True`` along with the required reference inputs:
+To restrict the reader to a single chromosome (instead of concatenating
+everything under ``file_prefix``), pass the ``chrom`` keyword:
 
 .. code:: python
 
    loci_df, g_anc, admix = read_rfmix(
        "../examples/two_populations/out/",
-       phase=True,
-       phase_vcf_path="/path/to/reference.vcf.gz",
-       phase_sample_annot_path="/path/to/sample_annot.tsv",
+       chrom="21",
    )
 
-When ``phase=True``, pre-convert the reference VCF/BCF files into Zarr
-stores with the ``prepare-reference`` CLI to avoid repeated on-the-fly
-decoding. The conversion step is relatively slow but only needs to be
-run once (like ``create-binaries``):
+Phasing now lives outside :func:`read_rfmix`. Use
+:func:`rfmix_reader.processing.phase.phase_rfmix_chromosome_to_zarr` to
+phase one chromosome at a time and
+:func:`rfmix_reader.processing.phase.merge_phased_zarrs` to stitch the
+results together:
 
-.. code:: shell
+.. code:: python
 
-   prepare-reference ./reference_zarr/ /data/chr*.vcf.gz
+   from rfmix_reader.processing.phase import (
+       phase_rfmix_chromosome_to_zarr,
+       merge_phased_zarrs,
+   )
+
+   # Phase a single chromosome into Zarr
+   ds = phase_rfmix_chromosome_to_zarr(
+       file_prefix="../examples/two_populations/out/",
+       ref_zarr_root="./reference_zarr",
+       sample_annot_path="sample_annotations.tsv",
+       output_path="./phased_chr21.zarr",
+       chrom="21",
+   )
+
+   # Merge per-chromosome Zarr outputs later on
+   merged = merge_phased_zarrs(
+       ["./phased_chr21.zarr", "./phased_chr22.zarr"],
+       output_path="./phased_all.zarr",
+   )
 
 Step-by-step phasing tutorial
 -----------------------------
 
 The phasing helpers wrap the RFMix VCF and sample annotations so you can
-align haplotypes across chromosomes before downstream analysis. Follow
-the checklist below when working with RFMix outputs. FLARE outputs are
-already phased and should **skip** this entire section.
+align haplotypes across chromosomes before downstream analysis. FLARE
+outputs are already phased and should **skip** this entire section.
 
 1. **Prepare phasing inputs**
 
@@ -164,58 +181,35 @@ already phased and should **skip** this entire section.
      in ``binary_dir``. If not, generate them with
      ``rfmix_reader.create_binaries`` or the ``create-binaries`` CLI
      shown above.
-   - Collect the phased reference VCF that matches the cohort. The path
-     to this file is passed via ``phase_vcf_path``.
+   - Convert phased reference VCFs to Zarr with ``prepare-reference`` to
+     enable fast random access during phasing.
    - Provide the sample annotation TSV expected by RFMix, typically
-     containing ``ID`` and population columns. Point
-     ``phase_sample_annot_path`` to this file.
+     containing ``ID`` and population columns.
 
-2. **Invoke phasing**
+2. **Run the per-chromosome phasing pipeline**
 
-   - **Python API:** set ``phase=True`` when calling ``read_rfmix`` and
-     pass both file paths.
+   .. code:: python
 
-     .. code:: python
+      from rfmix_reader.processing.phase import phase_rfmix_chromosome_to_zarr
 
-        loci_df, g_anc, admix = read_rfmix(
-            "../examples/two_populations/out/",
-            binary_dir="../examples/two_populations/out/binary_files",
-            phase=True,
-            phase_vcf_path="/path/to/reference.vcf.gz",
-            phase_sample_annot_path="/path/to/sample_annot.tsv",
-        )
+      ds = phase_rfmix_chromosome_to_zarr(
+          file_prefix="../examples/two_populations/out/",
+          ref_zarr_root="./reference_zarr",
+          sample_annot_path="sample_annotations.tsv",
+          output_path="./phased_chr21.zarr",
+          chrom="21",
+      )
 
-   - **Command-line:** use the CLI entry point to phase during binary
-     creation. The arguments mirror the Python call.
+3. **Merge Zarr stores (optional)**
 
-     .. code:: shell
+   .. code:: python
 
-        create-binaries \
-            --binary_dir ../examples/two_populations/out/binary_files \
-            --phase \
-            --phase_vcf_path /path/to/reference.vcf.gz \
-            --phase_sample_annot_path /path/to/sample_annot.tsv \
-            ../examples/two_populations/out/
+      from rfmix_reader.processing.phase import merge_phased_zarrs
 
-3. **Interpret the phased output**
-
-   - ``loci_df`` is unchanged aside from any chromosome renaming you
-     might perform.
-   - ``g_anc`` remains the global ancestry table but now aligns with the
-     phased haplotypes produced per chromosome.
-   - ``admix`` stores phase-corrected local ancestry calls. The
-     population-major column ordering is preserved, so downstream code
-     that expects ``(sample, population)`` pairing continues to work.
-
-4. **Troubleshooting tips**
-
-   - If the phased VCF lacks contig lengths or sample names differ from
-     the RFMix annotations, fix those before retrying. Alignment is
-     strict because the phasing step matches haplotype labels between the
-     reference VCF and the RFMix outputs.
-
-``g_anc`` is the canonical variable name returned by ``read_rfmix`` and
-is used throughout the visualization helpers described later.
+      merged = merge_phased_zarrs(
+          ["./phased_chr21.zarr", "./phased_chr22.zarr"],
+          output_path="./phased_all.zarr",
+      )
 
 Reading FLARE output
 --------------------
