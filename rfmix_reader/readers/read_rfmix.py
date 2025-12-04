@@ -117,6 +117,7 @@ def read_rfmix(
         bi["i"] += index_offset
         index_offset += bi.shape[0]
         loci_by_fn[fn[i]["fb.tsv"]] = bi
+
     loci_df = concat(loci_dfs, axis=0, ignore_index=True)
 
     # Load global ancestry per chromosome
@@ -330,8 +331,7 @@ def _read_fb(
 
 def _subset_populations(X: Array, npops: int) -> Array:
     """
-    Subset and process the input array X based on populations, and record which
-    original columns correspond to hap0 / hap1 for each sample.
+    Subset and process the input array X based on populations.
 
     Parameters:
     X (dask.array): Input array where columns represent data for different populations.
@@ -340,9 +340,6 @@ def _subset_populations(X: Array, npops: int) -> Array:
     Returns:
     admix_summed : dask.array.Array
         Processed array with adjacent columns summed for each population subset.
-
-    hap_index : np.ndarray
-        Integer array of shape (n_samples, npops, 2) giving , for each (sample, ancestry, hap), the original column index in X. This is used to reconstruct hap0/hap1 mappings.
     """
     import numpy as np
     ncols = X.shape[1]
