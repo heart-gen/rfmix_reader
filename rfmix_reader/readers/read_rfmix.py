@@ -13,9 +13,9 @@ from typing import Optional, List, Tuple, Dict
 from dask.array import Array, concatenate, stack
 from os.path import basename, dirname, join, exists
 
+from .fb_read import read_fb
 from ..io import BinaryFileNotFoundError, Chunk
 from ..processing import PhasingConfig, phase_admix_dask_with_index
-from .fb_read import read_fb
 from ..utils import _read_file, create_binaries, get_prefixes, set_gpu_environment
 
 try:
@@ -42,7 +42,7 @@ def read_rfmix(
         phase_sample_annot_path: Optional[str] = None,
         phase_groups: Optional[List[str]] = None,
         phase_config: Optional[PhasingConfig] = None,
-        phase_hap_index_in_vcf: int = 0,
+        phase_hap_index_in_zarr: int = 0,
 ) -> (
     Tuple[DataFrame, DataFrame, Array]
     | Tuple[DataFrame, DataFrame, Array, Array]
@@ -87,7 +87,7 @@ def read_rfmix(
         :data:`None`.
     phase_config : PhasingConfig, optional
         Optional configuration object for phasing parameters.
-    phase_hap_index_in_vcf : int, optional
+    phase_hap_index_in_zarr : int, optional
         Which haploid allele to pull from the reference VCF (``0`` or ``1``).
 
     Returns
@@ -179,7 +179,7 @@ def read_rfmix(
             sample_annot_path=phase_sample_annot_path,
             phase_groups=phase_groups,
             phase_config=phase_config,
-            hap_index_in_vcf=phase_hap_index_in_vcf,
+            hap_index_in_zarr=phase_hap_index_in_zarr,
         ),
         pbar,
     )
@@ -214,14 +214,14 @@ def _read_tsv(fn: str) -> DataFrame:
     DataFrame: DataFrame containing specified columns from the TSV file.
     """
     header = {"chromosome": CategoricalDtype(), "physical_position": int32}
-    try: 
-        if gpu_available(): 
+    try:
+        if gpu_available():
             df = read_csv(fn, sep="\t", header=0, usecols=list(header.keys()),
                           dtype=header, comment="#", compression="infer")
         else:
             chunks = read_csv(
                 fn, sep=r"\s+", header=0, usecols=list(header.keys()),
-                dtype=header, comment="#", compression="infer", 
+                dtype=header, comment="#", compression="infer",
                 chunksize=100_000, # Low memory chunks
             )
             # Concatenate chunks into single DataFrame
@@ -339,7 +339,7 @@ def _read_fb(
     sample_annot_path: Optional[str] = None,
     phase_groups: Optional[List[str]] = None,
     phase_config: Optional[PhasingConfig] = None,
-    hap_index_in_vcf: int = 0,
+    hap_index_in_zarr: int = 0,
 ) -> Array | Tuple[Array, Array]:
     """
     Read the forward-backward matrix from a file as a Dask Array.
@@ -362,7 +362,7 @@ def _read_fb(
         Defaults to all ancestry groups present in the ``rfmix.Q`` files when
         not provided.
     phase_config (PhasingConfig, optional): Configuration options for phasing.
-    hap_index_in_vcf (int, optional): Which haploid allele to read from the
+    hap_index_in_zarr (int, optional): Which haploid allele to read from the
         reference VCF during phasing.
 
     Returns:
@@ -406,15 +406,11 @@ def _read_fb(
 
         config = phase_config or PhasingConfig()
         phased = phase_admix_dask_with_index(
-            admix=admix,
-            X_raw=X,
-            positions=pos_array,
-            chrom=chrom,
-            ref_zarr_root=ref_zarr_root,
+            admix=admix, X_raw=X, positions=pos_array,
+            chrom=chrom, ref_zarr_root=ref_zarr_root,
             sample_annot_path=sample_annot_path,
-            config=config,
-            groups=phase_groups,
-            hap_index_in_vcf=hap_index_in_vcf,
+            config=config, groups=phase_groups,
+            hap_index_in_zarr=hap_index_in_zarr,
         )
         return phased
 
