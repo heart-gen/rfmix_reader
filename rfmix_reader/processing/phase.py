@@ -927,6 +927,10 @@ def phase_admix_dask_with_index(
     if not isinstance(admix, da.Array):
         raise TypeError("admix must be a dask.array.Array")
 
+    if isinstance(X_raw, da.Array):
+        n_loci, n_cols = X_raw.shape
+        X_raw = X_raw.rechunk((n_loci, min(64, n_cols)))
+
     n_loci, n_samples, n_anc = admix.shape
     admix_single_sample = admix.rechunk((n_loci, 1, n_anc))
     positions = np.asarray(positions, dtype=np.int64)
