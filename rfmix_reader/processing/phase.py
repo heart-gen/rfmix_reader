@@ -35,8 +35,49 @@ import xarray as xr
 import dask.array as da
 from dask.array import Array as DaskArray
 
+try:  # Optional GPU support
+    import cupy as cp
+except Exception:  # pragma: no cover - cupy is optional and may not be installed
+    cp = None
+
+try:  # Optional GPU DataFrame support
+    import cudf
+except Exception:  # pragma: no cover - cudf is optional and may not be installed
+    cudf = None
+
 ArrayLike = np.ndarray
 logger = logging.getLogger(__name__)
+
+
+def _get_array_module(*arrays):
+    """Return cupy or numpy based on the input arrays."""
+
+    if cp is not None:
+        for arr in arrays:
+            if isinstance(arr, cp.ndarray):
+                return cp
+    return np
+
+
+def _to_pandas_dataframe(obj):
+    """Convert cudf.DataFrame to pandas for consistent downstream handling."""
+
+    if cudf is not None and isinstance(obj, cudf.DataFrame):
+        return obj.to_pandas()
+    return obj
+
+
+def _series_to_array(series):
+    """Convert pandas or cuDF Series to a NumPy or CuPy array."""
+
+    if cudf is not None and isinstance(series, cudf.Series):
+        if hasattr(series, "to_cupy"):
+            try:
+                return series.to_cupy()
+            except Exception:
+                pass
+        return series.to_numpy()
+    return series.to_numpy()
 
 
 @dataclass
@@ -94,8 +135,10 @@ def _find_heterozygous_blocks(
     blocks : list of slice
         List of index slices (start:end) for heterozygous regions.
     """
-    hap0 = np.asarray(hap0)
-    hap1 = np.asarray(hap1)
+    xp = _get_array_module(hap0, hap1)
+
+    hap0 = xp.asarray(hap0)
+    hap1 = xp.asarray(hap1)
 
     if hap0.shape != hap1.shape:
         raise ValueError("hap0 and hap1 must have the same shape.")
@@ -107,8 +150,8 @@ def _find_heterozygous_blocks(
     if not np.any(het):
         return []
 
-    boundaries = np.concatenate(
-        ([0], np.where(het[:-1] != het[1:])[0] + 1, [len(het)])
+    boundaries = xp.concatenate(
+        ([0], xp.where(het[:-1] != het[1:])[0] + 1, [len(het)])
     )
 
     runs: List[Tuple[int, int]] = []
@@ -191,8 +234,10 @@ def _assign_reference_per_window(
         * 0 : ambiguous / low-confidence
         * 1..R : index (1-based) of the best-matching reference row
     """
-    hap = np.asarray(hap)
-    refs = np.asarray(refs)
+    xp = _get_array_module(hap, refs)
+
+    hap = xp.asarray(hap)
+    refs = xp.asarray(refs)
 
     if refs.ndim != 2:
         raise ValueError("refs must be 2D with shape (n_ref, L).")
@@ -202,7 +247,7 @@ def _assign_reference_per_window(
         raise ValueError("hap and refs must have the same length.")
 
     wslices = _window_slices(L, window_size)
-    ref_track = np.zeros(len(wslices), dtype=np.int8)
+    ref_track = xp.zeros(len(wslices), dtype=np.int8)
 
     for w_idx, sl in enumerate(wslices):
         h_win = hap[sl]
@@ -210,21 +255,21 @@ def _assign_reference_per_window(
         mask_valid = r_win >= 0
 
         valid_counts = mask_valid.sum(axis=1)
-        mismatch_counts = np.sum((r_win != h_win) & mask_valid, axis=1)
+        mismatch_counts = xp.sum((r_win != h_win) & mask_valid, axis=1)
 
-        mismatches = np.full(n_ref, np.inf, dtype=float)
-        np.divide(
+        mismatches = xp.full(n_ref, xp.inf, dtype=float)
+        xp.divide(
             mismatch_counts,
             valid_counts,
             out=mismatches,
             where=valid_counts > 0,
         )
 
-        best_r = int(np.argmin(mismatches))
+        best_r = int(xp.argmin(mismatches))
         best_mism = mismatches[best_r]
 
         # Check for ties among references
-        ties = np.isclose(mismatches, best_mism)
+        ties = xp.isclose(mismatches, best_mism)
         n_ties = ties.sum()
 
         # If tie across multiple references → ambiguous
@@ -260,10 +305,12 @@ def _build_phase_track_from_ref(ref_track: np.ndarray) -> np.ndarray:
         0/1 flag per window. When this track changes (0 -> 1 or 1 -> 0),
         windows from that point onward should have M/P swapped.
     """
-    ref_track = np.asarray(ref_track)
+    xp = _get_array_module(ref_track)
+
+    ref_track = xp.asarray(ref_track)
     W = ref_track.shape[0]
 
-    phase_track = np.zeros(W, dtype=np.int8)
+    phase_track = xp.zeros(W, dtype=np.int8)
 
     last_ref: int = 0
     current_phase: int = 0
@@ -302,18 +349,20 @@ def _apply_phase_track(
     hap0_corr, hap1_corr : (L,) np.ndarray of int
         Phase-corrected haplotypes.
     """
-    hap0 = np.asarray(hap0).copy()
-    hap1 = np.asarray(hap1).copy()
-    phase_track = np.asarray(phase_track)
+    xp = _get_array_module(hap0, hap1, phase_track)
 
-    change_points = np.where(np.diff(phase_track) != 0)[0] + 1
+    hap0 = xp.asarray(hap0).copy()
+    hap1 = xp.asarray(hap1).copy()
+    phase_track = xp.asarray(phase_track)
+
+    change_points = xp.where(xp.diff(phase_track) != 0)[0] + 1
 
     if change_points.size:
         flip_positions = change_points * window_size
 
-        flip_mask = np.zeros(hap0.shape[0] + 1, dtype=bool)
+        flip_mask = xp.zeros(hap0.shape[0] + 1, dtype=bool)
         flip_mask[flip_positions] ^= True
-        flip_mask = np.logical_xor.accumulate(flip_mask)[:-1]
+        flip_mask = xp.logical_xor.accumulate(flip_mask)[:-1]
 
         tmp = hap0[flip_mask].copy()
         hap0[flip_mask] = hap1[flip_mask]
@@ -353,9 +402,11 @@ def phase_local_ancestry_sample(
     if config is None:
         config = PhasingConfig()
 
-    hap0 = np.asarray(hap0)
-    hap1 = np.asarray(hap1)
-    refs = np.asarray(refs)
+    xp = _get_array_module(hap0, hap1, refs)
+
+    hap0 = xp.asarray(hap0)
+    hap1 = xp.asarray(hap1)
+    refs = xp.asarray(refs)
 
     if refs.ndim != 2:
         raise ValueError("refs must be 2D with shape (n_ref, L).")
@@ -406,14 +457,14 @@ def phase_local_ancestry_sample(
         phase_track = _build_phase_track_from_ref(ref_track)
 
         local_L = end - start
-        local_W = int(np.ceil(local_L / config.window_size))
+        local_W = int(xp.ceil(local_L / config.window_size))
 
         if phase_track.shape[0] != local_W:
             if phase_track.shape[0] > local_W:
                 phase_track = phase_track[:local_W]
             else:
                 pad_val = int(phase_track[-1]) if phase_track.size > 0 else 0
-                phase_track = np.pad(
+                phase_track = xp.pad(
                     phase_track,
                     (0, local_W - phase_track.shape[0]),
                     constant_values=pad_val,
@@ -756,10 +807,12 @@ def count_switch_errors(
     Counts the minimal number of suffix flips needed to turn
     ``(M_pred, P_pred)`` into ``(M_true, P_true)``.
     """
-    M_pred = np.asarray(M_pred).copy()
-    P_pred = np.asarray(P_pred).copy()
-    M_true = np.asarray(M_true)
-    P_true = np.asarray(P_true)
+    xp = _get_array_module(M_pred, P_pred, M_true, P_true)
+
+    M_pred = xp.asarray(M_pred).copy()
+    P_pred = xp.asarray(P_pred).copy()
+    M_true = xp.asarray(M_true)
+    P_true = xp.asarray(P_true)
 
     if not (M_pred.shape == P_pred.shape == M_true.shape == P_true.shape):
         raise ValueError("All haplotypes must have the same shape.")
@@ -808,11 +861,14 @@ def _build_hap_labels_from_rfmix(
         H0 = X_raw[:, cols_h0].compute()
         H1 = X_raw[:, cols_h1].compute()
     else:
-        H0 = np.asarray(X_raw)[:, cols_h0]
-        H1 = np.asarray(X_raw)[:, cols_h1]
+        xp = _get_array_module(X_raw)
+        H0 = xp.asarray(X_raw)[:, cols_h0]
+        H1 = xp.asarray(X_raw)[:, cols_h1]
 
-    hap0_labels = np.argmax(H0, axis=1).astype(np.int16)
-    hap1_labels = np.argmax(H1, axis=1).astype(np.int16)
+    xp = _get_array_module(H0, H1)
+
+    hap0_labels = xp.argmax(H0, axis=1).astype(np.int16)
+    hap1_labels = xp.argmax(H1, axis=1).astype(np.int16)
 
     hap0_labels[H0.sum(axis=1) == 0] = -1
     hap1_labels[H1.sum(axis=1) == 0] = -1
@@ -835,14 +891,16 @@ def _combine_haps_to_counts(
     -------
     out : (L, n_anc) np.ndarray of int8
     """
-    hap0 = np.asarray(hap0)
-    hap1 = np.asarray(hap1)
+    xp = _get_array_module(hap0, hap1)
+
+    hap0 = xp.asarray(hap0)
+    hap1 = xp.asarray(hap1)
 
     if hap0.shape != hap1.shape:
         raise ValueError("hap0 and hap1 must have same shape.")
 
     L = hap0.shape[0]
-    out = np.zeros((L, n_anc), dtype=np.int8)
+    out = xp.zeros((L, n_anc), dtype=np.int8)
 
     idx = np.arange(L)
 
@@ -880,8 +938,10 @@ def phase_admix_sample_from_zarr_with_index(
     admix_corr : (L, A) np.ndarray of int
         Phase-corrected summed ancestry counts for this sample.
     """
-    admix_sample = np.asarray(admix_sample)
-    positions = np.asarray(positions, dtype=np.int64)
+    xp = _get_array_module(admix_sample, positions)
+
+    admix_sample = xp.asarray(admix_sample)
+    positions = xp.asarray(positions, dtype=xp.int64)
 
     L, A = admix_sample.shape
 
@@ -976,7 +1036,8 @@ def phase_admix_dask_with_index(
         sample_stop = sample_start + block_sample_size
 
         sample_indices = range(sample_start, sample_stop)
-        phased_block = np.empty_like(admix_block, dtype=np.int8)
+        xp_block = _get_array_module(admix_block)
+        phased_block = xp_block.empty_like(admix_block, dtype=np.int8)
         for offset, sample_idx in enumerate(sample_indices):
             phased_block[:, offset, :] = phase_admix_sample_from_zarr_with_index(
                 admix_sample=admix_block[:, offset, :], X_raw=X_raw,
@@ -1061,6 +1122,9 @@ def phase_rfmix_chromosome_to_zarr(
         chrom=chrom,
     )
 
+    loci_df = _to_pandas_dataframe(loci_df)
+    g_anc = _to_pandas_dataframe(g_anc)
+
     chrom_labels = loci_df["chromosome"].astype(str).unique()
     if len(chrom_labels) != 1:
         raise ValueError(
@@ -1068,7 +1132,7 @@ def phase_rfmix_chromosome_to_zarr(
         )
 
     chrom_label = str(chrom_labels[0])
-    positions = loci_df["physical_position"].to_numpy()
+    positions = _series_to_array(loci_df["physical_position"])
 
     pops = g_anc.drop(["sample_id", "chrom"], axis=1).columns.values
     sample_ids = g_anc["sample_id"].tolist()

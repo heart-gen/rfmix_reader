@@ -20,6 +20,7 @@ __all__ = [
     "CHROM_SIZES", "COORDINATES",
     "BinaryFileNotFoundError",
     "interpolate_array",
+    "phase_rfmix_chromosome_to_zarr",
     "get_pops", "get_prefixes", "create_binaries", "get_sample_names",
     "set_gpu_environment", "delete_files_or_directories",
     "save_multi_format", "generate_tagore_bed",
@@ -40,6 +41,10 @@ _lazy = {
     "COORDINATES": (".processing.constants", "COORDINATES"),
     "BinaryFileNotFoundError": (".io.errors", "BinaryFileNotFoundError"),
     "interpolate_array": (".processing.imputation", "interpolate_array"),
+    "phase_rfmix_chromosome_to_zarr": (
+        ".processing.phase",
+        "phase_rfmix_chromosome_to_zarr",
+    ),
     "get_pops": (".utils", "get_pops"),
     "get_prefixes": (".utils", "get_prefixes"),
     "create_binaries": (".utils", "create_binaries"),
