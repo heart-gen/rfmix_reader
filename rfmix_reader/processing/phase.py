@@ -747,7 +747,7 @@ def phase_local_ancestry_sample_from_zarr(
 
 
 def count_switch_errors(
-    M_pred: ArrayLike, P_pred: ArrayLike, M_true: ArrayLike, 
+    M_pred: ArrayLike, P_pred: ArrayLike, M_true: ArrayLike,
     P_true: ArrayLike,
 ) -> int:
     """
@@ -928,38 +928,34 @@ def phase_admix_dask_with_index(
         raise TypeError("admix must be a dask.array.Array")
 
     n_loci, n_samples, n_anc = admix.shape
-
     admix_single_sample = admix.rechunk((n_loci, 1, n_anc))
-
     positions = np.asarray(positions, dtype=np.int64)
 
     def _phase_block(admix_block: np.ndarray, block_info=None) -> np.ndarray:
-        block_location = block_info[0]["array-location"]
-        sample_slice = block_location[1]
-        sample_indices = range(sample_slice.start, sample_slice.stop)
+        """Phase a single Dask block."""
+        info = block_info[0]
+        chunk_loc = info["chunk-location"]
+        sample_block_idx = chunk_loc[1]
 
+        block_sample_size = admix_block.shape[1]
+        sample_start = sample_block_idx * block_sample_size
+        sample_stop = sample_start + block_sample_size
+
+        sample_indices = range(sample_start, sample_stop)
         phased_block = np.empty_like(admix_block, dtype=np.int8)
         for offset, sample_idx in enumerate(sample_indices):
             phased_block[:, offset, :] = phase_admix_sample_from_zarr_with_index(
-                admix_sample=admix_block[:, offset, :],
-                X_raw=X_raw,
-                sample_idx=sample_idx,
-                n_samples=n_samples,
-                positions=positions,
-                chrom=chrom,
-                ref_zarr_root=ref_zarr_root,
-                sample_annot_path=sample_annot_path,
-                config=config,
-                groups=groups,
-                hap_index_in_zarr=hap_index_in_zarr,
+                admix_sample=admix_block[:, offset, :], X_raw=X_raw,
+                sample_idx=sample_idx, n_samples=n_samples, positions=positions,
+                chrom=chrom, ref_zarr_root=ref_zarr_root,
+                sample_annot_path=sample_annot_path, config=config,
+                groups=groups, hap_index_in_zarr=hap_index_in_zarr,
             )
 
         return phased_block
 
     phased = da.map_blocks(
-        _phase_block,
-        admix_single_sample,
-        dtype=np.int8,
+        _phase_block, admix_single_sample, dtype=np.int8,
         chunks=admix_single_sample.chunks,
     )
 
