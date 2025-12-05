@@ -200,7 +200,7 @@ The chunking is suboptimal for phasing, so remember to
 rechunk before using for optimal processing.
 
 ```python
-local_array = admix["local_ancestry"].chunk({"variant": 20000, "sample": 50})
+local_array = admix["local_ancestry"].chunk({"variant": 20000, "sample": 100})
 # Compute into memory, if needed
 local_array = local_array.compute()
 ```
