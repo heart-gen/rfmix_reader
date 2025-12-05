@@ -208,7 +208,7 @@ local_array = local_array.compute()
 This also saves the data to Zarr for later merging or data processing.
 
 ```bash
-TODO
+Instruction for CLI for merge_phased_zarrs here.
 ```
 ### Loci Imputation
 
