@@ -1125,6 +1125,12 @@ def phase_rfmix_chromosome_to_zarr(
 
     config = config or PhasingConfig()
 
+    logger.info(
+        "[phase_rfmix_chromosome_to_zarr] Starting phasing for chrom=%s into %s",
+        chrom if chrom is not None else "all",
+        output_path,
+    )
+
     loci_df, g_anc, admix, X_raw = read_rfmix(
         file_prefix,
         binary_dir=binary_dir,
@@ -1148,6 +1154,12 @@ def phase_rfmix_chromosome_to_zarr(
 
     pops = g_anc.drop(["sample_id", "chrom"], axis=1).columns.values
     sample_ids = g_anc["sample_id"].tolist()
+
+    logger.info(
+        "[phase_rfmix_chromosome_to_zarr] Loaded %d variants across %d samples",
+        positions.size,
+        len(sample_ids),
+    )
 
     phased = phase_admix_dask_with_index(
         admix=admix,
@@ -1177,6 +1189,9 @@ def phase_rfmix_chromosome_to_zarr(
         }
     )
 
+    logger.info(
+        "[phase_rfmix_chromosome_to_zarr] Writing phased data to %s", output_path
+    )
     dataset.to_zarr(output_path, mode="w")
     return dataset
 
@@ -1203,6 +1218,11 @@ def merge_phased_zarrs(
     xarray.Dataset
         Combined dataset written to ``output_path``.
     """
+    logger.info(
+        "[merge_phased_zarrs] Opening %d per-chromosome Zarr stores",
+        len(chrom_zarr_paths),
+    )
+
     datasets = [xr.open_zarr(Path(p)) for p in chrom_zarr_paths]
 
     if not datasets:
@@ -1220,5 +1240,10 @@ def merge_phased_zarrs(
     if sort:
         combined = combined.sortby(["chromosome", "variant_position"])
 
+    logger.info(
+        "[merge_phased_zarrs] Writing merged dataset with %d variants to %s",
+        combined.dims.get("variant", 0),
+        output_path,
+    )
     combined.to_zarr(output_path, mode="w")
     return combined
