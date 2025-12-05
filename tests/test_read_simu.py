@@ -1,15 +1,17 @@
-import textwrap
-import numpy as np
-import pytest
-import pandas as pd
 import os
+import textwrap
 
-from rfmix_reader._read_simu import (
-    read_simu,
-    _parse_pop_labels,
-    _map_pop_to_codes,
-    _build_mapper,
+import pytest
+
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
+
+from rfmix_reader.readers.read_simu import (
     MISSING,
+    _build_mapper,
+    _map_pop_to_codes,
+    _parse_pop_labels,
+    read_simu,
 )
 
 @pytest.fixture

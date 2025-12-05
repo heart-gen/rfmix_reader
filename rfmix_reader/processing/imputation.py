@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import zarr
 import numpy as np
+import warnings
 from tqdm import tqdm
 from time import strftime
 from pandas import DataFrame
@@ -31,14 +32,6 @@ if GPU_ENABLED:
     arr_mod = cp
 else:
     arr_mod = np
-
-__all__ = [
-    "interpolate_array",
-    "interpolate_block",
-    "_interpolate_col",
-    "_expand_array",
-    "_print_logger"
-]
 
 InterpMethod = Literal["linear", "nearest", "stepwise"]
 
@@ -102,6 +95,7 @@ def _interpolate_1d(
     Returns
     -------
     col_imputed : same type as arr_mod
+        Interpolated values, either float (posteriors) or int (hard states).
     """
     mod = arr_mod
     col = mod.asarray(col, dtype=mod.float32)
@@ -116,7 +110,7 @@ def _interpolate_1d(
         return col # All NaNs, nothing to impute
 
     method = _normalize_method(method)
-
+    
     if method == "linear":
         xp_valid = xp[valid]
         y_valid = col[valid]
@@ -161,8 +155,7 @@ def _interpolate_1d(
 
 
 def interpolate_block(
-    block, *, method: InterpMethod = "linear",
-    pos: Optional[np.ndarray] = None,
+    block, *, method: InterpMethod = "linear", pos: Optional[np.ndarray] = None, 
 ):
     """
     Block-wise interpolation for a haplotype / ancestry block.
@@ -176,12 +169,9 @@ def interpolate_block(
     mod = arr_mod
     block = mod.asarray(block, dtype=mod.float32)
     loci_dim, sample_dim, ancestry_dim = block.shape
+
     flat = block.reshape(loci_dim, -1)  # (loci, samples*ancestries)
-
-    x = None
-    if pos is not None:
-        x = mod.asarray(pos, dtype=mod.float32)
-
+    x = None if pos is not None else mod.asarray(pos, dtype=mod.float32)
     for j in range(flat.shape[1]):
         flat[:, j] = _interpolate_1d(flat[:, j], x=x, method=method)
 
@@ -285,6 +275,9 @@ def interpolate_array(
         Batch size for processing local ancestry data. Default is 10,000.
     interpolation : {"linear","nearest","stepwise"}, default "linear"
         Interpolation scheme.
+        ``"hmm"`` is available for experimentation but requires
+        `allow_hmm=True` and haplotype-level inputs created with
+        `split_to_haplotypes`.
     use_bp_positions : bool, default False
         If True, use `variant_loci_df['pos']` as the x-axis for interpolation.
         If False, loci are treated as equally spaced (index-based).
@@ -311,7 +304,7 @@ def interpolate_array(
     >>> variant_loci_df = pd.DataFrame({'chrom': ['1', '1'], 'pos': [100, 200]})
     >>> admix = da.random.random((2, 3))
     >>> z = interpolate_array(variant_loci_df, admix, '/path/to/output',
-                              chunk_size=1)
+                              chunk_size=1, interpolation='linear')
     >>> print(z.shape)
     (2, 3)
     """

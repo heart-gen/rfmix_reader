@@ -86,8 +86,9 @@ autosummary_generate = True
 autosectionlabel_prefix_document = True
 autodoc_default_options = {
     "members": True,
-    "undoc-members": True,
+    "undoc-members": False,
     "show-inheritance": True,
+    "private-members": False,
 }
 autodoc_typehints = "description"
 python_use_unqualified_type_names = True

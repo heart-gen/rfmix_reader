@@ -10,21 +10,19 @@ from cyvcf2 import VCF
 from pathlib import Path
 import dask.array as da
 from pandas import DataFrame, concat
-from typing import List, Tuple, Iterator
+from typing import List, Tuple, Iterator, Optional
 from dask import delayed, compute as dask_compute
 from dask.array import Array, concatenate, from_delayed
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from os.path import isdir, join, isfile, dirname, basename, exists
 
-from ._utils import _read_file
-
-__all__ = ["read_simu"]
+from ..utils import _read_file, filter_paths_by_chrom
 
 MISSING = np.uint8(255)
 
 def read_simu(
         vcf_path: str, chunk_size: int = 1_000_000, n_threads: int = 16,
-        verbose: bool = True,
+        verbose: bool = True, chrom: Optional[str] = None,
 ) -> Tuple[DataFrame, DataFrame, Array]:
     """
     Read `haptools simgenotype` generated VCF files into loci, global ancestry,
@@ -40,6 +38,9 @@ def read_simu(
         values reduce memory footprint, at the cost of more I/O.
     verbose : bool, default=True
         If True, show progress bars during parsing.
+    chrom : str, optional
+        Restrict parsing to a single chromosome label (with or without ``chr``
+        prefix).
 
     Returns
     -------
@@ -55,7 +56,7 @@ def read_simu(
         compatibility with RFMix-style conventions.
     """
     # Get VCF file prefixes
-    fn = _get_vcf_files(vcf_path)
+    fn = _get_vcf_files(vcf_path, chrom=chrom)
     
     # Load loci information
     pbar = tqdm(desc="Mapping loci information", total=len(fn),
@@ -371,7 +372,7 @@ def _get_ancestry_labels(vcf_file):
     return _build_mapper(ancestries)
 
 
-def _get_vcf_files(vcf_path: str) -> List[str]:
+def _get_vcf_files(vcf_path: str, chrom: Optional[str] = None) -> List[str]:
     """
     Resolve a path into a list of ancestry-annotated VCF files.
 
@@ -379,6 +380,8 @@ def _get_vcf_files(vcf_path: str) -> List[str]:
     ----------
     vcf_path : str
         Path to a directory containing `.vcf` or `.vcf.gz` files.
+    chrom : str, optional
+        Chromosome label used to filter the results.
 
     Returns
     -------
@@ -417,4 +420,4 @@ def _get_vcf_files(vcf_path: str) -> List[str]:
     if not vcf_files:
         raise FileNotFoundError(f"No VCF files found in path: {vcf_path}")
 
-    return sorted(str(f) for f in vcf_files)
+    return sorted(filter_paths_by_chrom([str(f) for f in vcf_files], chrom))

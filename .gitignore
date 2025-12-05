@@ -164,3 +164,13 @@ cython_debug/
 *.sis.tsv
 rfmix_reader/_version.py
 docs/api/generated/
+binary_files/
+data/1kGP_high_coverage_Illumina.chr21.filtered.SNV_INDEL_SV_phased_panel.vcf.gz
+data/1kGP_high_coverage_Illumina.chr21.filtered.SNV_INDEL_SV_phased_panel.vcf.gz.tbi
+data/samples_id2
+*.pgen
+*.psam
+*.pvar
+*.bin
+ref_zarr/
+*zarr

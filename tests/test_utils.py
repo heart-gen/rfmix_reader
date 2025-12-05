@@ -1,9 +1,11 @@
+import sys
 import pytest
-import numpy as np
-import pandas as pd
 from pathlib import Path
 
-import rfmix_reader._utils as utils
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
+
+import rfmix_reader.utils as utils
 
 
 def test__read_file_with_and_without_pbar(tmp_path):
@@ -104,3 +106,77 @@ def test_create_binaries_wraps(tmp_path, monkeypatch):
     monkeypatch.setattr(utils, "_generate_binary_files", lambda fb, bd: None)
     utils.create_binaries(str(tmp_path), str(tmp_path / "out"))
     assert (tmp_path / "out").exists()
+
+
+def test_filter_paths_by_chrom_and_errors(tmp_path):
+    files = [tmp_path / "chr1.data", tmp_path / "chr2.data", tmp_path / "notes.txt"]
+    for f in files:
+        f.write_text("x")
+
+    matched = utils.filter_paths_by_chrom([str(f) for f in files], "chr1")
+    assert matched == [str(tmp_path / "chr1.data")]
+
+    with pytest.raises(FileNotFoundError):
+        utils.filter_paths_by_chrom([str(tmp_path / "notes.txt")], "chr5")
+
+
+def test_filter_file_maps_by_chrom_and_missing():
+    file_maps = [
+        {"fb.tsv": "/data/run_chr1.fb.tsv"},
+        {"fb.tsv": "/data/run_chr2.fb.tsv"},
+        {"fb.tsv": "/data/nochrom.fb.tsv"},
+    ]
+
+    filtered = utils.filter_file_maps_by_chrom(file_maps, "1", kind="test")
+    assert filtered == [{"fb.tsv": "/data/run_chr1.fb.tsv"}]
+
+    with pytest.raises(FileNotFoundError):
+        utils.filter_file_maps_by_chrom(file_maps, "22", kind="test")
+
+
+def test_normalize_and_extract_chrom_helpers():
+    assert utils._normalize_chrom_label("ChrX") == "x"
+    assert utils._normalize_chrom_label("12") == "12"
+
+    assert utils._extract_chrom_from_path("/tmp/sample_chr10.fb.tsv") == "10"
+    assert utils._extract_chrom_from_path("/tmp/run_12.fb.tsv") == "12"
+    assert utils._extract_chrom_from_path("/tmp/misc.txt") is None
+
+
+def test_create_binaries_conflicting_files(tmp_path, monkeypatch, capsys):
+    (tmp_path / "chr1.fb.tsv").write_text("h\nh\n")
+    (tmp_path / "chr1.fb.tsv.gz").write_text("gz")
+
+    # Avoid calling the expensive converter
+    monkeypatch.setattr(utils, "_generate_binary_files", lambda fb, bd: None)
+
+    utils.create_binaries(str(tmp_path), str(tmp_path / "out"))
+    captured = capsys.readouterr().out
+    assert "Both compressed and uncompressed FB files" in captured
+
+
+def test_set_gpu_environment_monkeypatched(monkeypatch, capsys):
+    class DummyProps:
+        name = "Dummy GPU"
+        total_memory = 4 * 1024 ** 3
+        major, minor = 1, 0
+
+    class DummyCuda:
+        def __init__(self, count):
+            self._count = count
+
+        def device_count(self):
+            return self._count
+
+        def get_device_properties(self, idx):
+            assert idx == 0
+            return DummyProps()
+
+    dummy = DummyCuda(count=1)
+
+    monkeypatch.setitem(sys.modules, "torch", type("Mod", (), {})())
+    monkeypatch.setitem(sys.modules, "torch.cuda", dummy)
+
+    utils.set_gpu_environment()
+    out = capsys.readouterr().out
+    assert "Dummy GPU" in out

@@ -9,7 +9,7 @@ from cairosvg import svg2png, svg2pdf
 from importlib.resources import open_binary
 from subprocess import check_output, CalledProcessError
 
-from ._constants import CHROM_SIZES, COORDINATES
+from ..processing import CHROM_SIZES, COORDINATES
 
 try:
     from torch.cuda import is_available
@@ -22,10 +22,6 @@ if is_available():
     from cudf import DataFrame
 else:
     from pandas import DataFrame
-
-__all__ = [
-    "plot_local_ancestry_tagore"
-]
 
 def _printif(message: str, verbose: bool):
     """

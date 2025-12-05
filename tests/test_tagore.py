@@ -1,13 +1,16 @@
 import pickle
 import pytest, io
-import pandas as pd
 from pathlib import Path
 
+pytest.importorskip("pandas")
+import pandas as pd
+
+pytest.importorskip("matplotlib")
 import matplotlib
 matplotlib.use("Agg")  # headless backend
 import matplotlib.pyplot as plt
 
-import rfmix_reader._tagore as tagore
+import rfmix_reader.viz.tagore as tagore
 
 def test__printif(capsys):
     tagore._printif("hi", verbose=True)

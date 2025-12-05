@@ -20,6 +20,7 @@ __all__ = [
     "CHROM_SIZES", "COORDINATES",
     "BinaryFileNotFoundError",
     "interpolate_array",
+    "phase_rfmix_chromosome_to_zarr",
     "get_pops", "get_prefixes", "create_binaries", "get_sample_names",
     "set_gpu_environment", "delete_files_or_directories",
     "save_multi_format", "generate_tagore_bed",
@@ -29,28 +30,32 @@ __all__ = [
 
 # Map public names for lazy loading
 _lazy = {
-    "Chunk": ("._chunk", "Chunk"),
-    "read_fb": ("._fb_read", "read_fb"),
-    "read_simu": ("._read_simu", "read_simu"),
-    "read_rfmix": ("._read_rfmix", "read_rfmix"),
-    "read_flare": ("._read_flare", "read_flare"),
-    "write_data": ("._write_data", "write_data"),
-    "admix_to_bed_individual": ("._loci_bed", "admix_to_bed_individual"),
-    "CHROM_SIZES": ("._constants", "CHROM_SIZES"),
-    "COORDINATES": ("._constants", "COORDINATES"),
-    "BinaryFileNotFoundError": ("._errorhandling", "BinaryFileNotFoundError"),
-    "interpolate_array": ("._imputation", "interpolate_array"),
-    "get_pops": ("._utils", "get_pops"),
-    "get_prefixes": ("._utils", "get_prefixes"),
-    "create_binaries": ("._utils", "create_binaries"),
-    "get_sample_names": ("._utils", "get_sample_names"),
-    "set_gpu_environment": ("._utils", "set_gpu_environment"),
-    "delete_files_or_directories": ("._utils", "delete_files_or_directories"),
-    "save_multi_format": ("._visualization", "save_multi_format"),
-    "generate_tagore_bed": ("._visualization", "generate_tagore_bed"),
-    "plot_global_ancestry": ("._visualization", "plot_global_ancestry"),
-    "plot_ancestry_by_chromosome": ("._visualization", "plot_ancestry_by_chromosome"),
-    "plot_local_ancestry_tagore": ("._tagore", "plot_local_ancestry_tagore"),
+    "Chunk": (".io.chunk", "Chunk"),
+    "read_fb": (".readers.fb_read", "read_fb"),
+    "read_simu": (".readers.read_simu", "read_simu"),
+    "read_rfmix": (".readers.read_rfmix", "read_rfmix"),
+    "read_flare": (".readers.read_flare", "read_flare"),
+    "write_data": (".io.write_data", "write_data"),
+    "admix_to_bed_individual": (".io.loci_bed", "admix_to_bed_individual"),
+    "CHROM_SIZES": (".processing.constants", "CHROM_SIZES"),
+    "COORDINATES": (".processing.constants", "COORDINATES"),
+    "BinaryFileNotFoundError": (".io.errors", "BinaryFileNotFoundError"),
+    "interpolate_array": (".processing.imputation", "interpolate_array"),
+    "phase_rfmix_chromosome_to_zarr": (
+        ".processing.phase",
+        "phase_rfmix_chromosome_to_zarr",
+    ),
+    "get_pops": (".utils", "get_pops"),
+    "get_prefixes": (".utils", "get_prefixes"),
+    "create_binaries": (".utils", "create_binaries"),
+    "get_sample_names": (".utils", "get_sample_names"),
+    "set_gpu_environment": (".utils", "set_gpu_environment"),
+    "delete_files_or_directories": (".utils", "delete_files_or_directories"),
+    "save_multi_format": (".viz.visualization", "save_multi_format"),
+    "generate_tagore_bed": (".viz.visualization", "generate_tagore_bed"),
+    "plot_global_ancestry": (".viz.visualization", "plot_global_ancestry"),
+    "plot_ancestry_by_chromosome": (".viz.visualization", "plot_ancestry_by_chromosome"),
+    "plot_local_ancestry_tagore": (".viz.tagore", "plot_local_ancestry_tagore"),
 }
 
 def __getattr__(name: str):
@@ -71,22 +76,28 @@ def __dir__():
 
 # Make type checkers happy without importing heavy deps at runtime
 if TYPE_CHECKING:
-    from ._chunk import Chunk
-    from ._fb_read import read_fb
-    from ._read_simu import read_simu
-    from ._read_rfmix import read_rfmix
-    from ._read_flare import read_flare
-    from ._write_data import write_data
-    from ._loci_bed import admix_to_bed_individual
-    from ._constants import CHROM_SIZES, COORDINATES
-    from ._errorhandling import BinaryFileNotFoundError
-    from ._imputation import interpolate_array
-    from ._utils import (
-        get_pops, get_prefixes, create_binaries, get_sample_names,
-        set_gpu_environment, delete_files_or_directories,
+    from .io.chunk import Chunk
+    from .processing.constants import CHROM_SIZES, COORDINATES
+    from .io.errors import BinaryFileNotFoundError
+    from .readers.fb_read import read_fb
+    from .processing.imputation import interpolate_array
+    from .io.loci_bed import admix_to_bed_individual
+    from .readers.read_flare import read_flare
+    from .readers.read_rfmix import read_rfmix
+    from .readers.read_simu import read_simu
+    from .viz.tagore import plot_local_ancestry_tagore
+    from .utils import (
+        create_binaries,
+        delete_files_or_directories,
+        get_pops,
+        get_prefixes,
+        get_sample_names,
+        set_gpu_environment,
     )
-    from ._visualization import (
-        save_multi_format, generate_tagore_bed,
-        plot_global_ancestry, plot_ancestry_by_chromosome,
+    from .viz.visualization import (
+        generate_tagore_bed,
+        plot_ancestry_by_chromosome,
+        plot_global_ancestry,
+        save_multi_format,
     )
-    from ._tagore import plot_local_ancestry_tagore
+    from .io.write_data import write_data

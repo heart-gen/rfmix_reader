@@ -19,7 +19,7 @@ python = ">=3.11,<3.15"
 numpy = ">=1.23,<3"
 pandas = ">=2.0"
 tqdm = ">=4.66"
-psutil = "^6"
+psutil = "^7"
 cyvcf2 = ">=0.31"
 dask = "^2025.1"
 # Plotting
@@ -47,7 +47,9 @@ repository = "https://github.com/heart-gen/rfmix_reader.git"
 "Bug Tracker" = "https://github.com/heart-gen/rfmix_reader/issues"
 
 [tool.poetry.scripts]
-create-binaries = "rfmix_reader._cli:main"
+create-binaries = "rfmix_reader.cli.create_binaries:main"
+prepare-reference = "rfmix_reader.cli.prepare_reference:main"
+merge-phased-zarrs = "rfmix_reader.cli.merge_phased_zarrs:main"
 
 [tool.poetry.group.test.dependencies]
 pytest = "^8"

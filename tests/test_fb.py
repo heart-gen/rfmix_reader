@@ -1,6 +1,8 @@
 import pytest
-import numpy as np
-import rfmix_reader._fb_read as fb
+
+np = pytest.importorskip("numpy")
+
+import rfmix_reader.readers.fb_read as fb
 
 # ---------------------------
 # FB READ TESTS

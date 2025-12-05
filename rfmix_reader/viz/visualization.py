@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from typing import Tuple, Union, List, Optional
 
-from ._utils import get_pops
-from ._loci_bed import admix_to_bed_individual
+from ..io import admix_to_bed_individual
+from ..utils import get_pops
 
 try:
     from torch.cuda import is_available
@@ -25,13 +25,6 @@ else:
     from pandas import DataFrame, concat
     config.set({"dataframe.backend": "pandas"})
     config.set({"array.backend": "numpy"})
-
-__all__ = [
-    "save_multi_format",
-    "generate_tagore_bed",
-    "plot_global_ancestry",
-    "plot_ancestry_by_chromosome",
-]
 
 def plot_global_ancestry(
         g_anc: DataFrame, title: str = "Global Ancestry Proportions",

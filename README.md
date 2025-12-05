@@ -62,6 +62,8 @@ loci_df, g_anc, local_array = read_rfmix(file_path)
 print(loci_df.head())
 print(g_anc.head())
 print(local_array.shape)
+"""See the phasing section below for how to phase per-chromosome outputs and
+write them to Zarr with `phase_rfmix_chromosome_to_zarr`."""
 ```
 
 ---
@@ -100,6 +102,61 @@ from rfmix_reader import create_binaries
 create_binaries("two_pops/out/", binary_dir="./binary_files")
 ```
 
+### Preparing Reference Data for Phasing
+
+Use `prepare-reference` to convert bgzipped, indexed reference VCF/BCF files
+into per-chromosome VCF-Zarr stores that the phasing pipeline consumes.
+The command writes one `<chrom>.zarr` directory per input file.
+
+```
+prepare-reference -h
+```
+
+```
+usage: prepare-reference [-h] [--chunk-length CHUNK_LENGTH]
+                         [--samples-chunk-size SAMPLES_CHUNK_SIZE]
+                         [--worker-processes WORKER_PROCESSES]
+                         [--verbose | --no-verbose] [--version]
+                         output_dir vcf_paths [vcf_paths ...]
+
+Convert one or more bgzipped reference VCF/BCF files into Zarr stores.
+
+positional arguments:
+  output_dir            Directory where the Zarr outputs will be written.
+  vcf_paths             Paths to reference VCF/BCF files (bgzipped and
+                        indexed).
+
+options:
+  -h, --help            show this help message and exit
+  --chunk-length CHUNK_LENGTH
+                        Genomic chunk size for the output Zarr stores
+                        (default: 100000).
+  --samples-chunk-size SAMPLES_CHUNK_SIZE
+                        Chunk size for samples in the output Zarr stores
+                        (default: library chosen).
+  --worker-processes WORKER_PROCESSES
+                        Number of worker processes to use for conversion
+                        (default: 0, use library default).
+  --verbose, --no-verbose
+                        Print progress messages (default: enabled).
+  --version             Show the version of the program and exit.
+```
+
+Example data preparation:
+
+```bash
+# Sample annotations: two columns (no header): sample_id<TAB>group
+cat > sample_annotations.tsv <<'EOF'
+NA19700	AFR
+NA19701	AFR
+NA20847	EUR
+EOF
+
+# Convert chromosome VCFs into a reference store directory
+prepare-reference refs/ 1kg_chr20.vcf.gz 1kg_chr21.vcf.gz \
+  --chunk-length 50000 --samples-chunk-size 512
+```
+
 ### Main Function
 
 Once binaries are available, process RFMix results:
@@ -121,24 +178,167 @@ loci, g_anc, admix = read_rfmix("examples/three_populations/out/",
                                generate_binary=True)
 ```
 
-### Loci Imputation
+### Phasing data
 
-Impute local ancestry loci to variant positions for integration with genotype data:
+For optimal memory and computational speed, phasing is done per
+chromosome.
 
 ```python
-from rfmix_reader import interpolate_array
+from rfmix_reader import phase_rfmix_chromosome_to_zarr
+
+# Use the reference store + annotations during phasing
+admix = phase_rfmix_chromosome_to_zarr(
+    file_prefix="two_pops/out/",
+    ref_zarr_root="refs",
+    sample_annot_path="sample_annotations.tsv",
+    output_path="./phased_chr21.zarr",
+    chrom="21",
+)
+```
+
+The chunking is suboptimal for phasing, so remember to
+rechunk before using for optimal processing.
+
+```python
+local_array = admix["local_ancestry"].chunk({"variant": 20000, "sample": 50})
+# Compute into memory, if needed
+local_array = local_array.compute()
+```
+
+This also saves the data to Zarr for later merging or data processing.
+
+```bash
+merge-phased-zarrs ./phased_all.zarr ./phased_chr21.zarr ./phased_chr22.zarr
+```
+### Loci Imputation
+
+The imputation workflow now lives in ``rfmix_reader.processing.imputation`` and
+is exported as ``interpolate_array``. It interpolates the local ancestry matrix
+onto a denser variant grid and writes the result to ``<zarr_outdir>/local-ancestry.zarr``
+as a Zarr array shaped ``(variants, samples, ancestries)``.
+
+**Inputs**
+
+* ``variant_loci_df``: a pandas DataFrame defining the variant grid. Provide at
+  least ``chrom``/``pos`` and an ``i`` column that points to the source RFMix
+  row index; rows with ``i`` set to ``NaN`` are treated as missing loci to
+  interpolate. Sort the frame by genomic coordinate, and include ``pos`` if you
+  plan to interpolate in base-pair space.
+* ``admix``: the local ancestry Dask array returned by ``read_rfmix`` (shape
+  ``(loci, samples, ancestries)``).
+* ``zarr_outdir``: an output directory where the new ``local-ancestry.zarr``
+  store will be created.
+
+**Key options**
+
+* ``interpolation``: ``"linear"`` (default), ``"nearest"``, or ``"stepwise"``.
+* ``use_bp_positions``: set to ``True`` to interpolate along ``variant_loci_df['pos']``
+  rather than treating loci as equally spaced indices.
+* ``chunk_size``/``batch_size``: tune how many rows are materialized at a time
+  when filling and interpolating the Zarr array.
+
+**Workflow example**
+
+```python
 import pandas as pd
-import dask.array as da
+from pathlib import Path
+from rfmix_reader import interpolate_array, read_rfmix
 
-variant_loci_df = pd.DataFrame({
-    "chrom": ["1", "1", "1", "1"],
-    "pos": [100, 200, 300, 400],
-    "i": [1, None, None, 2]
-})
-admix = da.random.random((2, 3))  # mock admixture data
+# Load RFMix loci and local ancestry
+loci_df, _, admix = read_rfmix("two_pops/out/", binary_dir="./binary_files")
 
-z = interpolate_array(variant_loci_df, admix, "/path/to/output")
-print(z.shape)
+# Build the variant grid by merging genotype sites with the RFMix loci index
+variants = pd.read_parquet("genotypes/variants.parquet")  # must include chrom/pos
+variants = variants.drop_duplicates(subset=["chrom", "pos"]).sort_values("pos")
+variant_loci_df = (
+    variants.merge(loci_df.to_pandas(), on=["chrom", "pos"], how="outer", indicator=True)
+            .loc[:, ["chrom", "pos", "i", "_merge"]]
+)
+
+z = interpolate_array(
+    variant_loci_df,
+    admix,
+    zarr_outdir=Path("./imputed_local_ancestry"),
+    interpolation="linear",
+    use_bp_positions=True,
+    chunk_size=50_000,
+)
+print(z)
+```
+
+The interpolator uses GPU acceleration transparently when ``cupy`` and a CUDA
+PyTorch build are available; otherwise it falls back to NumPy. All methods other
+than ``"hmm"`` operate on diploid-summed trajectories and preserve the original
+ancestry dimension.
+
+### Phasing workflow (`rfmix_reader.processing.phase`)
+
+`rfmix_reader.processing.phase` implements gnomix-style tail-flip corrections
+for local ancestry haplotypes. Phasing now lives outside `read_rfmix` so you can
+process each chromosome independently and write outputs directly to Zarr.
+
+#### Required reference inputs
+
+* **VCF-Zarr reference** (`ref_zarr_root`): either a single `*.zarr` store or a
+  directory containing per-chromosome stores (e.g., `1.zarr`, `chr1.zarr`).
+* **Sample annotations** (`sample_annot_path`): two-column file mapping
+  `sample_id` to `group` (ancestry label). One representative sample per group
+  is pulled to build reference haplotypes.
+
+#### Per-chromosome pipeline
+
+1. (Optional) generate RFMix binary caches with `create_binaries`.
+2. Call `phase_rfmix_chromosome_to_zarr` for each chromosome you want to
+   process.
+3. Optionally concatenate those per-chromosome Zarr stores with
+   `merge_phased_zarrs`.
+
+```python
+from rfmix_reader.processing.phase import (
+    PhasingConfig,
+    merge_phased_zarrs,
+    phase_rfmix_chromosome_to_zarr,
+)
+
+# Phase chromosome 21 and write to Zarr
+dataset = phase_rfmix_chromosome_to_zarr(
+    file_prefix="examples/two_populations/out/",
+    ref_zarr_root="/refs/1kg_chr_zarr/",
+    sample_annot_path="/refs/1kg_annotations.tsv",
+    output_path="/tmp/phased_chr21.zarr",
+    chrom="21",
+)
+
+# Merge multiple per-chromosome Zarr stores
+merged = merge_phased_zarrs(
+    ["/tmp/phased_chr21.zarr", "/tmp/phased_chr22.zarr"],
+    output_path="/tmp/phased_all.zarr",
+)
+```
+
+If you need fine-grained control, you can still start from unphased outputs and
+call `phase_admix_dask_with_index` directly:
+
+```python
+from rfmix_reader import read_rfmix
+from rfmix_reader.processing.phase import PhasingConfig, phase_admix_dask_with_index
+
+loci_df, g_anc, admix, X_raw = read_rfmix(
+    "examples/two_populations/out/",
+    return_original=True,
+    chrom="21",
+)
+
+config = PhasingConfig(window_size=100, min_block_len=10, max_mismatch_frac=0.3)
+phased = phase_admix_dask_with_index(
+    admix=admix,
+    X_raw=X_raw,
+    positions=loci_df.physical_position.to_numpy(),
+    chrom=str(loci_df.chromosome.iloc[0]),
+    ref_zarr_root="/refs/1kg_chr_zarr/",
+    sample_annot_path="/refs/1kg_annotations.tsv",
+    config=config,
+)
 ```
 
 ### Reading Haptools simulations

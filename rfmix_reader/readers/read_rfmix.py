@@ -2,21 +2,26 @@
 Adapted from `_read.py` script in the `pandas-plink` package.
 Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_read.py
 """
+from __future__ import annotations
 import warnings
 from re import search
 from tqdm import tqdm
 from glob import glob
-from numpy import int32
+from numpy import int32, array
 from collections import OrderedDict as odict
 from typing import Optional, List, Tuple, Dict
 from dask.array import Array, concatenate, stack
 from os.path import basename, dirname, join, exists
 
-from ._chunk import Chunk
-from ._fb_read import read_fb
-from ._utils import set_gpu_environment
-from ._errorhandling import BinaryFileNotFoundError
-from ._utils import get_prefixes, create_binaries, _read_file
+from .fb_read import read_fb
+from ..io import BinaryFileNotFoundError, Chunk
+from ..utils import (
+    _read_file,
+    create_binaries,
+    filter_file_maps_by_chrom,
+    get_prefixes,
+    set_gpu_environment,
+)
 
 try:
     from torch.cuda import is_available as gpu_available
@@ -31,12 +36,16 @@ if gpu_available():
 else:
     from pandas import DataFrame, read_csv, concat, CategoricalDtype
 
-__all__ = ["read_rfmix"]
-
 def read_rfmix(
         file_prefix: str, binary_dir: str = "./binary_files",
         generate_binary: bool = False, verbose: bool = True,
-) -> Tuple[DataFrame, DataFrame, Array]:
+        return_hap_matrix: bool = False,
+        return_original: bool = False,
+        chrom: Optional[str] = None,
+) -> (
+    Tuple[DataFrame, DataFrame, Array]
+    | Tuple[DataFrame, DataFrame, Array, Array]
+):
     """
     Read RFMix files into data frames and a Dask array.
 
@@ -53,6 +62,14 @@ def read_rfmix(
     verbose : bool, optional
         :const:`True` for progress information; :const:`False` otherwise.
         Default:`True`.
+    return_hap_index : bool, optional
+        Return the haplotypes index for reconstruction of hap0 / hap1.
+    return_original : bool, optional
+        Return the original RFMix matrix ``X_raw`` along with the summed
+        ancestry counts.
+    chrom : str, optional
+        If provided, restrict reading to a single chromosome whose label
+        matches ``chrom`` (with or without the ``chr`` prefix).
 
     Returns
     -------
@@ -63,6 +80,12 @@ def read_rfmix(
     local_array : :class:`dask.array.Array`
         Local ancestry per population stacked (variants, samples, ancestries).
         This is in order of the populations see `g_anc`.
+    X_raw : :class:`dask.array.Array`, optional
+        Returned only when ``return_original`` is :const:`True`. The unphased
+        RFMix matrix prior to haplotype summarization.
+    return_hap_matrix : bool
+        Whether to return local ancestry with haplotypes (hap0 / hap1) level
+        information.
 
     Notes
     -----
@@ -78,7 +101,9 @@ def read_rfmix(
         set_gpu_environment()
 
     # Get file prefixes
-    fn = get_prefixes(file_prefix, "rfmix", verbose)
+    fn = filter_file_maps_by_chrom(
+        get_prefixes(file_prefix, "rfmix", verbose), chrom, kind="RFMix"
+    )
 
     # Load loci information
     pbar = tqdm(desc="Mapping loci information", total=len(fn), disable=not verbose)
@@ -86,15 +111,18 @@ def read_rfmix(
     pbar.close()
 
     # Adjust loci indices and concatenate
-    nmarkers = {}; index_offset = 0
+    nmarkers = {}; index_offset = 0; loci_by_fn = {}
     for i, bi in enumerate(loci_dfs):
         nmarkers[fn[i]["fb.tsv"]] = bi.shape[0]
         bi["i"] += index_offset
         index_offset += bi.shape[0]
+        loci_by_fn[fn[i]["fb.tsv"]] = bi
+
     loci_df = concat(loci_dfs, axis=0, ignore_index=True)
 
     # Load global ancestry per chromosome
-    pbar = tqdm(desc="Mapping global ancestry files", total=len(fn), disable=not verbose)
+    pbar = tqdm(desc="Mapping global ancestry files", total=len(fn),
+                disable=not verbose)
     g_anc = _read_file(fn, lambda f: _read_Q(f["rfmix.Q"]), pbar)
     pbar.close()
 
@@ -106,16 +134,27 @@ def read_rfmix(
     if generate_binary:
         create_binaries(file_prefix, binary_dir)
 
-    pbar = tqdm(desc="Mapping local ancestry files", total=len(fn), disable=not verbose)
-    local_array = _read_file(
+    pbar = tqdm(desc="Mapping local ancestry files", total=len(fn),
+                disable=not verbose)
+    local_data = _read_file(
         fn,
-        lambda f: _read_fb(f["fb.tsv"], nsamples,
-                           nmarkers[f["fb.tsv"]], pops,
-                           binary_dir, Chunk()),
+        lambda f: _read_fb(
+            f["fb.tsv"], nsamples, nmarkers[f["fb.tsv"]], pops,
+            binary_dir, Chunk(),
+        ),
         pbar,
     )
     pbar.close()
-    local_array = concatenate(local_array, axis=0)
+
+    # Unpack data
+    admix_list = [admix for admix, X_raw in local_data]
+    X_raw_list = [X_raw for admix, X_raw in local_data]
+
+    # Stack across chromosomes
+    local_array = concatenate(admix_list, axis=0)
+    if return_original:
+        X_raw = concatenate(X_raw_list, axis=0)
+        return loci_df, g_anc, local_array, X_raw
     return loci_df, g_anc, local_array
 
 
@@ -132,14 +171,14 @@ def _read_tsv(fn: str) -> DataFrame:
     DataFrame: DataFrame containing specified columns from the TSV file.
     """
     header = {"chromosome": CategoricalDtype(), "physical_position": int32}
-    try: 
-        if gpu_available(): 
+    try:
+        if gpu_available():
             df = read_csv(fn, sep="\t", header=0, usecols=list(header.keys()),
                           dtype=header, comment="#", compression="infer")
         else:
             chunks = read_csv(
                 fn, sep=r"\s+", header=0, usecols=list(header.keys()),
-                dtype=header, comment="#", compression="infer", 
+                dtype=header, comment="#", compression="infer",
                 chunksize=100_000, # Low memory chunks
             )
             # Concatenate chunks into single DataFrame
@@ -249,8 +288,10 @@ def _read_Q_noi(fn: str) -> DataFrame:
         raise OSError(f"Error reading file {fn}: {e}") from e
 
 
-def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
-             temp_dir: str, chunk: Optional[Chunk] = None) -> Array:
+def _read_fb(
+    fn: str, nsamples: int, nloci: int, pops: list, temp_dir: str,
+    chunk: Optional[Chunk] = None,
+) -> Tuple[Array, Array]:
     """
     Read the forward-backward matrix from a file as a Dask Array.
 
@@ -264,7 +305,8 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
 
     Returns:
     -------
-    dask.array.Array: The forward-backward matrix as a Dask Array.
+    tuple
+        The summed forward-backward matrix and the original raw matrix.
     """
     npops = len(pops)
     nrows = nloci
@@ -282,7 +324,9 @@ def _read_fb(fn: str, nsamples: int, nloci: int, pops: list,
     else:
         raise BinaryFileNotFoundError(binary_fn, temp_dir)
     # Subset populations and sum adjacent columns
-    return _subset_populations(X, npops)
+    admix = _subset_populations(X, npops)
+
+    return admix, X
 
 
 def _subset_populations(X: Array, npops: int) -> Array:
@@ -294,21 +338,31 @@ def _subset_populations(X: Array, npops: int) -> Array:
     npops (int): Number of populations for column processing.
 
     Returns:
-    dask.array: Processed array with adjacent columns summed for each population subset.
+    admix_summed : dask.array.Array
+        Processed array with adjacent columns summed for each population subset.
     """
-    pop_subset = []
-    pop_start = 0
+    import numpy as np
     ncols = X.shape[1]
     if ncols % npops != 0:
         raise ValueError("The number of columns in X must be divisible by npops.")
 
-    while pop_start < npops:
+    if ncols % (2 * npops) != 0:
+        raise ValueError(
+            "The number of columns in X must be divisible by (2 * npops). "
+            "Expected layout: 2 haplotypes per sample per ancestry."
+        )
+
+    nsamples = ncols // (2 * npops)
+    pop_subset = []
+
+    for pop_start in range(npops):
         X0 = X[:, pop_start::npops] # Subset based on populations
-        if X0.shape[1] % 2 != 0:
+        if int(X0.shape[1]) % 2 != 0:
             raise ValueError("Number of columns must be even.")
+
         X0_summed = X0[:, ::2] + X0[:, 1::2] # Sum adjacent columns
         pop_subset.append(X0_summed)
-        pop_start += 1
+
     return stack(pop_subset, axis=2)
 
 
@@ -348,3 +402,15 @@ def _types(fn: str) -> dict:
     # Update the header dictionary with the data types of the remaining columns
     header.update(df.dtypes[1:].to_dict())
     return header
+
+
+# Convenience: expose helper utilities on the main reader function to make
+# them easy to reach for tests and advanced users who rely on the original
+# script-style API.
+read_rfmix._read_tsv = _read_tsv
+read_rfmix._read_csv = _read_csv
+read_rfmix._read_Q = _read_Q
+read_rfmix._read_Q_noi = _read_Q_noi
+read_rfmix._subset_populations = _subset_populations
+read_rfmix._read_fb = _read_fb
+read_rfmix.BinaryFileNotFoundError = BinaryFileNotFoundError

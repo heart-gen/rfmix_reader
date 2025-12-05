@@ -1,12 +1,14 @@
 import os
-import cudf
 import pytest
-import numpy as np
-import pandas as pd
-import dask.array as da
 
-from rfmix_reader._chunk import Chunk
-import rfmix_reader._read_rfmix as rfmix
+pytest.importorskip("cudf")
+import cudf
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
+da = pytest.importorskip("dask.array")
+
+from rfmix_reader.io import Chunk
+import rfmix_reader.readers.read_rfmix as rfmix
 
 
 def make_dummy_tsv(tmp_path, fname="chr21.fb.tsv"):

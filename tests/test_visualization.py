@@ -1,13 +1,15 @@
 import pytest
-import numpy as np
-import pandas as pd
 from pathlib import Path
 
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
+
+pytest.importorskip("matplotlib")
 import matplotlib
 matplotlib.use("Agg")  # headless backend
 import matplotlib.pyplot as plt
 
-import rfmix_reader._visualization as viz
+import rfmix_reader.viz.visualization as viz
 
 def make_ganc_df():
     return pd.DataFrame({

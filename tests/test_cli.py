@@ -1,7 +1,7 @@
 import sys
 import pytest
 
-import rfmix_reader._cli as cli
+import rfmix_reader.cli.create_binaries as cli
 
 
 # ---------------------------
@@ -26,7 +26,8 @@ def test_cli_invokes_create_binaries(monkeypatch):
 def test_cli_version_flag(monkeypatch, capsys):
     test_args = ["prog", "--version"]
     monkeypatch.setattr(sys, "argv", test_args)
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as excinfo:
         cli.main()
+    assert excinfo.value.code == 0
     out = capsys.readouterr().out
-    assert "prog" in out or cli.__version__ in out
+    assert cli.__version__ in out

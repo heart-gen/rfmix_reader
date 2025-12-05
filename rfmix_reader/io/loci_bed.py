@@ -14,7 +14,7 @@ from dask.array import (
     expand_dims
 )
 
-from ._utils import get_pops, get_sample_names
+from ..utils import get_pops, get_sample_names
 
 try:
     from torch.cuda import is_available
@@ -33,10 +33,6 @@ else:
     from pandas import DataFrame
     config.set({"dataframe.backend": "pandas"})
     config.set({"array.backend": "numpy"})
-
-__all__ = [
-    "admix_to_bed_individual"
-]
 
 def admix_to_bed_individual(
         loci: DataFrame, g_anc: DataFrame, admix: Array, sample_num: int,

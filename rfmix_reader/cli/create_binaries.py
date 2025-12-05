@@ -1,8 +1,18 @@
 import argparse
-from . import __version__
-from ._utils import create_binaries
 
-def main():
+from .. import __version__
+
+
+def _invoke_create_binaries(file_path: str, binary_dir: str) -> None:
+    from ..utils import create_binaries as create_binaries_func
+
+    create_binaries_func(file_path, binary_dir)
+
+
+create_binaries = _invoke_create_binaries
+
+
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Create binary files from RFMix *.fb.tsv files.")
     parser.add_argument(
