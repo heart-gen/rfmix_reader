@@ -168,6 +168,10 @@ results together:
        output_path="./phased_all.zarr",
    )
 
+From the command line, the same merge can be performed with::
+
+   merge-phased-zarrs ./phased_all.zarr ./phased_chr21.zarr ./phased_chr22.zarr
+
 Step-by-step phasing tutorial
 -----------------------------
 
@@ -394,10 +398,8 @@ ancestries)``.
 
 **Key options**
 
-* ``interpolation`` can be ``"linear"`` (default), ``"nearest"``, ``"stepwise```,
-  or ``"hmm"``. HMM interpolation is experimental, requires haplotype-level
-  anchors generated via :func:`rfmix_reader.processing.hmm_lai.split_to_haplotypes`,
-  and must be explicitly enabled with ``allow_hmm=True``.
+* ``interpolation`` can be ``"linear"`` (default), ``"nearest"``, or
+  ``"stepwise"``.
 * ``use_bp_positions=True`` interpolates along ``variant_loci_df['pos']`` rather
   than treating loci as evenly spaced indices.
 * ``chunk_size`` and ``batch_size`` control how many rows are materialized per
@@ -432,7 +434,7 @@ ancestries)``.
    )
 
 ``interpolate_array`` automatically uses CUDA (via ``cupy``) when available and
-falls back to NumPy otherwise. Non-HMM interpolation operates on diploid-summed
+falls back to NumPy otherwise. Interpolation operates on diploid-summed
 trajectories and preserves the ancestry dimension.
 
 Visualization
