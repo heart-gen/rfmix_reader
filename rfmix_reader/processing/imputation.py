@@ -110,7 +110,7 @@ def _interpolate_1d(
         return col # All NaNs, nothing to impute
 
     method = _normalize_method(method)
-    
+
     if method == "linear":
         xp_valid = xp[valid]
         y_valid = col[valid]
@@ -155,7 +155,7 @@ def _interpolate_1d(
 
 
 def interpolate_block(
-    block, *, method: InterpMethod = "linear", pos: Optional[np.ndarray] = None, 
+    block, *, method: InterpMethod = "linear", pos: Optional[np.ndarray] = None,
 ):
     """
     Block-wise interpolation for a haplotype / ancestry block.
@@ -171,7 +171,7 @@ def interpolate_block(
     loci_dim, sample_dim, ancestry_dim = block.shape
 
     flat = block.reshape(loci_dim, -1)  # (loci, samples*ancestries)
-    x = None if pos is not None else mod.asarray(pos, dtype=mod.float32)
+    x = mod.asarray(pos, dtype=mod.float32) if pos is not None else None
     for j in range(flat.shape[1]):
         flat[:, j] = _interpolate_1d(flat[:, j], x=x, method=method)
 
@@ -235,7 +235,7 @@ def _expand_array(
     nan_rows_mask = arr_mod.asarray(nan_rows_mask)
     nan_indices = arr_mod.where(nan_rows_mask)[0]
     nan_indices = _to_host(nan_indices)
-        
+
     # Materialize admix blocks in manageable batches
     _print_logger("Filling Zarr with local ancestry data in batches.")
     for start in range(0, admix.shape[0], batch_size):
@@ -309,7 +309,7 @@ def interpolate_array(
     (2, 3)
     """
     method = _normalize_method(interpolation)
-    
+
     _print_logger("Starting expansion!")
     z = _expand_array(variant_loci_df, admix, zarr_outdir,
                       batch_size=batch_size)
