@@ -108,6 +108,7 @@ by :func:`phase_rfmix_chromosome_to_zarr` and
 
 #+begin_src python :results output
   from rfmix_reader.processing.phase import phase_rfmix_chromosome_to_zarr
+  from rfmix_reader.processing.phase import merge_phased_zarrs
 
   ds = phase_rfmix_chromosome_to_zarr(
       file_prefix="../examples/two_populations/out/",
@@ -116,6 +117,17 @@ by :func:`phase_rfmix_chromosome_to_zarr` and
       output_path="./phased_chr21.zarr",
       chrom="21",
   )
+
+  merged = merge_phased_zarrs(
+      ["./phased_chr21.zarr", "./phased_chr22.zarr"],
+      output_path="./phased_all.zarr",
+  )
+#+end_src
+
+From the command line, the same merge can be performed with:
+
+#+begin_src bash :results none
+  merge-phased-zarrs ./phased_all.zarr ./phased_chr21.zarr ./phased_chr22.zarr
 #+end_src
 
 ** Reading FLARE output
@@ -199,10 +211,7 @@ and writes a Zarr store (=<zarr_outdir>/local-ancestry.zarr=) with shape
 - =zarr_outdir=: directory where =local-ancestry.zarr= will be created.
 
 *Key options*
-- =interpolation=: ="linear"= (default), ="nearest"=, ="stepwise"=, or
-  ="hmm"=. HMM interpolation is experimental, requires haplotype-level inputs
-  built with ~split_to_haplotypes~, and must be explicitly enabled with
-  =allow_hmm=True=.
+- =interpolation=: ="linear"= (default), ="nearest"=, or ="stepwise"=.
 - =use_bp_positions=True= interpolates along =variant_loci_df['pos']= instead of
   treating loci as evenly spaced indices.
 - =chunk_size=/batch_size= tune how many rows are materialized per write or
@@ -234,8 +243,8 @@ and writes a Zarr store (=<zarr_outdir>/local-ancestry.zarr=) with shape
 #+end_src
 
 ~interpolate_array~ will leverage CUDA (via =cupy=) when present; otherwise it
-falls back to NumPy. Non-HMM methods operate on diploid-summed trajectories and
-preserve the original ancestry dimension.
+falls back to NumPy. Interpolation operates on diploid-summed trajectories and
+preserves the original ancestry dimension.
 
 * Visualization
 =rfmix-reader= bundles several plotting/export helpers so you can inspect
