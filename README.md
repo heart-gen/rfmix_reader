@@ -157,13 +157,14 @@ prepare-reference refs/ 1kg_chr20.vcf.gz 1kg_chr21.vcf.gz \
   --chunk-length 50000 --samples-chunk-size 512
 
 # Use the reference store + annotations during phasing
-phase_rfmix_chromosome_to_zarr(
+admix = phase_rfmix_chromosome_to_zarr(
     file_prefix="two_pops/out/",
     ref_zarr_root="refs",
     sample_annot_path="sample_annotations.tsv",
     output_path="./phased_chr21.zarr",
     chrom="21",
 )
+local_array = admix["local_ancestry"].chunk({"variant": 20000, "sample": 50}).compute()
 ```
 
 ### Main Function
