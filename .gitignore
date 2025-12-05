@@ -173,3 +173,4 @@ data/samples_id2
 *.pvar
 *.bin
 ref_zarr/
+*zarr
