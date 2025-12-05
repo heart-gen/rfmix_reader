@@ -142,7 +142,7 @@ options:
   --version             Show the version of the program and exit.
 ```
 
-Example end-to-end preparation:
+Example data preparation:
 
 ```bash
 # Sample annotations: two columns (no header): sample_id<TAB>group
@@ -155,19 +155,6 @@ EOF
 # Convert chromosome VCFs into a reference store directory
 prepare-reference refs/ 1kg_chr20.vcf.gz 1kg_chr21.vcf.gz \
   --chunk-length 50000 --samples-chunk-size 512
-```
-```python
-from rfmix_reader import phase_rfmix_chromosome_to_zarr
-
-# Use the reference store + annotations during phasing
-admix = phase_rfmix_chromosome_to_zarr(
-    file_prefix="two_pops/out/",
-    ref_zarr_root="refs",
-    sample_annot_path="sample_annotations.tsv",
-    output_path="./phased_chr21.zarr",
-    chrom="21",
-)
-local_array = admix["local_ancestry"].chunk({"variant": 20000, "sample": 50}).compute()
 ```
 
 ### Main Function
@@ -191,6 +178,38 @@ loci, g_anc, admix = read_rfmix("examples/three_populations/out/",
                                generate_binary=True)
 ```
 
+### Phasing data
+
+For optimal memory and computational speed, phasing is done per
+chromosome.
+
+```python
+from rfmix_reader import phase_rfmix_chromosome_to_zarr
+
+# Use the reference store + annotations during phasing
+admix = phase_rfmix_chromosome_to_zarr(
+    file_prefix="two_pops/out/",
+    ref_zarr_root="refs",
+    sample_annot_path="sample_annotations.tsv",
+    output_path="./phased_chr21.zarr",
+    chrom="21",
+)
+```
+
+The chunking is suboptimal for phasing, so remember to
+rechunk before using for optimal processing.
+
+```python
+local_array = admix["local_ancestry"].chunk({"variant": 20000, "sample": 50})
+# Compute into memory, if needed
+local_array = local_array.compute()
+```
+
+This also saves the data to Zarr for later merging or data processing.
+
+```bash
+TODO
+```
 ### Loci Imputation
 
 The imputation workflow now lives in ``rfmix_reader.processing.imputation`` and
@@ -212,10 +231,7 @@ as a Zarr array shaped ``(variants, samples, ancestries)``.
 
 **Key options**
 
-* ``interpolation``: ``"linear"`` (default), ``"nearest"``, ``"stepwise"``, or
-  ``"hmm"``. HMM interpolation is experimental, requires haplotype-level inputs
-  created with ``split_to_haplotypes``, and must be explicitly enabled with
-  ``allow_hmm=True``.
+* ``interpolation``: ``"linear"`` (default), ``"nearest"``, or ``"stepwise"``.
 * ``use_bp_positions``: set to ``True`` to interpolate along ``variant_loci_df['pos']``
   rather than treating loci as equally spaced indices.
 * ``chunk_size``/``batch_size``: tune how many rows are materialized at a time
