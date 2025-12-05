@@ -33,6 +33,7 @@ sphinx                    = { version = ">=7,<9", optional = true }
 sphinx-rtd-theme          = { version = "^2", optional = true }
 sphinx-autodoc-typehints  = { version = "^2", optional = true }
 sphinx-copybutton         = { version = "^0.5", optional = true }
+fonttools = "^4.61.0"
 
 [tool.poetry.extras]
 viz = ["matplotlib", "seaborn", "cairosvg"]
@@ -53,7 +54,7 @@ merge-phased-zarrs = "rfmix_reader.cli.merge_phased_zarrs:main"
 
 [tool.poetry.group.test.dependencies]
 pytest = "^8"
-pytest-cov = "^5"
+pytest-cov = "^7"
 
 [tool.poetry.group.docs.dependencies]
 sphinx = ">=7,<9"
