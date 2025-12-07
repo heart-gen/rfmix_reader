@@ -275,9 +275,6 @@ def interpolate_array(
         Batch size for processing local ancestry data. Default is 10,000.
     interpolation : {"linear","nearest","stepwise"}, default "linear"
         Interpolation scheme.
-        ``"hmm"`` is available for experimentation but requires
-        `allow_hmm=True` and haplotype-level inputs created with
-        `split_to_haplotypes`.
     use_bp_positions : bool, default False
         If True, use `variant_loci_df['pos']` as the x-axis for interpolation.
         If False, loci are treated as equally spaced (index-based).
