@@ -23,7 +23,7 @@ pip install rfmix-reader
   pip install rfmix-reader
   ```
 
-* **With GPU acceleration** (`cupy`, `cudf`, `dask-cudf`):
+* **With GPU acceleration** (`cupy`, `cudf`, `dask-cudf`, `torch`):
 
   ```bash
   pip install rfmix-reader[gpu]
@@ -177,8 +177,8 @@ Binaries can also be generated on-the-fly within `read_rfmix` with
 
 ```python
 loci, g_anc, admix = read_rfmix("examples/three_populations/out/",
-                               binary_dir="./binary_files",
-                               generate_binary=True)
+                                binary_dir="./binary_files",
+                                generate_binary=True)
 ```
 
 ### Phasing data
@@ -200,7 +200,9 @@ admix = phase_rfmix_chromosome_to_zarr(
 ```
 
 The chunking is suboptimal for phasing, so remember to
-rechunk before using for optimal processing.
+rechunk before using for optimal processing. This is only needed
+when loading individual chromosomes. The merged data is already
+optimized.
 
 ```python
 local_array = admix["local_ancestry"].chunk({"variant": 20000, "sample": 100})
