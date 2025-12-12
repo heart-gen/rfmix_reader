@@ -43,8 +43,11 @@ pip install rfmix-reader
 
 ### GPU Notes
 
-* `torch` is installed automatically.
-* For CUDA builds, install a matching GPU-enabled wheel for your system following the [PyTorch guide](https://pytorch.org/get-started/locally/).
+* PyTorch is **not** installed in the base package. It is pulled in only when you install the `[gpu]` extra (`pip install rfmix-reader[gpu]`) or add it yourself.
+* Install a PyTorch wheel that matches your platform and CUDA version using the [official selector](https://pytorch.org/get-started/locally/). For example:
+  * **CUDA 12 (Linux/Windows):** `pip install torch --index-url https://download.pytorch.org/whl/cu121`
+  * **CUDA 11 (Linux/Windows):** `pip install torch --index-url https://download.pytorch.org/whl/cu118`
+  * **CPU-only:** `pip install torch --index-url https://download.pytorch.org/whl/cpu`
 * RAPIDS (`cudf`, `cupy`) wheels are version- and CUDA-specific. See the [RAPIDS install guide](https://docs.rapids.ai/install).
 * CPU-only installations will still run efficiently, just without GPU acceleration.
 
