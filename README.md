@@ -29,6 +29,10 @@ pip install rfmix-reader
   pip install rfmix-reader[gpu]
   ```
 
+  The default GPU extra targets **CUDA 12** wheels (`cupy-cuda12x`,
+  `cudf-cu12`, `dask-cudf-cu12`). Use the appropriate CUDA build strings if
+  your environment requires a different version.
+  
 * **With documentation tools** (`sphinx`, `sphinx-rtd-theme`):
 
   ```bash
