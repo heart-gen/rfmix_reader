@@ -28,6 +28,10 @@ seaborn = { version = "^0.13", optional = true }
 cairosvg = { version = "^2.7", optional = true }
 # GPU
 torch = { version = ">=2.8", optional = true }
+cupy-cuda12x = { version = "*", optional = true }
+cudf-cu12 = { version = "*", optional = true }
+dask-cudf-cu12 = { version = "*", optional = true }
+pyarrow = { version = "*", optional = true }
 # Docs
 sphinx                    = { version = ">=7,<9", optional = true }
 sphinx-rtd-theme          = { version = "^2", optional = true }
@@ -39,6 +43,7 @@ fonttools = "^4.61.0"
 viz = ["matplotlib", "seaborn", "cairosvg"]
 gpu = ["cupy", "cudf", "dask-cudf", "torch"]
 io  = ["pyarrow"]  # parquet export
+all = ["matplotlib", "seaborn", "cairosvg", "torch", "cupy-cuda12x", "cudf-cu12", "dask-cudf-cu12", "pyarrow"]
 docs = ["sphinx", "sphinx-rtd-theme", "sphinx-autodoc-typehints", "sphinx-copybutton"]
 tests = ["pytest"]
 
