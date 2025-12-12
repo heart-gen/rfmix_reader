@@ -9,7 +9,7 @@ for major speedups when available.
 
 ## Installation
 
-`rfmix-reader` requires **Python 3.10+**. Install from PyPI:
+`rfmix-reader` requires **Python 3.11+**. Install from PyPI:
 
 ```bash
 pip install rfmix-reader
