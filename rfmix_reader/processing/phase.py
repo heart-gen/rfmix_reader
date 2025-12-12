@@ -1240,10 +1240,22 @@ def merge_phased_zarrs(
     if sort:
         combined = combined.sortby(["chromosome", "variant_position"])
 
+    for v in combined.variables:
+        var = combined[v]
+        var.encoding.pop("chunks", None)
+        if var.dtype == object:
+            combined[v] = var.astype("S50")
+
+    # Ensure string coordinates are encoded consistently when writing to Zarr.
+    for coord in ("chromosome", "sample_id", "ancestry"):
+        if coord in combined.coords:
+            combined = combined.assign_coords({coord: combined[coord].astype(str)})
+
     logger.info(
         "[merge_phased_zarrs] Writing merged dataset with %d variants to %s",
-        combined.dims.get("variant", 0),
+        combined.sizes.get("variant", 0),
         output_path,
     )
+    combined = combined.chunk({"variant": 50000})
     combined.to_zarr(output_path, mode="w")
     return combined
