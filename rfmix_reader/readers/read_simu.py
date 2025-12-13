@@ -219,7 +219,7 @@ def _process_vectorized_batch(
     pop_mat = np.array([rec.format("POP") for rec in batch_recs], dtype="U")
 
     # Vectorized mapping with normalization
-    hap_chunk = _map_pop_to_codes(pop_mat, ancestries)
+    hap_codes = _map_pop_to_codes(pop_mat, ancestries)
 
     # Collapse haplotypes -> ancestry axis
     out = np.zeros((n_vars, hap_codes.shape[1], n_anc), dtype=np.uint8)
