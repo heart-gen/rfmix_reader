@@ -232,7 +232,15 @@ def _expand_array(
                   chunks=(8000, 200, admix.shape[2]),
                   dtype='float32', fill_value=np.nan)
 
-    nan_rows_mask = variant_loci_df.isnull().any(axis=1).values
+    if "i" in variant_loci_df.columns:
+        # A missing locus is indicated by a null index into the source
+        # RFMix rows. Other metadata columns may legitimately contain NaNs
+        # (e.g., annotations), so we only look at the locus index here to
+        # avoid discarding valid rows and leaving the interpolation full of
+        # NaNs.
+        nan_rows_mask = variant_loci_df["i"].isnull().values
+    else:
+        nan_rows_mask = variant_loci_df.isnull().any(axis=1).values
     nan_rows_mask = arr_mod.asarray(nan_rows_mask)
     nan_indices = arr_mod.where(nan_rows_mask)[0]
     nan_indices = _to_host(nan_indices)

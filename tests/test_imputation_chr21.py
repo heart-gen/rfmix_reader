@@ -59,3 +59,43 @@ def test_imputation_chr21_interpolation(tmp_path, method):
             pytest.skip("CUDA is available but CuPy is missing; GPU interpolation cannot be tested.")
     else:
         assert not GPU_ENABLED
+
+
+def test_imputation_ignores_nan_metadata(tmp_path):
+    loci_df, _, admix = read_rfmix(
+        "data/",
+        binary_dir=tmp_path / "binary",
+        generate_binary=True,
+        verbose=False,
+    )
+
+    loci_pd = loci_df.to_pandas() if hasattr(loci_df, "to_pandas") else loci_df.copy()
+    renamed = loci_pd.rename(columns={"chromosome": "chrom", "physical_position": "pos"})
+
+    chrom = renamed["chrom"].iloc[0]
+    first_two = renamed["pos"].iloc[:2].to_numpy()
+    midpoint = int(np.mean(first_two))
+    while midpoint in set(renamed["pos"].to_numpy()):
+        midpoint += 1
+
+    missing_row = pd.DataFrame({"chrom": [chrom], "pos": [midpoint], "i": [np.nan]})
+
+    variant_loci_df = (
+        pd.concat([renamed.loc[:, ["chrom", "pos", "i"]], missing_row], ignore_index=True)
+        .assign(annotation=np.nan)
+        .sort_values("pos")
+        .reset_index(drop=True)
+    )
+
+    z = interpolate_array(
+        variant_loci_df,
+        admix,
+        zarr_outdir=tmp_path / "zarr-ignore-nan",
+        chunk_size=500,
+        batch_size=2000,
+        interpolation="linear",
+        use_bp_positions=True,
+    )
+
+    assert z.shape == (len(variant_loci_df), admix.shape[1], admix.shape[2])
+    assert not np.isnan(z[:]).any()
