@@ -93,7 +93,7 @@ def read_simu(
 
     # Combine local ancestry Dask arrays
     local_array = concatenate(local_chunks, axis=0)
-
+    assert local_array.shape[2] == len(g_anc.columns) - 2
     return loci_df, g_anc, local_array
 
 
@@ -219,13 +219,18 @@ def _process_vectorized_batch(
     pop_mat = np.array([rec.format("POP") for rec in batch_recs], dtype="U")
 
     # Vectorized mapping with normalization
-    codes_chunk = _map_pop_to_codes(pop_mat, ancestries)
+    hap_codes = _map_pop_to_codes(pop_mat, ancestries)
+
+    # Collapse haplotypes -> ancestry axis
+    out = np.zeros((n_vars, hap_codes.shape[1], n_anc), dtype=np.uint8)
+    for a in range(n_anc):
+        out[..., a] = (hap_codes == a).sum(axis=-1)
 
     # Slice into smaller Dask chunks
     dask_chunks = []
     for start in range(0, n_vars, dask_chunk):
         end = min(start + dask_chunk, n_vars)
-        sub_chunk = codes_chunk[start:end]  # view slice
+        sub_chunk = out[start:end]
         dask_chunks.append(
             from_delayed(delayed(sub_chunk),
                          shape=sub_chunk.shape,
