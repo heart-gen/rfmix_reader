@@ -117,6 +117,7 @@ def _interpolate_1d(
         xp_nan = xp[mask]
         interp_vals = mod.interp(xp_nan, xp_valid, y_valid)
         out = col.copy()
+        # Final ancestry is hard (0/1). Rounding to preserve RFMix semantics
         out[mask] = mod.round(interp_vals).astype(mod.float32)
         return out
 
@@ -229,7 +230,7 @@ def _expand_array(
                   shape=(variant_loci_df.shape[0],
                          admix.shape[1], admix.shape[2]),
                   chunks=(8000, 200, admix.shape[2]),
-                  dtype='float32')
+                  dtype='float32', fill_value=np.nan)
 
     nan_rows_mask = variant_loci_df.isnull().any(axis=1).values
     nan_rows_mask = arr_mod.asarray(nan_rows_mask)
@@ -240,8 +241,13 @@ def _expand_array(
     _print_logger("Filling Zarr with local ancestry data in batches.")
     for start in range(0, admix.shape[0], batch_size):
         end = min(start + batch_size, admix.shape[0])
-        if bool(arr_mod.any(~nan_rows_mask[start:end])):
-            z[start:end, :, :] = admix[start:end].compute()
+        valid = ~nan_rows_mask[start:end]
+        if not valid.any():
+            continue
+
+        # Write only valid rows to avoid overwriting NaNs
+        z_slice = z[start:end]
+        z_slice[valid] = admix[start:end][valid].compute()
 
     _print_logger("Zarr array successfully populated!")
     return z
@@ -325,6 +331,10 @@ def interpolate_array(
         end = min(start + chunk_size, total_rows)
         chunk = arr_mod.array(z[start:end, :, :], dtype=arr_mod.float32)
         pos_chunk = None if pos is None else pos[start:end]
+        if not arr_mod.isnan(chunk).any():
+            warnings.warn(
+                f"No NaNs detected in chunk {start}:{end}; interpolation skipped."
+            )
         interp_chunk = interpolate_block(chunk, method=method, pos=pos_chunk)
         z[start:end, :, :] = _to_host(interp_chunk)
 
