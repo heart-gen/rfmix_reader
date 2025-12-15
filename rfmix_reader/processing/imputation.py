@@ -1,5 +1,5 @@
 """
-Functions to imputate loci to genotype.
+Functions to impute loci to genotype.
 
 This is a time consuming process, but should only need to be done once.
 Loading the data becomes very fast because data is saved to a Zarr.
@@ -7,8 +7,8 @@ Loading the data becomes very fast because data is saved to a Zarr.
 from __future__ import annotations
 
 import zarr
-import numpy as np
 import warnings
+import numpy as np
 from tqdm import tqdm
 from time import strftime
 from pandas import DataFrame
@@ -179,16 +179,6 @@ def interpolate_block(
     return flat.reshape(loci_dim, sample_dim, ancestry_dim)
 
 
-def _interpolate_col(col):
-    """
-    Backwards-compatible shim: original code interpolated a single
-    column linearly.
-
-    TODO: deprecate
-    """
-    return _interpolate_1d(col, method="linear")
-
-
 def _expand_array(
     variant_loci_df: DataFrame, admix: Array, zarr_outdir: str,
     batch_size: int = 10_000
@@ -206,7 +196,7 @@ def _expand_array(
     variant_loci_df : pandas.DataFrame
         DataFrame containing the data to be expanded. Used to determine the
         shape of the output array and identify missing data.
-    admix : dask.array.Array
+    admix : dask.array.Array (loci, samples, ancestries)
         Dask array containing the local ancestry data to be stored in the Zarr
         array.
     zarr_outdir : str
@@ -216,7 +206,7 @@ def _expand_array(
 
     Returns
     -------
-    zarr.Array
+    zarr.Array (variants, samples, ancestries)
         The populated Zarr array containing the expanded local ancestry data
         with NaNs.
 
@@ -226,36 +216,31 @@ def _expand_array(
     - Memory usage may be high when dealing with large datasets.
     """
     _print_logger("Generate empty Zarr.")
+    n_samples = min(500, admix.shape[1])
     z = zarr.open(f"{zarr_outdir}/local-ancestry.zarr", mode="w",
                   shape=(variant_loci_df.shape[0],
                          admix.shape[1], admix.shape[2]),
-                  chunks=(8000, 200, admix.shape[2]),
+                  chunks=(8000, n_samples, admix.shape[2]),
                   dtype='float32', fill_value=np.nan)
 
-    if "i" in variant_loci_df.columns:
-        # A missing locus is indicated by a null index into the source
-        # RFMix rows. Other metadata columns may legitimately contain NaNs
-        # (e.g., annotations), so we only look at the locus index here to
-        # avoid discarding valid rows and leaving the interpolation full of
-        # NaNs.
-        nan_rows_mask = variant_loci_df["i"].isnull().values
-    else:
-        nan_rows_mask = variant_loci_df.isnull().any(axis=1).values
-    nan_rows_mask = arr_mod.asarray(nan_rows_mask)
-    nan_indices = arr_mod.where(nan_rows_mask)[0]
-    nan_indices = _to_host(nan_indices)
+    if "i" not in variant_loci_df.columns:
+        raise ValueError(
+            "variant_loci_df must contain column 'i' mapping "
+            "variant rows to admix rows"
+        )
 
-    # Materialize admix blocks in manageable batches
+    i = variant_loci_df["i"].to_numpy()
+    dest_idx = np.flatnonzero(~np.isnan(i))
+    src_idx  = i[dest_idx].astype(np.int64)
+
+    # Add admix into zarr
     _print_logger("Filling Zarr with local ancestry data in batches.")
-    for start in range(0, admix.shape[0], batch_size):
-        end = min(start + batch_size, admix.shape[0])
-        valid = ~nan_rows_mask[start:end]
-        if not valid.any():
-            continue
+    for start in range(0, dest_idx.size, batch_size):
+        end = min(start + batch_size, dest_idx.size)
 
         # Write only valid rows to avoid overwriting NaNs
-        z_slice = z[start:end]
-        z_slice[valid] = admix[start:end][valid].compute()
+        d = dest_idx[start:end]
+        z[d, :, :] = admix[src_idx[start:end]].compute()
 
     _print_logger("Zarr array successfully populated!")
     return z
@@ -264,7 +249,7 @@ def _expand_array(
 def interpolate_array(
     variant_loci_df: DataFrame, admix: Array, zarr_outdir: str,
     chunk_size: int = 50_000, batch_size: int = 10_000,
-    interpolation: str = "linear", use_bp_positions: bool = False,
+    interpolation: InterpMethod | str = "linear", use_bp_positions: bool = False,
 ) -> zarr.Array:
     """
     Interpolate missing local ancestry entries on the variant grid.
@@ -305,19 +290,17 @@ def interpolate_array(
     - The function processes the data in chunks to manage memory usage for large
       datasets.
     - Progress is displayed using a tqdm progress bar.
-    - The interpolation is performed column-wise using the `_interpolate_col`
-      function.
 
     Examples
     --------
     >>> import pandas as pd
     >>> import dask.array as da
     >>> variant_loci_df = pd.DataFrame({'chrom': ['1', '1'], 'pos': [100, 200]})
-    >>> admix = da.random.random((2, 3))
+    >>> admix = da.random.random((2, 2, 3))
     >>> z = interpolate_array(variant_loci_df, admix, '/path/to/output',
                               chunk_size=1, interpolation='linear')
     >>> print(z.shape)
-    (2, 3)
+    (2, 2, 3)
     """
     method = _normalize_method(interpolation)
 
@@ -339,9 +322,9 @@ def interpolate_array(
         end = min(start + chunk_size, total_rows)
         chunk = arr_mod.array(z[start:end, :, :], dtype=arr_mod.float32)
         pos_chunk = None if pos is None else pos[start:end]
-        if not arr_mod.isnan(chunk).any():
+        if start == 0 and not arr_mod.isnan(chunk).any():
             warnings.warn(
-                f"No NaNs detected in chunk {start}:{end}; interpolation skipped."
+                f"No NaNs detected in first chunk; interpolation may be unnecessary."
             )
         interp_chunk = interpolate_block(chunk, method=method, pos=pos_chunk)
         z[start:end, :, :] = _to_host(interp_chunk)
