@@ -4,35 +4,37 @@ Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_read.py
 """
 from __future__ import annotations
 import warnings
-import logging
 from re import search
 from tqdm import tqdm
 from glob import glob
 from numpy import int32, array
 from collections import OrderedDict as odict
 from typing import Optional, List, Tuple, Dict
+from dask.array import Array, concatenate, stack
 from os.path import basename, dirname, join, exists
 
 from .fb_read import read_fb
 from ..io import BinaryFileNotFoundError, Chunk
 from ..utils import (
     _read_file,
-    get_prefixes,
     create_binaries,
-    set_gpu_environment,
     filter_file_maps_by_chrom,
+    get_prefixes,
+    set_gpu_environment,
 )
-from ..backends import _select_dataframe_backend, _select_array_backend
 
-logger = logging.getLogger(__name__)
+try:
+    from torch.cuda import is_available as gpu_available
+except ModuleNotFoundError as e:
+    print("Warning: PyTorch is not installed. Using CPU!")
+    def gpu_available():
+        return False
 
 
-def _get_dataframe_backend():
-    return _select_dataframe_backend()
-
-
-def _get_array_backend():
-    return _select_array_backend()
+if gpu_available():
+    from cudf import DataFrame, read_csv, concat, CategoricalDtype
+else:
+    from pandas import DataFrame, read_csv, concat, CategoricalDtype
 
 def read_rfmix(
         file_prefix: str, binary_dir: str = "./binary_files",
@@ -94,19 +96,9 @@ def read_rfmix(
     - :const:`1` One allele is associated with this ancestry
     - :const:`2` Both alleles are associated with this ancestry
     """
-    from dask.array import Array, concatenate, stack
-
-    df_mod = _get_dataframe_backend()
-    concat = df_mod.concat
-    array_mod = _get_array_backend()
-    use_gpu = array_mod.__name__ == "cupy" or df_mod.__name__ == "cudf"
-
     # Device information
-    if verbose and use_gpu:
-        try:
-            set_gpu_environment()
-        except ModuleNotFoundError:
-            logger.warning("PyTorch not available; skipping GPU environment info.")
+    if verbose and gpu_available():
+        set_gpu_environment()
 
     # Get file prefixes
     fn = filter_file_maps_by_chrom(
@@ -178,14 +170,9 @@ def _read_tsv(fn: str) -> DataFrame:
     -------
     DataFrame: DataFrame containing specified columns from the TSV file.
     """
-    df_mod = _get_dataframe_backend()
-    DataFrame = df_mod.DataFrame
-    read_csv = df_mod.read_csv
-    concat = df_mod.concat
-    CategoricalDtype = df_mod.CategoricalDtype
     header = {"chromosome": CategoricalDtype(), "physical_position": int32}
     try:
-        if df_mod.__name__ == "cudf":
+        if gpu_available():
             df = read_csv(fn, sep="\t", header=0, usecols=list(header.keys()),
                           dtype=header, comment="#", compression="infer")
         else:
@@ -241,11 +228,8 @@ def _read_csv(fn: str, header: dict) -> DataFrame:
     -------
     DataFrame: The data read from the CSV file as a pandas DataFrame.
     """
-    df_mod = _get_dataframe_backend()
-    DataFrame = df_mod.DataFrame
-    read_csv = df_mod.read_csv
     try:
-        if df_mod.__name__ == "cudf":
+        if gpu_available():
             df = read_csv(fn, sep="\t", header=None, names=list(header.keys()),
                           dtype=header, comment="#")
         else:
@@ -394,13 +378,9 @@ def _types(fn: str) -> dict:
     -------
     dict : Dictionary mapping column names to their inferred data types.
     """
-    df_mod = _get_dataframe_backend()
-    DataFrame = df_mod.DataFrame
-    read_csv = df_mod.read_csv
-    CategoricalDtype = df_mod.CategoricalDtype
     try:
         # Read the first two rows of the file, skipping the first row
-        if df_mod.__name__ == "cudf":
+        if gpu_available():
             df = read_csv(fn, sep="\t", nrows=2, skiprows=1)
         else:
             df = read_csv(fn, sep=r"\s+", nrows=2, skiprows=1)
