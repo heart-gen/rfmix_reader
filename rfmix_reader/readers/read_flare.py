@@ -10,7 +10,7 @@ from numpy import int32
 from os.path import exists
 from re import match as rmatch
 from collections import OrderedDict as odict
-from typing import List, Tuple, Iterator, Optional
+from typing import List, Tuple, Iterator, Optional, TYPE_CHECKING
 
 from ..utils import (
     _read_file,
@@ -22,6 +22,8 @@ from ..backends import _select_array_backend, _select_dataframe_backend
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from dask.array import Array
 
 def _get_dataframe_backend():
     df_mod = _select_dataframe_backend()
@@ -30,6 +32,7 @@ def _get_dataframe_backend():
 
 def _get_array_backend():
     return _select_array_backend()
+
 
 def read_flare(
         file_prefix: str, chunk_size: int32 = 1_000_000, verbose: bool = True,

@@ -2,11 +2,15 @@ from __future__ import annotations
 
 from tqdm import tqdm
 from numpy import ndarray, full
-from typing import List, Union, Tuple, TYPE_CHECKING
 from multiprocessing import cpu_count
+from typing import List, Union, Tuple, TYPE_CHECKING
 
 from ..utils import get_pops, get_sample_names
-from ..backends import _configure_dask_backends, _select_array_backend, _select_dataframe_backend
+from ..backends import (
+    _configure_dask_backends,
+    _select_array_backend,
+    _select_dataframe_backend
+)
 
 if TYPE_CHECKING:
     from dask.array import Array
@@ -19,6 +23,7 @@ def _get_array_backend():
 
 def _get_dataframe_backend():
     return _select_dataframe_backend()
+
 
 def admix_to_bed_individual(
         loci: DataFrame, g_anc: DataFrame, admix: Array, sample_num: int,
