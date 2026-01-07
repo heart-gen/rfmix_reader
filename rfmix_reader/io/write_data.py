@@ -1,6 +1,7 @@
 """
 Documentation generation assisted by AI.
 """
+from __future__ import annotations
 import sys
 from pathlib import Path
 from zarr import Array as zArray
@@ -12,24 +13,33 @@ from dask import config, delayed, compute
 from dask.dataframe import from_dask_array
 from dask.dataframe import from_pandas as dd_from_pandas
 
-try:
-    from torch.cuda import is_available, empty_cache
-except ModuleNotFoundError as e:
-    print("Warning: PyTorch is not installed. Using CPU!")
-    def is_available():
-        return False
-
-if is_available():
-    from dask_cudf import from_cudf
-    from cudf import DataFrame, from_pandas, Series, concat, read_parquet
-else:
-    from gc import collect as empty_cache
-    from dask.dataframe import from_pandas, concat
-    from pandas import DataFrame, Series, read_parquet
+from ..backends import (
+    _select_array_backend,
+    _select_dataframe_backend,
+    _select_dask_dataframe_backend,
+)
 
 from ..processing import interpolate_array
 
 __all__ = ["write_data", "write_imputed"]
+
+
+def _get_dataframe_backend():
+    return _select_dataframe_backend()
+
+
+def _get_dask_dataframe_backend():
+    return _select_dask_dataframe_backend()
+
+
+def _get_empty_cache():
+    array_mod = _select_array_backend()
+    if array_mod.__name__ == "cupy":
+        def _empty_cache():
+            array_mod.get_default_memory_pool().free_all_blocks()
+        return _empty_cache
+    from gc import collect
+    return collect
 
 def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
                base_rows: int = 100_000, outdir: str = "./output",
@@ -89,6 +99,11 @@ def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
     >>> write_data(loci, g_anc, admix, outdir="./output", prefix="ancestry")
     # This will create ./output/ancestry.chr{1-22}.parquet files
     """
+    df_mod = _get_dataframe_backend()
+    DataFrame = df_mod.DataFrame
+    concat = df_mod.concat
+    use_gpu = df_mod.__name__ == "cudf"
+    empty_cache = _get_empty_cache()
     from os import makedirs
     from pyarrow import Table
     from pyarrow.parquet import write_table
@@ -100,7 +115,7 @@ def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
         output_path = str(path_template).format(partition_idx)
         df = DataFrame.from_records(partition, columns=col_names)
         df = concat([loci_chunk, df], axis=1)
-        if is_available():
+        if use_gpu:
             # Leverage cuDF
             df.to_parquet(output_path, index=False)
         else:
@@ -131,8 +146,13 @@ def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
         out_template = Path(outdir) / f"{prefix}.{chrom}-{{}}.parquet"
         divisions = admix_chrom.numblocks[0] # Partition alignment
 
-        if is_available():
-            loci_ddf = from_cudf(loci_chrom, npartitions=divisions)
+        if use_gpu:
+            dask_mod, dask_is_gpu = _get_dask_dataframe_backend()
+            if dask_is_gpu:
+                loci_ddf = dask_mod.from_cudf(loci_chrom, npartitions=divisions)
+            else:
+                loci_cpu = loci_chrom.to_pandas() if hasattr(loci_chrom, "to_pandas") else loci_chrom
+                loci_ddf = dd_from_pandas(loci_cpu, npartitions=divisions)
         else:
             loci_ddf = dd_from_pandas(loci_chrom, npartitions=divisions)
 
@@ -433,14 +453,18 @@ def _clean_data_imp(admix: Array, variant_loci: DataFrame, z: zArray
     - It uses dask arrays for efficient processing of large datasets.
     - The function handles both cuDF and pandas DataFrames, using cuDF if available.
     """
+    df_mod = _get_dataframe_backend()
+    Series = df_mod.Series
+    use_gpu = df_mod.__name__ == "cudf"
+
     daz = from_array(z, chunks=admix.chunksize)
     idx_arr = from_array(variant_loci[~(variant_loci["_merge"] ==
                                         "right_only")].index.to_numpy())
     admix_I = daz[idx_arr]
     mask = Series(False, index=variant_loci.index)
     mask.loc[idx_arr] = True
-    if is_available():
-        variant_loci = from_pandas(variant_loci)
+    if use_gpu and not isinstance(variant_loci, df_mod.DataFrame):
+        variant_loci = df_mod.from_pandas(variant_loci)
     loci_I = variant_loci[mask].drop(["_merge"], axis=1)\
                                .reset_index(drop=True)
     return loci_I, admix_I

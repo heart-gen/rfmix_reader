@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 import seaborn as sns
-from dask import config
 from dask.array import Array
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
@@ -7,24 +8,11 @@ from typing import Tuple, Union, List, Optional
 
 from ..io import admix_to_bed_individual
 from ..utils import get_pops
+from ..backends import _configure_dask_backends, _select_array_backend
 
-try:
-    from torch.cuda import is_available
-except ModuleNotFoundError as e:
-    print("Warning: PyTorch is not installed. Using CPU!")
-    def is_available():
-        return False
 
-if is_available():
-    import cupy as cp
-    from cudf import DataFrame, concat
-    config.set({"dataframe.backend": "cudf"})
-    config.set({"array.backend": "cupy"})
-else:
-    import numpy as cp
-    from pandas import DataFrame, concat
-    config.set({"dataframe.backend": "pandas"})
-    config.set({"array.backend": "numpy"})
+def _get_array_backend():
+    return _select_array_backend()
 
 def plot_global_ancestry(
         g_anc: DataFrame, title: str = "Global Ancestry Proportions",
@@ -66,6 +54,7 @@ def plot_global_ancestry(
     >>> loci, g_anc, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
     >>> plot_global_ancestry(g_anc, dpi=300, bbox_inches="tight")
     """
+    _configure_dask_backends()
     from pandas import Series
     from numpy import arange
 
@@ -224,6 +213,7 @@ def generate_tagore_bed(
         - _annotate_tagore: Adds annotation columns required for TAGORE
                             visualization (internal function).
     """
+    _configure_dask_backends()
     pops = get_pops(g_anc)
     bed = admix_to_bed_individual(loci, g_anc, admix, sample_num,
                                   chunk_size, min_segment, verbose)
@@ -302,6 +292,7 @@ def _annotate_tagore(df: DataFrame, sample_cols: List[str], pops: List[str],
     # Map the sample_cols column to colors using the color_dict
     expanded_df["color"] = expanded_df["sample_name"].map(color_dict)
     # Generate a repeating sequence of 1 and 2
+    cp = _get_array_backend()
     repeating_sequence = cp.tile(cp.array([1, 2]),
                                  int(cp.ceil(len(expanded_df) / 2)))[:len(expanded_df)]
     # Add the repeating sequence as a new column

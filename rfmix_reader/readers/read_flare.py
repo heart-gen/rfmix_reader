@@ -1,7 +1,9 @@
 """
 Revision of `_read_rfmix.py` to work with FLARE output data.
 """
+from __future__ import annotations
 from re import search
+import logging
 from tqdm import tqdm
 from cyvcf2 import VCF
 from numpy import int32
@@ -18,20 +20,18 @@ from ..utils import (
     get_prefixes,
     set_gpu_environment,
 )
+from ..backends import _select_array_backend, _select_dataframe_backend
 
-try:
-    from torch.cuda import is_available as gpu_available
-except ModuleNotFoundError as e:
-    print("Warning: PyTorch is not installed. Using CPU!")
-    def gpu_available():
-        return False
+logger = logging.getLogger(__name__)
 
-if gpu_available():
-    from cupy import array, full, zeros, asarray, int8
-    from cudf import DataFrame, read_csv, concat, CategoricalDtype
-else:
-    from numpy import array, full, zeros, asarray, int8
-    from pandas import DataFrame, read_csv, concat, CategoricalDtype
+
+def _get_dataframe_backend():
+    df_mod = _select_dataframe_backend()
+    return df_mod
+
+
+def _get_array_backend():
+    return _select_array_backend()
 
 def read_flare(
         file_prefix: str, chunk_size: int32 = 1_000_000, verbose: bool = True,
@@ -73,9 +73,17 @@ def read_flare(
     - :const:`1` One allele is associated with this ancestry
     - :const:`2` Both alleles are associated with this ancestry
     """
+    df_mod = _get_dataframe_backend()
+    concat = df_mod.concat
+    array_mod = _get_array_backend()
+    use_gpu = array_mod.__name__ == "cupy" or df_mod.__name__ == "cudf"
+
     # Device information
-    if verbose and gpu_available():
-        set_gpu_environment()
+    if verbose and use_gpu:
+        try:
+            set_gpu_environment()
+        except ModuleNotFoundError:
+            logger.warning("PyTorch not available; skipping GPU environment info.")
 
     # Get file prefixes
     fn = filter_file_maps_by_chrom(
@@ -130,6 +138,10 @@ def _read_vcf(fn: str, chunk_size: int32 = 1_000_000) -> DataFrame:
     -------
     DataFrame: DataFrame containing specified columns from the VCF file.
     """
+    df_mod = _get_dataframe_backend()
+    DataFrame = df_mod.DataFrame
+    concat = df_mod.concat
+    CategoricalDtype = df_mod.CategoricalDtype
     header = {"chromosome": CategoricalDtype(), "physical_position": int32}
     try:
        chunks = list(_load_vcf_info(fn, chunk_size))
@@ -182,6 +194,9 @@ def _read_csv(fn: str, header: dict) -> DataFrame:
     -------
     DataFrame: The data read from the CSV file as a pandas DataFrame.
     """
+    df_mod = _get_dataframe_backend()
+    DataFrame = df_mod.DataFrame
+    read_csv = df_mod.read_csv
     try:
         df = read_csv(fn, sep="\t", names=list(header.keys()),
                       dtype=header, skiprows=1)
@@ -279,6 +294,11 @@ def _load_haplotypes(vcf_file: str, chunk_size: int32 = 10_000) -> Array:
     (270000, 500, 2)
     >>> afr_counts = dask_array[:, :, 0]  # Access AFR ancestry slice
     """
+    array_mod = _get_array_backend()
+    zeros = array_mod.zeros
+    asarray = array_mod.asarray
+    int8 = array_mod.int8
+
     if not exists(vcf_file):
         raise FileNotFoundError(f"VCF file not found: {vcf_file}")
 
