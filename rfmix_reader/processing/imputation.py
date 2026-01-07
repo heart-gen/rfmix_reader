@@ -15,29 +15,13 @@ from pandas import DataFrame
 from dask.array import Array
 from typing import Literal, Optional
 
-try:
-    from torch.cuda import is_available as cuda_is_available
-except ModuleNotFoundError:
-    def cuda_is_available() -> bool:
-        return False
-
-try:
-    import cupy as cp
-except ImportError:
-    cp = None
-
-GPU_ENABLED = bool(cuda_is_available() and (cp is not None))
-
-if GPU_ENABLED:
-    arr_mod = cp
-else:
-    arr_mod = np
+from ..backends import _select_array_backend
 
 InterpMethod = Literal["linear", "nearest", "stepwise"]
 
 def _to_host(x):
     """Convert an array-module array back to a NumPy array on host."""
-    if GPU_ENABLED and hasattr(x, "get"):
+    if hasattr(x, "__cuda_array_interface__") and hasattr(x, "get"):
         return x.get()
     return np.asarray(x)
 
@@ -94,10 +78,10 @@ def _interpolate_1d(
 
     Returns
     -------
-    col_imputed : same type as arr_mod
+    col_imputed : same type as the selected array backend
         Interpolated values, either float (posteriors) or int (hard states).
     """
-    mod = arr_mod
+    mod = _select_array_backend()
     col = mod.asarray(col, dtype=mod.float32)
     mask = mod.isnan(col)
     if not bool(mask.any()):
@@ -167,7 +151,7 @@ def interpolate_block(
 
     Returns a float32 array in the same array module (NumPy or CuPy).
     """
-    mod = arr_mod
+    mod = _select_array_backend()
     block = mod.asarray(block, dtype=mod.float32)
     loci_dim, sample_dim, ancestry_dim = block.shape
 
@@ -320,9 +304,10 @@ def interpolate_array(
     for start in tqdm(range(0, total_rows, chunk_size),
                       desc="Interpolating chunks", unit="chunk"):
         end = min(start + chunk_size, total_rows)
-        chunk = arr_mod.array(z[start:end, :, :], dtype=arr_mod.float32)
+        mod = _select_array_backend()
+        chunk = mod.array(z[start:end, :, :], dtype=mod.float32)
         pos_chunk = None if pos is None else pos[start:end]
-        if start == 0 and not arr_mod.isnan(chunk).any():
+        if start == 0 and not mod.isnan(chunk).any():
             warnings.warn(
                 f"No NaNs detected in first chunk; interpolation may be unnecessary."
             )

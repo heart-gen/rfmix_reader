@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import gzip
 from tqdm import tqdm
 from glob import glob
@@ -9,11 +11,9 @@ from typing import Callable, List, Optional
 from multiprocessing import Pool, cpu_count
 from subprocess import run, CalledProcessError
 from os.path import basename, dirname, join, exists
+from typing import TYPE_CHECKING
 
-try:
-    from cudf import DataFrame
-except ImportError:
-    print("Warning: Using CPU!")
+if TYPE_CHECKING:
     from pandas import DataFrame
 
 def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List[str]:

@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 from tqdm import tqdm
-from dask import config
 import dask.dataframe as dd
 from numpy import ndarray, full
 from typing import List, Union, Tuple
@@ -15,24 +16,15 @@ from dask.array import (
 )
 
 from ..utils import get_pops, get_sample_names
+from ..backends import _configure_dask_backends, _select_array_backend, _select_dataframe_backend
 
-try:
-    from torch.cuda import is_available
-except ModuleNotFoundError as e:
-    print("Warning: PyTorch is not installed. Using CPU!")
-    def is_available():
-        return False
 
-if is_available():
-    import cupy as cp
-    from cudf import DataFrame
-    config.set({"dataframe.backend": "cudf"})
-    config.set({"array.backend": "cupy"})
-else:
-    import numpy as cp
-    from pandas import DataFrame
-    config.set({"dataframe.backend": "pandas"})
-    config.set({"array.backend": "numpy"})
+def _get_array_backend():
+    return _select_array_backend()
+
+
+def _get_dataframe_backend():
+    return _select_dataframe_backend()
 
 def admix_to_bed_individual(
         loci: DataFrame, g_anc: DataFrame, admix: Array, sample_num: int,
@@ -93,6 +85,8 @@ def admix_to_bed_individual(
     >>> loci, g_anc, admix = read_rfmix(prefix_path)
     >>> admix_to_bed_individual(loci_df, g_anc_df, admix_array, "chr22")
     """
+    _configure_dask_backends()
+
     # Column annotations
     pops = get_pops(g_anc)
     sample_ids = get_sample_names(g_anc)
@@ -161,7 +155,9 @@ def _generate_bed(
     parts = cpu_count()
     ncols = dask_matrix.shape[1]
 
-    if is_available() and isinstance(df, DataFrame):
+    df_mod = _get_dataframe_backend()
+    use_gpu = df_mod.__name__ == "cudf"
+    if use_gpu and isinstance(df, df_mod.DataFrame):
         ddf = dd.from_pandas(df.to_pandas(), npartitions=parts)
     else:
         ddf = dd.from_pandas(df, npartitions=parts)
@@ -302,6 +298,7 @@ def _find_intervals(data_matrix: Array, chunk_size: int,
     List[int]
         Sorted indices of ancestry change points (0-based)
     """
+    cp = _get_array_backend()
     # Get dimensions
     n_positions = data_matrix.shape[0]
     n_chunks = (n_positions + chunk_size - 1) // chunk_size
@@ -378,6 +375,7 @@ def _create_bed_records(
     - Final interval ends at last physical position
     - Ancestry values taken from interval end points
     """
+    cp = _get_array_backend()
     idx = cp.asarray(idx)
 
     if len(idx) == 0:
