@@ -2,8 +2,13 @@
 Adapted from `_bed_read.py` script in the `pandas-plink` package.
 Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_bed_read.py
 """
-from dask.delayed import delayed
-from dask.array import from_delayed, Array, concatenate
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from dask.array import Array
+
 from numpy import (
     float32,
     memmap,
@@ -42,6 +47,9 @@ def read_fb(
     FileNotFoundError: If the specified file does not exist.
     IOError: If there is an error reading the file.
     """
+    from dask.array import Array, concatenate, from_delayed
+    from dask.delayed import delayed
+
     # Validate input parameters
     if row_chunk <= 0 or col_chunk <= 0:
         raise ValueError("row_chunk and col_chunk must be positive integers.")
