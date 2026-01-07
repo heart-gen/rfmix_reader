@@ -1,22 +1,16 @@
 from __future__ import annotations
 
 from tqdm import tqdm
-import dask.dataframe as dd
 from numpy import ndarray, full
-from typing import List, Union, Tuple
+from typing import List, Union, Tuple, TYPE_CHECKING
 from multiprocessing import cpu_count
-from dask.array import (
-    diff,
-    Array,
-    array,
-    argmax,
-    from_array,
-    concatenate,
-    expand_dims
-)
 
 from ..utils import get_pops, get_sample_names
 from ..backends import _configure_dask_backends, _select_array_backend, _select_dataframe_backend
+
+if TYPE_CHECKING:
+    from dask.array import Array
+    import dask.dataframe as dd
 
 
 def _get_array_backend():
@@ -155,6 +149,8 @@ def _generate_bed(
     parts = cpu_count()
     ncols = dask_matrix.shape[1]
 
+    import dask.dataframe as dd
+
     df_mod = _get_dataframe_backend()
     use_gpu = df_mod.__name__ == "cudf"
     if use_gpu and isinstance(df, df_mod.DataFrame):
@@ -164,6 +160,7 @@ def _generate_bed(
 
     # Add each column of the Dask array to the DataFrame
     if isinstance(dask_matrix, ndarray):
+        from dask.array import from_array
         dask_matrix = from_array(dask_matrix, chunks="auto")
 
     dask_df = dd.from_dask_array(dask_matrix, columns=col_names)
@@ -271,6 +268,7 @@ def _process_chromosome(
                                                   data_matrix, change_indices,
                                                   len(pops))
     cnames = ['chromosome', 'start', 'end'] + sample_cols
+    import dask.dataframe as dd
     df_numeric = dd.from_dask_array(numeric_data, columns=cnames[1:])
     return df_numeric.assign(chromosome=chrom_val)[cnames]
 
@@ -376,6 +374,8 @@ def _create_bed_records(
     - Ancestry values taken from interval end points
     """
     cp = _get_array_backend()
+    from dask.array import array, concatenate, expand_dims, from_array
+
     idx = cp.asarray(idx)
 
     if len(idx) == 0:
@@ -415,7 +415,7 @@ def _create_bed_records(
 
     start_col = concatenate([start_col, array([last_start])])
     end_col = concatenate([end_col, array([last_end])])
-    ancestry_col = concatenate([ancestry_col,expand_dims(last_ancestry,axis=0)])
+    ancestry_col = concatenate([ancestry_col, expand_dims(last_ancestry, axis=0)])
 
     # Stack numeric columns: start, end, ancestry_cols
     numeric_cols = cp.hstack([
