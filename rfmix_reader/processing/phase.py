@@ -42,6 +42,10 @@ if TYPE_CHECKING:
 ArrayLike = np.ndarray
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    import dask.array as da
+    from dask.array import Array as DaskArray
+
 
 def _get_array_module(*arrays):
     """Return cupy or numpy based on the input arrays."""
@@ -863,6 +867,8 @@ def _build_hap_labels_from_rfmix(
         Per-locus ancestry labels (0..n_anc-1) for hap0 and hap1.
         ``-1`` indicates missing (no ancestry column > 0 at that locus).
     """
+    import dask.array as da
+
     base = sample_idx * (n_anc * 2)
     cols_h0 = base + np.arange(n_anc) * 2
     cols_h1 = base + np.arange(n_anc) * 2 + 1

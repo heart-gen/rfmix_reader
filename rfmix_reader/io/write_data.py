@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 
 __all__ = ["write_data", "write_imputed"]
 
+if TYPE_CHECKING:
+    from dask.array import Array
+
 
 def _get_dataframe_backend():
     return _select_dataframe_backend()
@@ -97,6 +100,10 @@ def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
     >>> write_data(loci, g_anc, admix, outdir="./output", prefix="ancestry")
     # This will create ./output/ancestry.chr{1-22}.parquet files
     """
+    from dask import config, delayed, compute
+    from dask.diagnostics import ProgressBar
+    from dask.dataframe import from_pandas as dd_from_pandas
+
     df_mod = _get_dataframe_backend()
     DataFrame = df_mod.DataFrame
     concat = df_mod.concat
@@ -455,6 +462,8 @@ def _clean_data_imp(admix: Array, variant_loci: DataFrame, z: zArray
     - It uses dask arrays for efficient processing of large datasets.
     - The function handles both cuDF and pandas DataFrames, using cuDF if available.
     """
+    from dask.array import from_array
+
     df_mod = _get_dataframe_backend()
     Series = df_mod.Series
     use_gpu = df_mod.__name__ == "cudf"

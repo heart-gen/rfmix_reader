@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 
 InterpMethod = Literal["linear", "nearest", "stepwise"]
 
+if TYPE_CHECKING:
+    from dask.array import Array
+
 def _to_host(x):
     """Convert an array-module array back to a NumPy array on host."""
     if hasattr(x, "__cuda_array_interface__") and hasattr(x, "get"):
