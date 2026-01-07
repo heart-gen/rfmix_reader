@@ -9,7 +9,7 @@ from glob import glob
 from cyvcf2 import VCF
 from pathlib import Path
 from pandas import DataFrame, concat
-from typing import List, Tuple, Iterator, Optional
+from typing import List, Tuple, Iterator, Optional, TYPE_CHECKING
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from os.path import isdir, join, isfile, dirname, basename, exists
 
@@ -17,10 +17,13 @@ from ..utils import _read_file, filter_paths_by_chrom
 
 MISSING = np.uint8(255)
 
+if TYPE_CHECKING:
+    from dask.array import Array
+
 def read_simu(
         vcf_path: str, chunk_size: int = 1_000_000, n_threads: int = 16,
         verbose: bool = True, chrom: Optional[str] = None,
-) -> Tuple[DataFrame, DataFrame, Array]:
+) -> Tuple[DataFrame, DataFrame, "Array"]:
     """
     Read `haptools simgenotype` generated VCF files into loci, global ancestry,
     and haplotype Dask array.
@@ -146,7 +149,7 @@ def _load_haplotypes_and_global_ancestry(
 def _read_haplotypes(
         vcf_file: str, chunk_size: int = 1_000_000, vcf_threads: int = 16,
         dask_chunk: int = 50_000
-) -> Tuple[Array, DataFrame]:
+) -> Tuple["Array", DataFrame]:
     """
     Vectorized local ancestry extraction from VCF with `POP` FORMAT field.
     Uses cyvcf2 region-based pulls (requires tabix index).
