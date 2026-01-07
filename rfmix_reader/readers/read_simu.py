@@ -8,11 +8,8 @@ from tqdm import tqdm
 from glob import glob
 from cyvcf2 import VCF
 from pathlib import Path
-import dask.array as da
 from pandas import DataFrame, concat
 from typing import List, Tuple, Iterator, Optional
-from dask import delayed, compute as dask_compute
-from dask.array import Array, concatenate, from_delayed
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from os.path import isdir, join, isfile, dirname, basename, exists
 
@@ -55,6 +52,10 @@ def read_simu(
         The last axis is ordered alphabetically by ancestry label, ensuring
         compatibility with RFMix-style conventions.
     """
+    import dask.array as da
+    from dask import delayed, compute as dask_compute
+    from dask.array import Array, concatenate, from_delayed
+
     # Get VCF file prefixes
     fn = _get_vcf_files(vcf_path, chrom=chrom)
     

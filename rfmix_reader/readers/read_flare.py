@@ -7,18 +7,16 @@ import logging
 from tqdm import tqdm
 from cyvcf2 import VCF
 from numpy import int32
-from dask import delayed
 from os.path import exists
 from re import match as rmatch
-from typing import List, Tuple, Iterator, Optional
 from collections import OrderedDict as odict
-from dask.array import Array, concatenate, from_delayed, stack
+from typing import List, Tuple, Iterator, Optional
 
 from ..utils import (
     _read_file,
-    filter_file_maps_by_chrom,
     get_prefixes,
     set_gpu_environment,
+    filter_file_maps_by_chrom,
 )
 from ..backends import _select_array_backend, _select_dataframe_backend
 
@@ -73,6 +71,9 @@ def read_flare(
     - :const:`1` One allele is associated with this ancestry
     - :const:`2` Both alleles are associated with this ancestry
     """
+    from dask import delayed
+    from dask.array import Array, concatenate, from_delayed, stack
+
     df_mod = _get_dataframe_backend()
     concat = df_mod.concat
     array_mod = _get_array_backend()

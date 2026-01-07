@@ -11,17 +11,16 @@ from glob import glob
 from numpy import int32, array
 from collections import OrderedDict as odict
 from typing import Optional, List, Tuple, Dict
-from dask.array import Array, concatenate, stack
 from os.path import basename, dirname, join, exists
 
 from .fb_read import read_fb
 from ..io import BinaryFileNotFoundError, Chunk
 from ..utils import (
     _read_file,
-    create_binaries,
-    filter_file_maps_by_chrom,
     get_prefixes,
+    create_binaries,
     set_gpu_environment,
+    filter_file_maps_by_chrom,
 )
 from ..backends import _select_dataframe_backend, _select_array_backend
 
@@ -95,6 +94,8 @@ def read_rfmix(
     - :const:`1` One allele is associated with this ancestry
     - :const:`2` Both alleles are associated with this ancestry
     """
+    from dask.array import Array, concatenate, stack
+
     df_mod = _get_dataframe_backend()
     concat = df_mod.concat
     array_mod = _get_array_backend()
