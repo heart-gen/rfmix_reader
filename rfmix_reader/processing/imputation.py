@@ -12,12 +12,14 @@ import numpy as np
 from tqdm import tqdm
 from time import strftime
 from pandas import DataFrame
-from dask.array import Array
-from typing import Literal, Optional
+from typing import Literal, Optional, TYPE_CHECKING
 
 from ..backends import _select_array_backend
 
 InterpMethod = Literal["linear", "nearest", "stepwise"]
+
+if TYPE_CHECKING:
+    from dask.array import Array
 
 def _to_host(x):
     """Convert an array-module array back to a NumPy array on host."""

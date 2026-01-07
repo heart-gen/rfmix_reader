@@ -1,22 +1,15 @@
 from __future__ import annotations
 
 from tqdm import tqdm
-import dask.dataframe as dd
 from numpy import ndarray, full
-from typing import List, Union, Tuple
+from typing import List, Union, Tuple, TYPE_CHECKING
 from multiprocessing import cpu_count
-from dask.array import (
-    diff,
-    Array,
-    array,
-    argmax,
-    from_array,
-    concatenate,
-    expand_dims
-)
 
 from ..utils import get_pops, get_sample_names
 from ..backends import _configure_dask_backends, _select_array_backend, _select_dataframe_backend
+
+if TYPE_CHECKING:
+    from dask.array import Array
 
 
 def _get_array_backend():
@@ -148,6 +141,9 @@ def _generate_bed(
       chromosome.
     - Large datasets may require significant processing time and disk space.
     """
+    import dask.dataframe as dd
+    from dask.array import from_array
+
     # Check if the DataFrame and Dask array have the same number of rows
     assert df.shape[0] == dask_matrix.shape[0], "DataFrame and Dask array must have the same number of rows"
 
@@ -249,6 +245,8 @@ def _process_chromosome(
     0          1    100  200     1
     1          1    300  400     0
     """
+    import dask.dataframe as dd
+
     # Fetch chromosome
     chrom_val = group["chromosome"].drop_duplicates().compute()
 
@@ -375,6 +373,8 @@ def _create_bed_records(
     - Final interval ends at last physical position
     - Ancestry values taken from interval end points
     """
+    from dask.array import array, concatenate, expand_dims, from_array
+
     cp = _get_array_backend()
     idx = cp.asarray(idx)
 

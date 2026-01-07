@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import seaborn as sns
-from dask.array import Array
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
-from typing import Tuple, Union, List, Optional
+from typing import Tuple, Union, List, Optional, TYPE_CHECKING
 
 from ..io import admix_to_bed_individual
 from ..utils import get_pops
 from ..backends import _configure_dask_backends, _select_array_backend
+
+if TYPE_CHECKING:
+    from dask.array import Array
 
 
 def _get_array_backend():

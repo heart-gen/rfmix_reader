@@ -26,19 +26,21 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
 import xarray as xr
-import dask.array as da
-from dask.array import Array as DaskArray
 
 from ..backends import _select_array_backend, _select_dataframe_backend
 
 ArrayLike = np.ndarray
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    import dask.array as da
+    from dask.array import Array as DaskArray
 
 
 def _get_array_module(*arrays):
@@ -861,6 +863,8 @@ def _build_hap_labels_from_rfmix(
         Per-locus ancestry labels (0..n_anc-1) for hap0 and hap1.
         ``-1`` indicates missing (no ancestry column > 0 at that locus).
     """
+    import dask.array as da
+
     base = sample_idx * (n_anc * 2)
     cols_h0 = base + np.arange(n_anc) * 2
     cols_h1 = base + np.arange(n_anc) * 2 + 1
@@ -1007,6 +1011,8 @@ def phase_admix_dask_with_index(
     admix_corr : (L, S, A) dask.array.Array
         Phase-corrected local ancestry counts.
     """
+    import dask.array as da
+
     if not isinstance(admix, da.Array):
         raise TypeError("admix must be a dask.array.Array")
 
