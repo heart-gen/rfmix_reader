@@ -8,8 +8,11 @@ from tqdm import tqdm
 from glob import glob
 from cyvcf2 import VCF
 from pathlib import Path
+import dask.array as da
 from pandas import DataFrame, concat
-from typing import List, Tuple, Iterator, Optional, TYPE_CHECKING
+from typing import List, Tuple, Iterator, Optional
+from dask import delayed, compute as dask_compute
+from dask.array import Array, concatenate, from_delayed
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from os.path import isdir, join, isfile, dirname, basename, exists
 
@@ -17,13 +20,10 @@ from ..utils import _read_file, filter_paths_by_chrom
 
 MISSING = np.uint8(255)
 
-if TYPE_CHECKING:
-    from dask.array import Array
-
 def read_simu(
         vcf_path: str, chunk_size: int = 1_000_000, n_threads: int = 16,
         verbose: bool = True, chrom: Optional[str] = None,
-) -> Tuple[DataFrame, DataFrame, "Array"]:
+) -> Tuple[DataFrame, DataFrame, Array]:
     """
     Read `haptools simgenotype` generated VCF files into loci, global ancestry,
     and haplotype Dask array.
@@ -55,10 +55,6 @@ def read_simu(
         The last axis is ordered alphabetically by ancestry label, ensuring
         compatibility with RFMix-style conventions.
     """
-    import dask.array as da
-    from dask import delayed, compute as dask_compute
-    from dask.array import Array, concatenate, from_delayed
-
     # Get VCF file prefixes
     fn = _get_vcf_files(vcf_path, chrom=chrom)
     
@@ -97,7 +93,7 @@ def read_simu(
 
     # Combine local ancestry Dask arrays
     local_array = concatenate(local_chunks, axis=0)
-    assert local_array.shape[2] == len(g_anc.columns) - 2
+
     return loci_df, g_anc, local_array
 
 
@@ -149,7 +145,7 @@ def _load_haplotypes_and_global_ancestry(
 def _read_haplotypes(
         vcf_file: str, chunk_size: int = 1_000_000, vcf_threads: int = 16,
         dask_chunk: int = 50_000
-) -> Tuple["Array", DataFrame]:
+) -> Tuple[Array, DataFrame]:
     """
     Vectorized local ancestry extraction from VCF with `POP` FORMAT field.
     Uses cyvcf2 region-based pulls (requires tabix index).
@@ -223,18 +219,13 @@ def _process_vectorized_batch(
     pop_mat = np.array([rec.format("POP") for rec in batch_recs], dtype="U")
 
     # Vectorized mapping with normalization
-    hap_codes = _map_pop_to_codes(pop_mat, ancestries)
-
-    # Collapse haplotypes -> ancestry axis
-    out = np.zeros((n_vars, hap_codes.shape[1], n_anc), dtype=np.uint8)
-    for a in range(n_anc):
-        out[..., a] = (hap_codes == a).sum(axis=-1)
+    codes_chunk = _map_pop_to_codes(pop_mat, ancestries)
 
     # Slice into smaller Dask chunks
     dask_chunks = []
     for start in range(0, n_vars, dask_chunk):
         end = min(start + dask_chunk, n_vars)
-        sub_chunk = out[start:end]
+        sub_chunk = codes_chunk[start:end]  # view slice
         dask_chunks.append(
             from_delayed(delayed(sub_chunk),
                          shape=sub_chunk.shape,
