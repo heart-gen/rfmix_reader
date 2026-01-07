@@ -16,6 +16,9 @@ from ..backends import (
 
 from ..processing import interpolate_array
 
+if TYPE_CHECKING:
+    from dask.array import Array
+
 __all__ = ["write_data", "write_imputed"]
 
 if TYPE_CHECKING:
@@ -109,6 +112,10 @@ def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
     from os import makedirs
     from pyarrow import Table
     from pyarrow.parquet import write_table
+    from dask import config, delayed, compute
+    from dask.diagnostics import ProgressBar
+    from dask.dataframe import from_pandas as dd_from_pandas
+
     # Memory optimization configuration
     config.set({"array.chunk-size": "256 MiB"})
 
@@ -460,6 +467,8 @@ def _clean_data_imp(admix: Array, variant_loci: DataFrame, z: zArray
     df_mod = _get_dataframe_backend()
     Series = df_mod.Series
     use_gpu = df_mod.__name__ == "cudf"
+
+    from dask.array import from_array
 
     daz = from_array(z, chunks=admix.chunksize)
     idx_arr = from_array(variant_loci[~(variant_loci["_merge"] ==

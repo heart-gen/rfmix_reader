@@ -35,6 +35,10 @@ import xarray as xr
 
 from ..backends import _select_array_backend, _select_dataframe_backend
 
+if TYPE_CHECKING:
+    import dask.array as da
+    from dask.array import Array as DaskArray
+
 ArrayLike = np.ndarray
 logger = logging.getLogger(__name__)
 
@@ -868,6 +872,8 @@ def _build_hap_labels_from_rfmix(
     base = sample_idx * (n_anc * 2)
     cols_h0 = base + np.arange(n_anc) * 2
     cols_h1 = base + np.arange(n_anc) * 2 + 1
+
+    import dask.array as da
 
     if isinstance(X_raw, da.Array):
         H0 = X_raw[:, cols_h0].compute()

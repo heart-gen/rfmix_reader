@@ -16,6 +16,9 @@ from typing import Literal, Optional, TYPE_CHECKING
 
 from ..backends import _select_array_backend
 
+if TYPE_CHECKING:
+    from dask.array import Array
+
 InterpMethod = Literal["linear", "nearest", "stepwise"]
 
 if TYPE_CHECKING:
