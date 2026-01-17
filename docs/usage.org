@@ -288,7 +288,8 @@ need external visualization or browser-ready tracks.
 #+end_src
 
 =plot_local_ancestry_tagore= writes a =.svg= plus a converted =.png= or =.pdf=
-(via CairoSVG). Set =force=True= to overwrite existing outputs.
+(via CairoSVG). Set =force=True= to regenerate the SVG; PNG/PDF conversions
+overwrite existing files regardless of =force=.
 
 #+RESULTS[943d0f4206518c373fa852ab000059693e2b2897]:
 : ['AFR' 'EUR']

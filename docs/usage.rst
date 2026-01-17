@@ -489,4 +489,5 @@ available if you build additional custom Matplotlib figures.
 
 ``plot_local_ancestry_tagore`` writes a ``.svg`` plus a converted ``.png`` or
 ``.pdf`` (via CairoSVG) using the selected genome build. Set ``force=True`` to
-overwrite existing outputs.
+regenerate the SVG; PNG/PDF conversions overwrite existing files regardless of
+``force``.
