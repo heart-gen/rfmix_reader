@@ -474,7 +474,19 @@ available if you build additional custom Matplotlib figures.
 
 .. code:: python
 
-   from rfmix_reader import generate_tagore_bed
+   from rfmix_reader import generate_tagore_bed, plot_local_ancestry_tagore
 
    tagore_df = generate_tagore_bed(loci_df, g_anc, admix, sample_num=0)
    tagore_df.head()
+
+   plot_local_ancestry_tagore(
+       tagore_df,
+       prefix="local-ancestry-sample0",
+       build="hg38",
+       oformat="png",
+       force=True,
+   )
+
+``plot_local_ancestry_tagore`` writes a ``.svg`` plus a converted ``.png`` or
+``.pdf`` (via CairoSVG) using the selected genome build. Set ``force=True`` to
+overwrite existing outputs.

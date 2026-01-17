@@ -272,12 +272,23 @@ BED-style table that matches TAGORE's expectations. Use it whenever you
 need external visualization or browser-ready tracks.
 
 #+begin_src python :results value
-  from rfmix_reader import generate_tagore_bed
+  from rfmix_reader import generate_tagore_bed, plot_local_ancestry_tagore
 
   tagore_df = generate_tagore_bed(loci_df, g_anc, admix, sample_num=0)
   tagore_df.head()
+
+  plot_local_ancestry_tagore(
+      tagore_df,
+      prefix="local-ancestry-sample0",
+      build="hg38",
+      oformat="png",
+      force=True,
+  )
 #+end_src
 #+end_src
+
+=plot_local_ancestry_tagore= writes a =.svg= plus a converted =.png= or =.pdf=
+(via CairoSVG). Set =force=True= to overwrite existing outputs.
 
 #+RESULTS[943d0f4206518c373fa852ab000059693e2b2897]:
 : ['AFR' 'EUR']
