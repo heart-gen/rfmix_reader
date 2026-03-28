@@ -26,51 +26,52 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
 import xarray as xr
-import dask.array as da
-from dask.array import Array as DaskArray
 
-try:  # Optional GPU support
-    import cupy as cp
-except Exception:  # pragma: no cover - cupy is optional and may not be installed
-    cp = None
+from ..backends import _select_array_backend, _select_dataframe_backend
 
-try:  # Optional GPU DataFrame support
-    import cudf
-except Exception:  # pragma: no cover - cudf is optional and may not be installed
-    cudf = None
+if TYPE_CHECKING:
+    import dask.array as da
+    from dask.array import Array as DaskArray
 
 ArrayLike = np.ndarray
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    import dask.array as da
+    from dask.array import Array as DaskArray
 
 
 def _get_array_module(*arrays):
     """Return cupy or numpy based on the input arrays."""
 
-    if cp is not None:
+    array_mod = _select_array_backend()
+    if array_mod.__name__ == "cupy":
         for arr in arrays:
-            if isinstance(arr, cp.ndarray):
-                return cp
+            if isinstance(arr, array_mod.ndarray):
+                return array_mod
     return np
 
 
 def _to_numpy_array(arr):
     """Convert CuPy arrays to NumPy; leave other inputs unchanged."""
 
-    if cp is not None and isinstance(arr, cp.ndarray):
-        return cp.asnumpy(arr)
+    array_mod = _select_array_backend()
+    if array_mod.__name__ == "cupy" and isinstance(arr, array_mod.ndarray):
+        return array_mod.asnumpy(arr)
     return np.asarray(arr)
 
 
 def _to_pandas_dataframe(obj):
     """Convert cudf.DataFrame to pandas for consistent downstream handling."""
 
-    if cudf is not None and isinstance(obj, cudf.DataFrame):
+    df_mod = _select_dataframe_backend()
+    if df_mod.__name__ == "cudf" and isinstance(obj, df_mod.DataFrame):
         return obj.to_pandas()
     return obj
 
@@ -78,7 +79,8 @@ def _to_pandas_dataframe(obj):
 def _series_to_array(series):
     """Convert pandas or cuDF Series to a NumPy or CuPy array."""
 
-    if cudf is not None and isinstance(series, cudf.Series):
+    df_mod = _select_dataframe_backend()
+    if df_mod.__name__ == "cudf" and isinstance(series, df_mod.Series):
         if hasattr(series, "to_cupy"):
             try:
                 return _to_numpy_array(series.to_cupy())
@@ -865,9 +867,13 @@ def _build_hap_labels_from_rfmix(
         Per-locus ancestry labels (0..n_anc-1) for hap0 and hap1.
         ``-1`` indicates missing (no ancestry column > 0 at that locus).
     """
+    import dask.array as da
+
     base = sample_idx * (n_anc * 2)
     cols_h0 = base + np.arange(n_anc) * 2
     cols_h1 = base + np.arange(n_anc) * 2 + 1
+
+    import dask.array as da
 
     if isinstance(X_raw, da.Array):
         H0 = X_raw[:, cols_h0].compute()
@@ -1011,6 +1017,8 @@ def phase_admix_dask_with_index(
     admix_corr : (L, S, A) dask.array.Array
         Phase-corrected local ancestry counts.
     """
+    import dask.array as da
+
     if not isinstance(admix, da.Array):
         raise TypeError("admix must be a dask.array.Array")
 

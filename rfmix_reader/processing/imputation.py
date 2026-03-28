@@ -12,32 +12,18 @@ import numpy as np
 from tqdm import tqdm
 from time import strftime
 from pandas import DataFrame
-from dask.array import Array
-from typing import Literal, Optional
+from typing import Literal, Optional, TYPE_CHECKING
 
-try:
-    from torch.cuda import is_available as cuda_is_available
-except ModuleNotFoundError:
-    def cuda_is_available() -> bool:
-        return False
+from ..backends import _select_array_backend
 
-try:
-    import cupy as cp
-except ImportError:
-    cp = None
-
-GPU_ENABLED = bool(cuda_is_available() and (cp is not None))
-
-if GPU_ENABLED:
-    arr_mod = cp
-else:
-    arr_mod = np
+if TYPE_CHECKING:
+    from dask.array import Array
 
 InterpMethod = Literal["linear", "nearest", "stepwise"]
 
 def _to_host(x):
     """Convert an array-module array back to a NumPy array on host."""
-    if GPU_ENABLED and hasattr(x, "get"):
+    if hasattr(x, "__cuda_array_interface__") and hasattr(x, "get"):
         return x.get()
     return np.asarray(x)
 
@@ -94,10 +80,10 @@ def _interpolate_1d(
 
     Returns
     -------
-    col_imputed : same type as arr_mod
+    col_imputed : same type as the selected array backend
         Interpolated values, either float (posteriors) or int (hard states).
     """
-    mod = arr_mod
+    mod = _select_array_backend()
     col = mod.asarray(col, dtype=mod.float32)
     mask = mod.isnan(col)
     if not bool(mask.any()):
@@ -166,14 +152,23 @@ def interpolate_block(
     space (0..n_loci-1).
 
     Returns a float32 array in the same array module (NumPy or CuPy).
+
+    Notes
+    -----
+    Columns with no missing values are skipped entirely before interpolation
+    begins, which avoids redundant computation for fully-observed loci.
     """
-    mod = arr_mod
+    mod = _select_array_backend()
     block = mod.asarray(block, dtype=mod.float32)
     loci_dim, sample_dim, ancestry_dim = block.shape
 
     flat = block.reshape(loci_dim, -1)  # (loci, samples*ancestries)
     x = mod.asarray(pos, dtype=mod.float32) if pos is not None else None
+    # Pre-compute NaN mask per column to skip columns that need no interpolation
+    has_nan = mod.isnan(flat).any(axis=0)
     for j in range(flat.shape[1]):
+        if not has_nan[j]:
+            continue
         flat[:, j] = _interpolate_1d(flat[:, j], x=x, method=method)
 
     return flat.reshape(loci_dim, sample_dim, ancestry_dim)
@@ -213,7 +208,9 @@ def _expand_array(
     Notes
     -----
     - The resulting Zarr array is saved to disk at the specified path.
-    - Memory usage may be high when dealing with large datasets.
+    - If the admix array fits within 50% of available system memory it is
+      pre-materialized in one ``compute()`` call; otherwise data is read in
+      contiguous slices per batch to reduce redundant Dask I/O.
     """
     _print_logger("Generate empty Zarr.")
     n_samples = min(500, admix.shape[1])
@@ -233,6 +230,17 @@ def _expand_array(
     dest_idx = np.flatnonzero(~np.isnan(i))
     src_idx  = i[dest_idx].astype(np.int64)
 
+    # Pre-materialize admix if it fits in available memory; otherwise use
+    # contiguous slice access (src_idx is sorted) to avoid expensive Dask
+    # fancy indexing per batch.
+    from psutil import virtual_memory
+    admix_bytes = admix.nbytes
+    avail_mem = virtual_memory().available
+    admix_np = None
+    if admix_bytes < avail_mem * 0.5:
+        _print_logger("Pre-materializing admix array (fits in memory).")
+        admix_np = admix.compute()
+
     # Add admix into zarr
     _print_logger("Filling Zarr with local ancestry data in batches.")
     for start in range(0, dest_idx.size, batch_size):
@@ -240,7 +248,14 @@ def _expand_array(
 
         # Write only valid rows to avoid overwriting NaNs
         d = dest_idx[start:end]
-        z[d, :, :] = admix[src_idx[start:end]].compute()
+        batch_src = src_idx[start:end]
+        if admix_np is not None:
+            z[d, :, :] = admix_np[batch_src]
+        else:
+            # Use contiguous slice + local reindex to avoid Dask fancy indexing
+            lo, hi = int(batch_src[0]), int(batch_src[-1]) + 1
+            slab = admix[lo:hi].compute()
+            z[d, :, :] = slab[batch_src - lo]
 
     _print_logger("Zarr array successfully populated!")
     return z
@@ -320,9 +335,10 @@ def interpolate_array(
     for start in tqdm(range(0, total_rows, chunk_size),
                       desc="Interpolating chunks", unit="chunk"):
         end = min(start + chunk_size, total_rows)
-        chunk = arr_mod.array(z[start:end, :, :], dtype=arr_mod.float32)
+        mod = _select_array_backend()
+        chunk = mod.array(z[start:end, :, :], dtype=mod.float32)
         pos_chunk = None if pos is None else pos[start:end]
-        if start == 0 and not arr_mod.isnan(chunk).any():
+        if start == 0 and not mod.isnan(chunk).any():
             warnings.warn(
                 f"No NaNs detected in first chunk; interpolation may be unnecessary."
             )

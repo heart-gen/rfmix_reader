@@ -1,38 +1,29 @@
+from __future__ import annotations
+
 from tqdm import tqdm
-from dask import config
-import dask.dataframe as dd
 from numpy import ndarray, full
-from typing import List, Union, Tuple
 from multiprocessing import cpu_count
-from dask.array import (
-    diff,
-    Array,
-    array,
-    argmax,
-    from_array,
-    concatenate,
-    expand_dims
-)
+from typing import List, Union, Tuple, TYPE_CHECKING
 
 from ..utils import get_pops, get_sample_names
+from ..backends import (
+    _configure_dask_backends,
+    _select_array_backend,
+    _select_dataframe_backend
+)
 
-try:
-    from torch.cuda import is_available
-except ModuleNotFoundError as e:
-    print("Warning: PyTorch is not installed. Using CPU!")
-    def is_available():
-        return False
+if TYPE_CHECKING:
+    from dask.array import Array
+    import dask.dataframe as dd
 
-if is_available():
-    import cupy as cp
-    from cudf import DataFrame
-    config.set({"dataframe.backend": "cudf"})
-    config.set({"array.backend": "cupy"})
-else:
-    import numpy as cp
-    from pandas import DataFrame
-    config.set({"dataframe.backend": "pandas"})
-    config.set({"array.backend": "numpy"})
+
+def _get_array_backend():
+    return _select_array_backend()
+
+
+def _get_dataframe_backend():
+    return _select_dataframe_backend()
+
 
 def admix_to_bed_individual(
         loci: DataFrame, g_anc: DataFrame, admix: Array, sample_num: int,
@@ -60,7 +51,9 @@ def admix_to_bed_individual(
         compatible with the number of loci and populations.
 
     sample_num : int
-       The column name including in data, will take the first population
+        Zero-based integer index of the sample to extract from ``g_anc``.
+        For example, ``0`` selects the first sample, ``1`` the second, and
+        so on.
 
     chunk_size : int, optional
         Size of chunks to process at once (default=10_000)
@@ -78,6 +71,10 @@ def admix_to_bed_individual(
     DataFrame: A DataFrame (pandas or cudf) in BED-like format with columns:
         'chromosome', 'start', 'end', and ancestry data columns.
 
+    Raises
+    ------
+    IndexError
+        If ``sample_num`` is negative or >= the number of samples in ``g_anc``.
 
     Notes
     -----
@@ -93,9 +90,16 @@ def admix_to_bed_individual(
     >>> loci, g_anc, admix = read_rfmix(prefix_path)
     >>> admix_to_bed_individual(loci_df, g_anc_df, admix_array, "chr22")
     """
+    _configure_dask_backends()
+
     # Column annotations
     pops = get_pops(g_anc)
     sample_ids = get_sample_names(g_anc)
+    if sample_num < 0 or sample_num >= len(sample_ids):
+        raise IndexError(
+            f"sample_num {sample_num} is out of range "
+            f"[0, {len(sample_ids) - 1}]"
+        )
     col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
     sample_name = f"{sample_ids[sample_num]}"
 
@@ -154,6 +158,9 @@ def _generate_bed(
       chromosome.
     - Large datasets may require significant processing time and disk space.
     """
+    import dask.dataframe as dd
+    from dask.array import from_array
+
     # Check if the DataFrame and Dask array have the same number of rows
     assert df.shape[0] == dask_matrix.shape[0], "DataFrame and Dask array must have the same number of rows"
 
@@ -161,13 +168,16 @@ def _generate_bed(
     parts = cpu_count()
     ncols = dask_matrix.shape[1]
 
-    if is_available() and isinstance(df, DataFrame):
+    df_mod = _get_dataframe_backend()
+    use_gpu = df_mod.__name__ == "cudf"
+    if use_gpu and isinstance(df, df_mod.DataFrame):
         ddf = dd.from_pandas(df.to_pandas(), npartitions=parts)
     else:
         ddf = dd.from_pandas(df, npartitions=parts)
 
     # Add each column of the Dask array to the DataFrame
     if isinstance(dask_matrix, ndarray):
+        from dask.array import from_array
         dask_matrix = from_array(dask_matrix, chunks="auto")
 
     dask_df = dd.from_dask_array(dask_matrix, columns=col_names)
@@ -253,6 +263,8 @@ def _process_chromosome(
     0          1    100  200     1
     1          1    300  400     0
     """
+    import dask.dataframe as dd
+
     # Fetch chromosome
     chrom_val = group["chromosome"].drop_duplicates().compute()
 
@@ -275,6 +287,7 @@ def _process_chromosome(
                                                   data_matrix, change_indices,
                                                   len(pops))
     cnames = ['chromosome', 'start', 'end'] + sample_cols
+    import dask.dataframe as dd
     df_numeric = dd.from_dask_array(numeric_data, columns=cnames[1:])
     return df_numeric.assign(chromosome=chrom_val)[cnames]
 
@@ -302,6 +315,7 @@ def _find_intervals(data_matrix: Array, chunk_size: int,
     List[int]
         Sorted indices of ancestry change points (0-based)
     """
+    cp = _get_array_backend()
     # Get dimensions
     n_positions = data_matrix.shape[0]
     n_chunks = (n_positions + chunk_size - 1) // chunk_size
@@ -378,6 +392,10 @@ def _create_bed_records(
     - Final interval ends at last physical position
     - Ancestry values taken from interval end points
     """
+    from dask.array import array, concatenate, expand_dims, from_array
+
+    cp = _get_array_backend()
+
     idx = cp.asarray(idx)
 
     if len(idx) == 0:
@@ -392,12 +410,8 @@ def _create_bed_records(
         ])
         return chrom_col, from_array(numeric_cols)
 
-    # Check if last interval has room for extension
-    max_idx = len(pos) - 1
-    final_idx = int(idx[-1])
-    next_idx = final_idx + 1 if final_idx + 1 <= max_idx else final_idx
-
     # Start and end index arrays
+    max_idx = len(pos) - 1
     start_idx = cp.concatenate([cp.array([0]), idx[:-1] + 1])
     end_idx = idx
 
@@ -407,17 +421,14 @@ def _create_bed_records(
     ancestry_col = data_matrix[end_idx, :]
     last_ancestry = data_matrix[max_idx, :]
 
-    # Add final interval
+    # Add final interval only if there is remaining data after last change point
     last_end_index = int(end_idx[-1])
     if last_end_index + 1 < len(pos):
         last_start = pos[last_end_index + 1]
-    else:
-        last_start = pos[last_end_index]
-    last_end = pos[int(end_idx[-1])]
-
-    start_col = concatenate([start_col, array([last_start])])
-    end_col = concatenate([end_col, array([last_end])])
-    ancestry_col = concatenate([ancestry_col,expand_dims(last_ancestry,axis=0)])
+        last_end = pos[-1]
+        start_col = concatenate([start_col, array([last_start])])
+        end_col = concatenate([end_col, array([last_end])])
+        ancestry_col = concatenate([ancestry_col, expand_dims(last_ancestry, axis=0)])
 
     # Stack numeric columns: start, end, ancestry_cols
     numeric_cols = cp.hstack([

@@ -5,6 +5,7 @@ import pytest
 
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
+pysam = pytest.importorskip("pysam")
 
 from rfmix_reader.readers.read_simu import (
     MISSING,
@@ -13,6 +14,16 @@ from rfmix_reader.readers.read_simu import (
     _parse_pop_labels,
     read_simu,
 )
+
+
+def _bgzip_and_index(vcf_path):
+    """BGZF-compress a VCF and create a tabix index. Returns .vcf.gz path."""
+    vcf_str = str(vcf_path)
+    gz_path = vcf_str + ".gz"
+    pysam.tabix_compress(vcf_str, gz_path, force=True)
+    pysam.tabix_index(gz_path, preset="vcf", force=True)
+    os.remove(vcf_str)  # Remove plain VCF to avoid duplicate discovery
+    return gz_path
 
 @pytest.fixture
 def realistic_vcf(tmp_path):
@@ -24,7 +35,7 @@ def realistic_vcf(tmp_path):
     header = textwrap.dedent("""\
         ##fileformat=VCFv4.2
         ##FILTER=<ID=PASS,Description="All filters passed">
-        ##contig=<ID=chr21>
+        ##contig=<ID=chr21,length=46709983>
         ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
         ##FORMAT=<ID=POP,Number=2,Type=String,Description="Origin Population of each respective allele in GT">
         #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSample_1\tSample_2\tSample_3\tSample_4\tSample_5
@@ -40,11 +51,14 @@ def realistic_vcf(tmp_path):
         f.write(header)
         f.write(record + "\n")
 
-    # .bp file with ancestry labels
+    # BGZF-compress and tabix-index for region queries
+    gz_path = _bgzip_and_index(vcf_path)
+
+    # .bp file with ancestry labels (named to match .vcf.gz stem)
     with open(bp_path, "w") as f:
         f.write("YRI\nCEU\n")
 
-    return str(vcf_path)
+    return gz_path
 
 
 def test_parse_pop_labels_bp(realistic_vcf):
@@ -58,7 +72,7 @@ def test_parse_pop_labels_fallback(tmp_path):
     header = textwrap.dedent("""\
         ##fileformat=VCFv4.2
         ##FILTER=<ID=PASS,Description="All filters passed">
-        ##contig=<ID=chr21>
+        ##contig=<ID=chr21,length=46709983>
         ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
         ##FORMAT=<ID=POP,Number=2,Type=String,Description="Origin Population of each respective allele in GT">
         #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\tSample_1
@@ -100,7 +114,7 @@ def test_read_simu_stress(tmp_path):
     header = textwrap.dedent("""\
         ##fileformat=VCFv4.2
         ##FILTER=<ID=PASS,Description="All filters passed">
-        ##contig=<ID=chr21>
+        ##contig=<ID=chr21,length=46709983>
         ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
         ##FORMAT=<ID=POP,Number=2,Type=String,Description="Origin Population of each respective allele in GT">
         #CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t{}
@@ -118,10 +132,13 @@ def test_read_simu_stress(tmp_path):
         f.write(header)
         f.write(record + "\n")
 
+    # BGZF-compress and tabix-index for region queries
+    gz_path = _bgzip_and_index(vcf_path)
+
     with open(bp_path, "w") as f:
         f.write("YRI\nCEU\n")
 
-    loci_df, g_anc, local_array = read_simu(os.path.dirname(vcf_path))
+    loci_df, g_anc, local_array = read_simu(os.path.dirname(gz_path))
 
     assert loci_df.shape[0] == 1
     assert g_anc.shape[0] == n_samples

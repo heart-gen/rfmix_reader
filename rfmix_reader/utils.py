@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import gzip
 from tqdm import tqdm
 from glob import glob
@@ -9,11 +11,9 @@ from typing import Callable, List, Optional
 from multiprocessing import Pool, cpu_count
 from subprocess import run, CalledProcessError
 from os.path import basename, dirname, join, exists
+from typing import TYPE_CHECKING
 
-try:
-    from cudf import DataFrame
-except ImportError:
-    print("Warning: Using CPU!")
+if TYPE_CHECKING:
     from pandas import DataFrame
 
 def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List[str]:
@@ -602,6 +602,9 @@ def create_binaries(
     PermissionError: If there are insufficient permissions to create
                      the binary directory.
     IOError: If there's an error during the file conversion process.
+    RuntimeError: If both ``.fb.tsv`` and ``.fb.tsv.gz`` forms of the same
+                  file are found in the same directory, which would cause
+                  ambiguous prefix resolution.
 
     Example
     -------
@@ -631,7 +634,7 @@ def create_binaries(
         fb_files = []
         for f in fn:
             fb_path = f["fb.tsv"]  # normalized key, may be plain or gzipped file
-            prefix = fb_path.replace(".fb.tsv", "").replace(".fb.tsv.gz", "")
+            prefix = fb_path.replace(".fb.tsv.gz", "").replace(".fb.tsv", "")
 
             has_plain = Path(f"{prefix}.fb.tsv").exists()
             has_gzip  = Path(f"{prefix}.fb.tsv.gz").exists()

@@ -144,7 +144,7 @@ def _read_vcf(fn: str, chunk_size: int32 = 1_000_000) -> DataFrame:
         raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
     # Ensure DataFrame contains correct columns
     if not all(column in df.columns for column in list(header.keys())):
-        raise ValueError(f"DataFrame does not contain expected columns: {columns}")
+        raise ValueError(f"DataFrame does not contain expected columns: {list(header.keys())}")
     return df
 
 
@@ -283,56 +283,59 @@ def _load_haplotypes(vcf_file: str, chunk_size: int32 = 10_000) -> Array:
         raise FileNotFoundError(f"VCF file not found: {vcf_file}")
 
     vcf = VCF(vcf_file)
-    samples = vcf.samples
-    n_samples = len(samples)
+    try:
+        samples = vcf.samples
+        n_samples = len(samples)
 
-    # Parse ancestry header
-    ancestry_map = _parse_ancestry_header(vcf_file)
-    n_ancestries = len(ancestry_map)
+        # Parse ancestry header
+        ancestry_map = _parse_ancestry_header(vcf_file)
+        n_ancestries = len(ancestry_map)
 
-    def process_chunk(records):
-        chunk_len = len(records)
-        counts = zeros((chunk_len, n_samples, n_ancestries), dtype=int8)
+        def process_chunk(records):
+            chunk_len = len(records)
+            counts = zeros((chunk_len, n_samples, n_ancestries), dtype=int8)
 
-        for i, rec in enumerate(records):
-            an1 = rec.format("AN1")
-            an2 = rec.format("AN2")
+            for i, rec in enumerate(records):
+                an1 = rec.format("AN1")
+                an2 = rec.format("AN2")
 
-            # Mask missing values as -1
-            an1 = asarray(an1, dtype=int8).ravel()
-            an2 = asarray(an2, dtype=int8).ravel()
+                # Mask missing values as -1
+                an1 = asarray(an1, dtype=int8).ravel()
+                an2 = asarray(an2, dtype=int8).ravel()
 
-            # Count local ancestries in vectorized fashion
-            for anc_idx in range(n_ancestries):
-                counts[i, :, anc_idx] = (
-                    (an1 == anc_idx).astype(int8) +
-                    (an2 == anc_idx).astype(int8)
+                # Count local ancestries in vectorized fashion
+                for anc_idx in range(n_ancestries):
+                    counts[i, :, anc_idx] = (
+                        (an1 == anc_idx).astype(int8) +
+                        (an2 == anc_idx).astype(int8)
+                    )
+
+            return counts
+
+        records_buffer = []
+        delayed_arrays = []
+        for rec in vcf:
+            records_buffer.append(rec)
+            if len(records_buffer) == chunk_size:
+                delayed_arrays.append(
+                    from_delayed(
+                        delayed(process_chunk)(records_buffer),
+                        shape=(chunk_size, n_samples, n_ancestries),
+                        dtype=int8,
+                    )
                 )
+                records_buffer = []
 
-        return counts
-
-    records_buffer = []
-    delayed_arrays = []
-    for rec in vcf:
-        records_buffer.append(rec)
-        if len(records_buffer) == chunk_size:
+        if records_buffer:
             delayed_arrays.append(
                 from_delayed(
                     delayed(process_chunk)(records_buffer),
-                    shape=(chunk_size, n_samples, n_ancestries),
+                    shape=(len(records_buffer), n_samples, n_ancestries),
                     dtype=int8,
                 )
             )
-            records_buffer = []
-
-    if records_buffer:
-        delayed_arrays.append(
-            from_delayed(
-                delayed(process_chunk)(records_buffer),
-                shape=(len(records_buffer), n_samples, n_ancestries),
-                dtype=int8,
-            )
-        )
+    finally:
+        vcf.close()
 
     # Build dask arrays by stacking (variants, samples, ancestries)
     combined = concatenate(delayed_arrays, axis=0)
@@ -364,16 +367,19 @@ def _parse_ancestry_header(vcf_file: str) -> dict:
         Mapping from ancestry label (e.g., 'EUR') to integer index (e.g., 0).
     """
     vcf = VCF(vcf_file)
-    ancestries = {}
-    for hline in vcf.raw_header.splitlines():
-        if hline.startswith("##ANCESTRY="):
-            m = search(r"<(.+)>", hline)
-            if m:
-                pairs = m.group(1).split(",")
-                for pair in pairs:
-                    label, idx = pair.split("=")
-                    ancestries[label] = int(idx)
-            break
+    try:
+        ancestries = {}
+        for hline in vcf.raw_header.splitlines():
+            if hline.startswith("##ANCESTRY="):
+                m = search(r"<(.+)>", hline)
+                if m:
+                    pairs = m.group(1).split(",")
+                    for pair in pairs:
+                        label, idx = pair.split("=")
+                        ancestries[label] = int(idx)
+                break
+    finally:
+        vcf.close()
     return ancestries
 
 
@@ -395,17 +401,20 @@ def _load_vcf_info(vcf_file: str, chunk_size: int32 = 1_000_000
         DataFrame with 'chromosome' and 'physical_position' columns loaded chunk.
     """
     vcf = VCF(vcf_file)
-    records, count = [], 0
+    try:
+        records, count = [], 0
 
-    for rec in vcf:
-        records.append({'chromosome': rec.CHROM, 'physical_position': rec.POS})
-        count += 1
-        if count % chunk_size == 0:
+        for rec in vcf:
+            records.append({'chromosome': rec.CHROM, 'physical_position': rec.POS})
+            count += 1
+            if count % chunk_size == 0:
+                yield DataFrame(records)
+                records = []
+
+        if records:
             yield DataFrame(records)
-            records = []
-
-    if records:
-        yield DataFrame(records)
+    finally:
+        vcf.close()
 
 
 def _types(fn: str) -> dict:

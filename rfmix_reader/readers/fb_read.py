@@ -1,7 +1,3 @@
-"""
-Adapted from `_bed_read.py` script in the `pandas-plink` package.
-Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_bed_read.py
-"""
 from dask.delayed import delayed
 from dask.array import from_delayed, Array, concatenate
 from numpy import (
@@ -103,4 +99,3 @@ def _read_chunk(
     buff = memmap(filepath, dtype=float32, mode="r",
                   offset=offset, shape=size)
     return buff.astype(int32, copy=False)
-    

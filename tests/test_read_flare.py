@@ -1,5 +1,6 @@
 # tests/test_read_flare.py
 import gzip
+import importlib
 import pytest
 
 pytest.importorskip("cudf")
@@ -7,7 +8,8 @@ import cudf
 pd = pytest.importorskip("pandas")
 da = pytest.importorskip("dask.array")
 
-import rfmix_reader.readers.read_flare as flare
+# Use importlib to get the module, not the function re-exported by __init__.py
+flare = importlib.import_module("rfmix_reader.readers.read_flare")
 
 
 @pytest.fixture
@@ -87,8 +89,8 @@ def test_load_haplotypes(tmp_flare_dir):
 def test_read_flare(tmp_flare_dir, monkeypatch):
     def fake_get_prefixes(prefix, mode, verbose):
         return [{
-            "anc.vcf.gz": str(tmp_flare_dir / "chr21.anc.vcf"),
-            "global.anc.gz": str(tmp_flare_dir / "chr21.global.anc.gz"),
+            "anc.vcf": str(tmp_flare_dir / "chr21.anc.vcf"),
+            "global.anc": str(tmp_flare_dir / "chr21.global.anc.gz"),
         }]
     monkeypatch.setattr(flare, "get_prefixes", fake_get_prefixes)
 

@@ -2,6 +2,7 @@
 Adapted from `main.py` script in the `tagore` package.
 Source: https://github.com/jordanlab/tagore/blob/master/src/tagore/main.py
 """
+from __future__ import annotations
 import re
 from pickle import loads
 from os import X_OK, path
@@ -10,18 +11,6 @@ from importlib.resources import open_binary
 from subprocess import check_output, CalledProcessError
 
 from ..processing import CHROM_SIZES, COORDINATES
-
-try:
-    from torch.cuda import is_available
-except ModuleNotFoundError as e:
-    print("Warning: PyTorch is not installed. Using CPU!")
-    def is_available():
-        return False
-
-if is_available():
-    from cudf import DataFrame
-else:
-    from pandas import DataFrame
 
 def _printif(message: str, verbose: bool):
     """
