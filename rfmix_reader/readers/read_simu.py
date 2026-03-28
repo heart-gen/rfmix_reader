@@ -116,18 +116,21 @@ def _read_loci_from_vcf(
         A DataFrame containing 'chromosome' and 'physical_position' for each chunk.
     """
     vcf = VCF(vcf_file)
-    loci = []
-    for rec in vcf:
-        loci.append({
-            'chromosome': rec.CHROM,
-            'physical_position': rec.POS
-        })
-        if len(loci) >= chunk_size:
-            yield DataFrame(loci)
-            loci = []
+    try:
+        loci = []
+        for rec in vcf:
+            loci.append({
+                'chromosome': rec.CHROM,
+                'physical_position': rec.POS
+            })
+            if len(loci) >= chunk_size:
+                yield DataFrame(loci)
+                loci = []
 
-    if loci:
-        yield DataFrame(loci)
+        if loci:
+            yield DataFrame(loci)
+    finally:
+        vcf.close()
 
 
 def _load_haplotypes_and_global_ancestry(
@@ -197,10 +200,16 @@ def _read_haplotypes(
 
 def _init_vcf(vcf_file, vcf_threads):
     vcf = VCF(vcf_file)
-    if vcf_threads and hasattr(vcf, "set_threads"):
-        vcf.set_threads(vcf_threads)
+    try:
+        if vcf_threads and hasattr(vcf, "set_threads"):
+            vcf.set_threads(vcf_threads)
+        samples = vcf.samples
+        seqname = vcf.seqnames[0]
+        seqlen = vcf.seqlens[0]
+    finally:
+        vcf.close()
 
-    return vcf, vcf.samples, vcf.seqnames[0], vcf.seqlens[0]
+    return None, samples, seqname, seqlen
 
 
 def _process_vectorized_batch(
@@ -329,23 +338,26 @@ def _parse_pop_labels(vcf_file: str, max_records: int = 100) -> List[str]:
     else:
         # Fallback
         vcf = VCF(vcf_file)
-        n_scanned = 0
-        for rec in vcf:
-            try:
-                pop = rec.format("POP")
-            except Exception as e:
-                continue
+        try:
+            n_scanned = 0
+            for rec in vcf:
+                try:
+                    pop = rec.format("POP")
+                except Exception as e:
+                    continue
 
-            if pop is not None:
-                flat = np.asarray(pop).astype(str).ravel()
-                for entry in flat:
-                    if not entry:
-                        continue
-                    ancestries.update(entry.replace(" ", "").split(","))
+                if pop is not None:
+                    flat = np.asarray(pop).astype(str).ravel()
+                    for entry in flat:
+                        if not entry:
+                            continue
+                        ancestries.update(entry.replace(" ", "").split(","))
 
-            n_scanned += 1
-            if n_scanned >= max_records:
-                break
+                n_scanned += 1
+                if n_scanned >= max_records:
+                    break
+        finally:
+            vcf.close()
 
     if not ancestries:
         raise ValueError(

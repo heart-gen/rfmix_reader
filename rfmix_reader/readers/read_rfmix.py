@@ -4,7 +4,6 @@ Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_read.py
 """
 from __future__ import annotations
 import warnings
-from re import search
 from tqdm import tqdm
 from glob import glob
 from numpy import int32, array
@@ -16,6 +15,7 @@ from os.path import basename, dirname, join, exists
 from .fb_read import read_fb
 from ..io import BinaryFileNotFoundError, Chunk
 from ..utils import (
+    _extract_chrom_from_path,
     _read_file,
     create_binaries,
     filter_file_maps_by_chrom,
@@ -193,7 +193,7 @@ def _read_tsv(fn: str) -> DataFrame:
         raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
     # Ensure DataFrame contains correct columns
     if not all(column in df.columns for column in list(header.keys())):
-        raise ValueError(f"DataFrame does not contain expected columns: {columns}")
+        raise ValueError(f"DataFrame does not contain expected columns: {list(header.keys())}")
     return df
 
 
@@ -259,10 +259,9 @@ def _read_Q(fn: str) -> DataFrame:
     """
     df = _read_Q_noi(fn)
 
-    m = search(r'chr[\d]+', fn)
-    if m:
-        chrom = m.group(0)
-        df["chrom"] = chrom
+    chrom_label = _extract_chrom_from_path(fn)
+    if chrom_label is not None:
+        df["chrom"] = f"chr{chrom_label}"
     else:
         print(f"Warning: Could not extract chromosome information from '{fn}'")
 
@@ -408,9 +407,11 @@ def _types(fn: str) -> dict:
 # them easy to reach for tests and advanced users who rely on the original
 # script-style API.
 read_rfmix._read_tsv = _read_tsv
+read_rfmix._read_loci = _read_loci
 read_rfmix._read_csv = _read_csv
 read_rfmix._read_Q = _read_Q
 read_rfmix._read_Q_noi = _read_Q_noi
 read_rfmix._subset_populations = _subset_populations
 read_rfmix._read_fb = _read_fb
+read_rfmix._types = _types
 read_rfmix.BinaryFileNotFoundError = BinaryFileNotFoundError

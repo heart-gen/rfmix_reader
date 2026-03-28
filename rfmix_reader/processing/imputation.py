@@ -21,9 +21,6 @@ if TYPE_CHECKING:
 
 InterpMethod = Literal["linear", "nearest", "stepwise"]
 
-if TYPE_CHECKING:
-    from dask.array import Array
-
 def _to_host(x):
     """Convert an array-module array back to a NumPy array on host."""
     if hasattr(x, "__cuda_array_interface__") and hasattr(x, "get"):
@@ -155,6 +152,11 @@ def interpolate_block(
     space (0..n_loci-1).
 
     Returns a float32 array in the same array module (NumPy or CuPy).
+
+    Notes
+    -----
+    Columns with no missing values are skipped entirely before interpolation
+    begins, which avoids redundant computation for fully-observed loci.
     """
     mod = _select_array_backend()
     block = mod.asarray(block, dtype=mod.float32)
@@ -162,7 +164,11 @@ def interpolate_block(
 
     flat = block.reshape(loci_dim, -1)  # (loci, samples*ancestries)
     x = mod.asarray(pos, dtype=mod.float32) if pos is not None else None
+    # Pre-compute NaN mask per column to skip columns that need no interpolation
+    has_nan = mod.isnan(flat).any(axis=0)
     for j in range(flat.shape[1]):
+        if not has_nan[j]:
+            continue
         flat[:, j] = _interpolate_1d(flat[:, j], x=x, method=method)
 
     return flat.reshape(loci_dim, sample_dim, ancestry_dim)
@@ -202,7 +208,9 @@ def _expand_array(
     Notes
     -----
     - The resulting Zarr array is saved to disk at the specified path.
-    - Memory usage may be high when dealing with large datasets.
+    - If the admix array fits within 50% of available system memory it is
+      pre-materialized in one ``compute()`` call; otherwise data is read in
+      contiguous slices per batch to reduce redundant Dask I/O.
     """
     _print_logger("Generate empty Zarr.")
     n_samples = min(500, admix.shape[1])
@@ -222,6 +230,17 @@ def _expand_array(
     dest_idx = np.flatnonzero(~np.isnan(i))
     src_idx  = i[dest_idx].astype(np.int64)
 
+    # Pre-materialize admix if it fits in available memory; otherwise use
+    # contiguous slice access (src_idx is sorted) to avoid expensive Dask
+    # fancy indexing per batch.
+    from psutil import virtual_memory
+    admix_bytes = admix.nbytes
+    avail_mem = virtual_memory().available
+    admix_np = None
+    if admix_bytes < avail_mem * 0.5:
+        _print_logger("Pre-materializing admix array (fits in memory).")
+        admix_np = admix.compute()
+
     # Add admix into zarr
     _print_logger("Filling Zarr with local ancestry data in batches.")
     for start in range(0, dest_idx.size, batch_size):
@@ -229,7 +248,14 @@ def _expand_array(
 
         # Write only valid rows to avoid overwriting NaNs
         d = dest_idx[start:end]
-        z[d, :, :] = admix[src_idx[start:end]].compute()
+        batch_src = src_idx[start:end]
+        if admix_np is not None:
+            z[d, :, :] = admix_np[batch_src]
+        else:
+            # Use contiguous slice + local reindex to avoid Dask fancy indexing
+            lo, hi = int(batch_src[0]), int(batch_src[-1]) + 1
+            slab = admix[lo:hi].compute()
+            z[d, :, :] = slab[batch_src - lo]
 
     _print_logger("Zarr array successfully populated!")
     return z

@@ -479,6 +479,15 @@ available if you build additional custom Matplotlib figures.
    tagore_df = generate_tagore_bed(loci_df, g_anc, admix, sample_num=0)
    tagore_df.head()
 
+.. note::
+
+   ``sample_num`` is a zero-based integer index into the list of samples
+   derived from ``g_anc``.  For example, ``0`` selects the first sample,
+   ``1`` the second, and so on.  Passing a value outside the range
+   ``[0, n_samples - 1]`` raises an :exc:`IndexError`.
+
+.. code:: python
+
    plot_local_ancestry_tagore(
        tagore_df,
        prefix="local-ancestry-sample0",

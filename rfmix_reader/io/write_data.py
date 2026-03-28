@@ -21,12 +21,13 @@ if TYPE_CHECKING:
 
 __all__ = ["write_data", "write_imputed"]
 
-if TYPE_CHECKING:
-    from dask.array import Array
-
 
 def _get_dataframe_backend():
     return _select_dataframe_backend()
+
+
+def _is_gpu_dataframe():
+    return _get_dataframe_backend().__name__ == "cudf"
 
 
 def _get_dask_dataframe_backend():
@@ -93,6 +94,8 @@ def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
     - Updates columns names of loci if not already changed to ["chrom", "pos"].
     - The function handles both cuDF and pandas DataFrames. If cuDF is available,
       it converts `loci` to pandas before processing.
+    - The Dask chunk-size configuration is temporarily set to ``256 MiB``
+      during execution and restored to its previous value on completion.
 
     Example:
     --------
@@ -116,72 +119,77 @@ def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
     from dask.diagnostics import ProgressBar
     from dask.dataframe import from_pandas as dd_from_pandas
 
-    # Memory optimization configuration
+    # Memory optimization configuration (save/restore to avoid global side-effects)
+    _prev_chunk_size = config.get("array.chunk-size", None)
     config.set({"array.chunk-size": "256 MiB"})
 
-    def write_partition(partition, path_template, loci_chunk, partition_idx):
-        # Convert input partition to DataFrame
-        output_path = str(path_template).format(partition_idx)
-        df = DataFrame.from_records(partition, columns=col_names)
-        df = concat([loci_chunk, df], axis=1)
-        if use_gpu:
-            # Leverage cuDF
-            df.to_parquet(output_path, index=False)
-        else:
-            # Convert DataFrame to PyArrow Table
-            write_table(Table.from_pandas(df), output_path)
-        empty_cache()
-        return None
-
-    # Column name processing
-    col_names = _get_names(g_anc)
-    loci = _rename_loci_columns(loci)
-    loci["pos"] = loci["pos"]
-    loci["hap"] = loci['chrom'].astype(str) + '_' + loci['pos'].astype(str)
-    loci = loci.drop(columns=["i"], errors="ignore")
-
-    # Dynamic chunk sizing based on system memory
-    target_rows = _get_target_rows(admix, base_rows)
-    admix = admix.rechunk((target_rows, *admix.chunksize[1:]))
-
-    # Split by chromosome
-    chrom_data = _split_by_chrom(loci, admix)
-
-    # Ensure output directory exists
-    makedirs(outdir, exist_ok=True)
-
-    # Processing each chromosome separately
-    for chrom, (loci_chrom, admix_chrom) in chrom_data.items():
-        out_template = Path(outdir) / f"{prefix}.{chrom}-{{}}.parquet"
-        divisions = admix_chrom.numblocks[0] # Partition alignment
-
-        if use_gpu:
-            dask_mod, dask_is_gpu = _get_dask_dataframe_backend()
-            if dask_is_gpu:
-                loci_ddf = dask_mod.from_cudf(loci_chrom, npartitions=divisions)
+    try:
+        def write_partition(partition, path_template, loci_chunk, partition_idx):
+            # Convert input partition to DataFrame
+            output_path = str(path_template).format(partition_idx)
+            df = DataFrame.from_records(partition, columns=col_names)
+            df = concat([loci_chunk, df], axis=1)
+            if use_gpu:
+                # Leverage cuDF
+                df.to_parquet(output_path, index=False)
             else:
-                loci_cpu = loci_chrom.to_pandas() if hasattr(loci_chrom, "to_pandas") else loci_chrom
-                loci_ddf = dd_from_pandas(loci_cpu, npartitions=divisions)
-        else:
-            loci_ddf = dd_from_pandas(loci_chrom, npartitions=divisions)
+                # Convert DataFrame to PyArrow Table
+                write_table(Table.from_pandas(df), output_path)
+            empty_cache()
+            return None
 
-        # Rechunk to fix partition matching
-        part_rows = loci_ddf.partitions[0].compute().shape[0]
-        admix_chrom = admix_chrom.rechunk((part_rows, *admix_chrom.chunksize[1:]))
-        _debug_partition_alignment(admix_chrom, loci_ddf, verbose=verbose)
+        # Column name processing
+        col_names = _get_names(g_anc)
+        loci = _rename_loci_columns(loci)
+        loci["pos"] = loci["pos"]
+        loci["hap"] = loci['chrom'].astype(str) + '_' + loci['pos'].astype(str)
+        loci = loci.drop(columns=["i"], errors="ignore")
 
-        print(f"Processing chromosome {chrom} with {divisions} partitions...")
-        # Parallel processing per chromosome
-        tasks = [
-            delayed(write_partition)(
-                admix_chrom.blocks[i],
-                out_template,
-                loci_ddf.partitions[i],
-                i
-            ) for i in range(divisions)
-        ]
-        with ProgressBar():
-            compute(*tasks) # Execute all tasks in parallel
+        # Dynamic chunk sizing based on system memory
+        target_rows = _get_target_rows(admix, base_rows)
+        admix = admix.rechunk((target_rows, *admix.chunksize[1:]))
+
+        # Split by chromosome
+        chrom_data = _split_by_chrom(loci, admix)
+
+        # Ensure output directory exists
+        makedirs(outdir, exist_ok=True)
+
+        # Processing each chromosome separately
+        for chrom, (loci_chrom, admix_chrom) in chrom_data.items():
+            out_template = Path(outdir) / f"{prefix}.{chrom}-{{}}.parquet"
+            divisions = admix_chrom.numblocks[0] # Partition alignment
+
+            if use_gpu:
+                dask_mod, dask_is_gpu = _get_dask_dataframe_backend()
+                if dask_is_gpu:
+                    loci_ddf = dask_mod.from_cudf(loci_chrom, npartitions=divisions)
+                else:
+                    loci_cpu = loci_chrom.to_pandas() if hasattr(loci_chrom, "to_pandas") else loci_chrom
+                    loci_ddf = dd_from_pandas(loci_cpu, npartitions=divisions)
+            else:
+                loci_ddf = dd_from_pandas(loci_chrom, npartitions=divisions)
+
+            # Rechunk to fix partition matching
+            part_rows = loci_ddf.partitions[0].compute().shape[0]
+            admix_chrom = admix_chrom.rechunk((part_rows, *admix_chrom.chunksize[1:]))
+            _debug_partition_alignment(admix_chrom, loci_ddf, verbose=verbose)
+
+            print(f"Processing chromosome {chrom} with {divisions} partitions...")
+            # Parallel processing per chromosome
+            tasks = [
+                delayed(write_partition)(
+                    admix_chrom.blocks[i],
+                    out_template,
+                    loci_ddf.partitions[i],
+                    i
+                ) for i in range(divisions)
+            ]
+            with ProgressBar():
+                compute(*tasks) # Execute all tasks in parallel
+    finally:
+        if _prev_chunk_size is not None:
+            config.set({"array.chunk-size": _prev_chunk_size})
 
 
 def write_imputed(
@@ -312,7 +320,7 @@ def _get_names(g_anc: DataFrame) -> List[str]:
     - The function assumes input from `read_rfmix`.
     - It uses cuDF-specific methods if available, otherwise falls back to pandas.
     """
-    if is_available():
+    if _is_gpu_dataframe():
         sample_id = list(g_anc.sample_id.unique().to_pandas())
     else:
         sample_id = list(g_anc.sample_id.unique())
@@ -385,13 +393,13 @@ def _split_by_chrom(
     """
     from collections import defaultdict
     chrom_dict = defaultdict(tuple)
-    unique_chroms = loci["chrom"].unique().to_pandas() if is_available() else loci["chrom"].unique()
+    unique_chroms = loci["chrom"].unique().to_pandas() if _is_gpu_dataframe() else loci["chrom"].unique()
     # Create dictionary by chromosome
     for chrom in unique_chroms:
         # Extract loci for this chromosome
         loci_chrom = loci[loci["chrom"] == chrom]
         # Get row indices for this chromosome
-        indices = loci_chrom.index.to_pandas() if is_available() else loci_chrom.index
+        indices = loci_chrom.index.to_pandas() if _is_gpu_dataframe() else loci_chrom.index
         # Extract corresponding rows from admix
         admix_chrom = admix[indices.to_numpy()]
         # Store in dictionary

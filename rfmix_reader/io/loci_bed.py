@@ -51,7 +51,9 @@ def admix_to_bed_individual(
         compatible with the number of loci and populations.
 
     sample_num : int
-       The column name including in data, will take the first population
+        Zero-based integer index of the sample to extract from ``g_anc``.
+        For example, ``0`` selects the first sample, ``1`` the second, and
+        so on.
 
     chunk_size : int, optional
         Size of chunks to process at once (default=10_000)
@@ -69,6 +71,10 @@ def admix_to_bed_individual(
     DataFrame: A DataFrame (pandas or cudf) in BED-like format with columns:
         'chromosome', 'start', 'end', and ancestry data columns.
 
+    Raises
+    ------
+    IndexError
+        If ``sample_num`` is negative or >= the number of samples in ``g_anc``.
 
     Notes
     -----
@@ -89,6 +95,11 @@ def admix_to_bed_individual(
     # Column annotations
     pops = get_pops(g_anc)
     sample_ids = get_sample_names(g_anc)
+    if sample_num < 0 or sample_num >= len(sample_ids):
+        raise IndexError(
+            f"sample_num {sample_num} is out of range "
+            f"[0, {len(sample_ids) - 1}]"
+        )
     col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
     sample_name = f"{sample_ids[sample_num]}"
 
@@ -384,7 +395,6 @@ def _create_bed_records(
     from dask.array import array, concatenate, expand_dims, from_array
 
     cp = _get_array_backend()
-    from dask.array import array, concatenate, expand_dims, from_array
 
     idx = cp.asarray(idx)
 
@@ -400,12 +410,8 @@ def _create_bed_records(
         ])
         return chrom_col, from_array(numeric_cols)
 
-    # Check if last interval has room for extension
-    max_idx = len(pos) - 1
-    final_idx = int(idx[-1])
-    next_idx = final_idx + 1 if final_idx + 1 <= max_idx else final_idx
-
     # Start and end index arrays
+    max_idx = len(pos) - 1
     start_idx = cp.concatenate([cp.array([0]), idx[:-1] + 1])
     end_idx = idx
 
@@ -415,17 +421,14 @@ def _create_bed_records(
     ancestry_col = data_matrix[end_idx, :]
     last_ancestry = data_matrix[max_idx, :]
 
-    # Add final interval
+    # Add final interval only if there is remaining data after last change point
     last_end_index = int(end_idx[-1])
     if last_end_index + 1 < len(pos):
         last_start = pos[last_end_index + 1]
-    else:
-        last_start = pos[last_end_index]
-    last_end = pos[int(end_idx[-1])]
-
-    start_col = concatenate([start_col, array([last_start])])
-    end_col = concatenate([end_col, array([last_end])])
-    ancestry_col = concatenate([ancestry_col, expand_dims(last_ancestry, axis=0)])
+        last_end = pos[-1]
+        start_col = concatenate([start_col, array([last_start])])
+        end_col = concatenate([end_col, array([last_end])])
+        ancestry_col = concatenate([ancestry_col, expand_dims(last_ancestry, axis=0)])
 
     # Stack numeric columns: start, end, ancestry_cols
     numeric_cols = cp.hstack([

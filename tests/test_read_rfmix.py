@@ -1,4 +1,5 @@
 import os
+import importlib
 import pytest
 
 pytest.importorskip("cudf")
@@ -8,7 +9,8 @@ pd = pytest.importorskip("pandas")
 da = pytest.importorskip("dask.array")
 
 from rfmix_reader.io import Chunk
-import rfmix_reader.readers.read_rfmix as rfmix
+# Use importlib to get the module, not the function re-exported by __init__.py
+rfmix = importlib.import_module("rfmix_reader.readers.read_rfmix")
 
 
 def make_dummy_tsv(tmp_path, fname="chr21.fb.tsv"):
@@ -40,16 +42,19 @@ def test__read_tsv_and_loci(tmp_path):
 
 
 def test__read_csv_and_types(tmp_path):
-    fn = make_dummy_tsv(tmp_path, "chr21.Q")
-    header = {"sample_id": "category", "val": np.int32}
-    # Create fake file to satisfy _types
+    # _read_csv expects no header row (Q matrix format)
+    fn_noheader = tmp_path / "chr21_noheader.Q"
     df = pd.DataFrame({"sample_id": ["A", "B"], "val": [1, 2]})
-    df.to_csv(fn, sep="\t", index=False)
-    out = rfmix._read_csv(str(fn), header)
+    df.to_csv(fn_noheader, sep="\t", index=False, header=False)
+    header = {"sample_id": "category", "val": np.int32}
+    out = rfmix._read_csv(str(fn_noheader), header)
     assert isinstance(out, (pd.DataFrame, cudf.DataFrame))
     assert list(out.columns) == ["sample_id", "val"]
 
-    header2 = rfmix._types(str(fn))
+    # _types expects a header row to skip and infer dtypes from data
+    fn_header = tmp_path / "chr21.Q"
+    df.to_csv(fn_header, sep="\t", index=False)
+    header2 = rfmix._types(str(fn_header))
     assert isinstance(header2, dict)
     assert "sample_id" in header2
 
@@ -86,7 +91,7 @@ def test__subset_populations_invalid_columns():
 
 def test__subset_populations_odd_cols():
     X = da.from_array(np.ones((2, 6)))
-    with pytest.raises(ValueError, match="even"):
+    with pytest.raises(ValueError, match="divisible"):
         rfmix._subset_populations(X, npops=2).compute()
 
 
