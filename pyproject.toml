@@ -58,7 +58,7 @@ prepare-reference = "rfmix_reader.cli.prepare_reference:main"
 merge-phased-zarrs = "rfmix_reader.cli.merge_phased_zarrs:main"
 
 [tool.poetry.group.test.dependencies]
-pytest = "^8"
+pytest = ">=8,<10"
 pytest-cov = "^7"
 
 [tool.poetry.group.docs.dependencies]
