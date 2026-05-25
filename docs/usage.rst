@@ -7,8 +7,100 @@ specialized helpers for the main sources of local ancestry results
 prepare inputs, load the supported formats, interpret the returned
 objects, and build quick visualizations.
 
-Preparing input data
---------------------
+Choosing a reader
+-----------------
+
+RFMix produces several output file types. Pick the reader that matches
+your data and analysis goal:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 20 25 25
+
+   * - Use case
+     - Reader
+     - Key file
+     - Typical size
+   * - GWAS, admixture mapping, QC, most analyses
+     - :func:`read_msp`
+     - ``.msp.tsv``
+     - ~3 MB / chrom
+   * - Posterior probabilities / uncertainty-aware models
+     - :func:`read_rfmix`
+     - ``.fb.tsv`` → ``.bin``
+     - ~7.5 GB / chrom
+   * - FLARE-inferred local ancestry
+     - :func:`read_flare`
+     - ``.anc.vcf.gz``
+     - varies
+   * - Haptools simulations
+     - :func:`read_simu`
+     - ``*_simulated.vcf.gz``
+     - varies
+
+**Use** ``read_msp`` **as your default.** The ``.msp.tsv`` file is
+~2,000× smaller than the ``.fb.tsv`` forward-backward matrix, requires no
+binary conversion, and loads in seconds. It contains hard ancestry calls
+(integer counts 0/1/2) that are sufficient for the vast majority of local
+ancestry analyses. Switch to ``read_rfmix`` only when you explicitly need
+posterior probability values.
+
+Reading .msp.tsv files (recommended default)
+--------------------------------------------
+
+``read_msp`` reads RFMix ``.msp.tsv`` files directly into a
+``(loci_df, g_anc, local_array)`` triple — the same interface as every
+other reader in the package.
+
+.. code:: python
+
+   from rfmix_reader import read_msp
+
+   loci_df, g_anc, local_array = read_msp("../examples/two_populations/out/")
+
+To restrict to a single chromosome:
+
+.. code:: python
+
+   loci_df, g_anc, local_array = read_msp(
+       "../examples/two_populations/out/",
+       chrom="21",
+   )
+
+The returned ``local_array`` is a Dask array with shape
+``(n_segments, n_samples, n_ancestries)`` and dtype ``int32``. Values
+are diploid ancestry counts:
+
+* ``0`` — neither allele is from ancestry *k*
+* ``1`` — one allele is from ancestry *k*
+* ``2`` — both alleles are from ancestry *k*
+
+Populations are ordered alphabetically (matching ``read_rfmix`` and
+``read_flare``). Each row corresponds to one RFMix ancestry segment;
+use :func:`interpolate_array` with ``interpolation="stepwise"`` to expand
+segments onto a denser variant grid.
+
+.. note::
+
+   ``read_msp`` sets ``g_anc=None`` by default because global ancestry
+   proportions are not stored in the ``.msp.tsv`` file itself. Pass a
+   pre-loaded global ancestry DataFrame via the ``g_anc=`` keyword, or
+   load it separately:
+
+   .. code:: python
+
+      from rfmix_reader import read_msp, read_rfmix
+
+      # Use read_rfmix only for g_anc, then read ancestry from .msp.tsv
+      _, g_anc, _ = read_rfmix("two_pops/out/")
+      loci_df, g_anc, local_array = read_msp("two_pops/out/", g_anc=g_anc)
+
+Preparing input data (for .fb.tsv / read_rfmix)
+------------------------------------------------
+
+The ``read_rfmix`` path requires converting ``*.fb.tsv`` files to compact
+binary chunks. This step is only needed when you require posterior
+probabilities. Skip this section if you are using ``read_msp``.
 
 The most common workflow starts from the RFMix ``*.fb.tsv`` files. These
 can be converted into compact binary chunks with
@@ -113,13 +205,18 @@ To build a phasing-ready reference set end-to-end::
                               The directory where the binary files will be stored.
                               Defaults to './binary_files'.
 
-Reading RFMix output
---------------------
+Reading RFMix output via .fb.tsv (posterior probabilities)
+-----------------------------------------------------------
+
+Use ``read_rfmix`` when your analysis requires forward-backward posterior
+probabilities — for example, confidence-weighted regression, uncertainty-
+aware imputation, or QTL mapping that propagates ancestry uncertainty.
+For hard ancestry calls, prefer :ref:`read_msp <Reading .msp.tsv files
+(recommended default)>` instead.
 
 ``read_rfmix`` combines the metadata, global ancestry, and local ancestry
-files that RFMix produces per chromosome. It optionally creates missing
-binary files on the fly so you can point the function directly at the
-RFMix output directory.
+binary files that RFMix produces per chromosome. It optionally creates
+missing binary files on the fly.
 
 .. code:: python
 
@@ -220,7 +317,7 @@ Reading FLARE output
 
 ``read_flare`` offers the same interface but targets FLARE's
 ``*.anc.vcf.gz`` and ``global.anc.gz`` files. The output tuple mirrors
-``read_rfmix`` so downstream code can remain identical.
+``read_rfmix`` and ``read_msp`` so downstream code can remain identical.
 
 .. code:: python
 
@@ -441,7 +538,9 @@ Visualization
 =============
 
 ``rfmix-reader`` bundles Matplotlib/Seaborn helpers so that common plots
-and exports do not require manual reshaping.
+and exports do not require manual reshaping. All readers return the same
+``(loci_df, g_anc, admix)`` tuple, so these functions work identically
+regardless of which reader produced the data.
 
 Global summaries
 ----------------
@@ -455,7 +554,11 @@ chromosome-level distributions as boxplots.
    from rfmix_reader import (
        plot_global_ancestry,
        plot_ancestry_by_chromosome,
+       read_msp,
    )
+
+   # read_msp is the recommended default (no binary conversion)
+   loci_df, g_anc, admix = read_msp("two_pops/out/", g_anc=g_anc)
 
    plot_global_ancestry(g_anc, dpi=300, bbox_inches="tight")
    plot_ancestry_by_chromosome(g_anc, dpi=300, bbox_inches="tight")

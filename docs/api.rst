@@ -6,6 +6,18 @@ API Reference
    :undoc-members:
    :show-inheritance:
 
+Readers
+-------
+
+.. autosummary::
+   :toctree: api/generated
+
+   rfmix_reader.readers.read_msp
+   rfmix_reader.readers.read_rfmix
+   rfmix_reader.readers.read_flare
+   rfmix_reader.readers.read_simu
+   rfmix_reader.readers.fb_read
+
 Subpackages
 -----------
 

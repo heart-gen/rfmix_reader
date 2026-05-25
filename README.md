@@ -60,27 +60,79 @@ pip install rfmix-reader
 ## Quickstart
 
 ```python
+from rfmix_reader import read_msp
+
+# Read RFMix .msp.tsv files — the recommended default (no binary conversion needed)
+loci_df, g_anc, local_array = read_msp("examples/two_populations/out/")
+
+print(loci_df.head())      # chromosome, physical_position, i
+print(local_array.shape)   # (n_segments, n_samples, n_ancestries)
+```
+
+---
+
+## Choosing a Reader
+
+RFMix produces several output file types. The right reader depends on what
+you need:
+
+| Use case | Recommended reader | Key file | Typical size |
+|---|---|---|---|
+| GWAS, admixture mapping, QC, most analyses | `read_msp` | `.msp.tsv` | ~3 MB/chrom |
+| Posterior probabilities / uncertainty-aware models | `read_rfmix` | `.fb.tsv` → `.bin` | ~7.5 GB/chrom |
+| FLARE-inferred local ancestry | `read_flare` | `.anc.vcf.gz` | varies |
+| Haptools simulations | `read_simu` | `*_simulated.vcf.gz` | varies |
+
+### `read_msp` — recommended default
+
+`.msp.tsv` stores piecewise-constant hard ancestry calls as genomic segments.
+It is **~2,000× smaller** than the corresponding `.fb.tsv` matrix, requires
+no binary conversion step, and loads in seconds instead of minutes. Hard calls
+(integer counts 0/1/2 per diploid locus) are sufficient for the vast majority
+of local ancestry analyses.
+
+```python
+from rfmix_reader import read_msp
+
+loci_df, g_anc, local_array = read_msp("two_pops/out/")
+# local_array.shape → (n_segments, n_samples, n_ancestries), dtype int32
+# Values: 0 = no alleles from ancestry k, 1 = one allele, 2 = both alleles
+```
+
+To restrict to a single chromosome:
+
+```python
+loci_df, g_anc, local_array = read_msp("two_pops/out/", chrom="21")
+```
+
+### `read_rfmix` — when you need posterior probabilities
+
+Use `read_rfmix` when your analysis requires the full forward-backward matrix
+(e.g., confidence-weighted regression, uncertainty-aware imputation, or QTL
+mapping that propagates ancestry uncertainty). This path requires the `.fb.tsv`
+files, which must first be converted to compact binary format:
+
+```python
 from rfmix_reader import read_rfmix
 
-# Load RFMix outputs (two-population admixture example)
-file_path = "examples/two_populations/out/"
-loci_df, g_anc, local_array = read_rfmix(file_path)
-
-print(loci_df.head())
-print(g_anc.head())
-print(local_array.shape)
-"""See the phasing section below for how to phase per-chromosome outputs and
-write them to Zarr with `phase_rfmix_chromosome_to_zarr`."""
+loci_df, g_anc, local_array = read_rfmix(
+    "two_pops/out/",
+    binary_dir="./binary_files",
+    generate_binary=True,  # convert .fb.tsv → .bin on first run
+)
+# local_array.shape → (n_loci, n_samples, n_ancestries), dtype float32
+# Values: forward-backward posterior probabilities per ancestry per haplotype
 ```
 
 ---
 
 ## Key Features
 
-* **Lazy Loading**: Reads data on-the-fly, reducing memory footprint.
-* **Efficient Access**: Query specific loci or regions of interest.
-* **Seamless Integration**: Works smoothly with `pandas`, `dask`, and other analysis tools.
-* **Loci Imputation**: Impute local ancestry loci to dense genotype variant sites.
+* **Fast default path**: `read_msp` loads the ~3 MB `.msp.tsv` per chromosome with no conversion step.
+* **Full posteriors when needed**: `read_rfmix` reads `.fb.tsv` binary files for uncertainty-aware analyses.
+* **Lazy Loading**: All readers return Dask arrays — data is read only when accessed.
+* **Seamless Integration**: Works with `pandas`, `dask`, NumPy, and downstream tools.
+* **Loci Imputation**: Interpolate window-level ancestry onto dense variant grids.
 * **GPU Acceleration**: Automatic CUDA acceleration via PyTorch/CuPy when available.
 
 ---
@@ -94,7 +146,27 @@ Test datasets for two- and three-population admixture are available on Synapse:
 
 ## Usage
 
-### Binary Conversion
+### Reading `.msp.tsv` files (recommended)
+
+```python
+from rfmix_reader import read_msp
+
+# All chromosomes at once
+loci_df, g_anc, local_array = read_msp("two_pops/out/")
+
+# Single chromosome
+loci_df, g_anc, local_array = read_msp("two_pops/out/", chrom="21")
+```
+
+`read_msp` returns the same `(loci_df, g_anc, local_array)` triple as
+`read_rfmix`, so all downstream code (imputation, visualization, write_data)
+works unchanged. The `local_array` contains hard integer ancestry counts
+(0/1/2); `g_anc` is `None` unless you pass a pre-loaded global ancestry
+DataFrame via the `g_anc=` argument.
+
+### Reading `.fb.tsv` files (when posteriors are needed)
+
+#### Binary Conversion
 
 RFMix does not generate binary files directly.
 Use `create_binaries` to generate them (also available as a CLI):
@@ -164,9 +236,9 @@ prepare-reference refs/ 1kg_chr20.vcf.gz 1kg_chr21.vcf.gz \
   --chunk-length 50000 --samples-chunk-size 512
 ```
 
-### Main Function
+#### Loading posterior data
 
-Once binaries are available, process RFMix results:
+Once binaries are available:
 
 ```python
 from rfmix_reader import read_rfmix
@@ -174,10 +246,7 @@ from rfmix_reader import read_rfmix
 loci, g_anc, admix = read_rfmix("two_pops/out/")
 ```
 
-### Three Population Example
-
-Binaries can also be generated on-the-fly within `read_rfmix` with
-`generate_binary` set to `True`.
+Binaries can also be generated on-the-fly with `generate_binary=True`:
 
 ```python
 loci, g_anc, admix = read_rfmix("examples/three_populations/out/",
@@ -389,22 +458,24 @@ tabix -p vcf "$OUT"
 
 ### Visualization
 
-`read_rfmix`, `read_flare`, and `read_simu` all return the same
-`(loci_df, g_anc, admix)` tuple, so the plotting utilities in
-`rfmix_reader._visualization` work identically for RFMix, FLARE, and
-Haptools-simulated inputs. The snippet below shows the typical workflow
-for each reader:
+All readers return the same `(loci_df, g_anc, admix)` tuple, so the
+plotting utilities work identically regardless of which reader was used:
 
 ```python
 from rfmix_reader import (
     plot_ancestry_by_chromosome,
     plot_global_ancestry,
     read_flare,
+    read_msp,
     read_rfmix,
     read_simu,
 )
 
-# RFMix run directory
+# Recommended: read .msp.tsv (no binary conversion needed)
+loci_df, g_anc, admix = read_msp("two_pops/out/")
+plot_ancestry_by_chromosome(loci_df, admix, save_path="local.png")
+
+# RFMix .fb.tsv (when posteriors are needed)
 loci_df, g_anc, admix = read_rfmix("two_pops/out/")
 plot_global_ancestry(g_anc, save_path="rfmix_global.png")
 plot_ancestry_by_chromosome(loci_df, admix, save_path="rfmix_local.png")
@@ -421,9 +492,9 @@ plot_ancestry_by_chromosome(loci_df, admix, save_path="simu_local.png")
 ```
 
 `plot_global_ancestry` builds per-individual stacked bars of global
-ancestry while `plot_ancestry_by_chromosome` summarizes local ancestry
-along each chromosome, giving you quick visual QC for every supported
-input format.
+ancestry. `plot_ancestry_by_chromosome` summarizes local ancestry along
+each chromosome. Both accept `save_path` and `save_multi_format` for
+exporting to PNG/PDF or interactive display.
 
 ---
 
