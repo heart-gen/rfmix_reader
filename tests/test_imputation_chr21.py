@@ -6,7 +6,7 @@ np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 da = pytest.importorskip("dask.array")
 
-from rfmix_reader import interpolate_array, read_rfmix
+from rfmix_reader import interpolate_array, read_rfmix_fb
 from rfmix_reader.processing.imputation import (
     GPU_ENABLED, _expand_array, _interpolate_1d, interpolate_block,
 )
@@ -16,7 +16,7 @@ from rfmix_reader.readers.read_rfmix import gpu_available
 @pytest.mark.filterwarnings("ignore:.*cupy not installed.*")
 @pytest.mark.parametrize("method", ["linear", "nearest", "stepwise"])
 def test_imputation_chr21_interpolation(tmp_path, method):
-    loci_df, g_anc, admix = read_rfmix(
+    loci_df, g_anc, admix = read_rfmix_fb(
         "data/",
         binary_dir=tmp_path / "binary",
         generate_binary=True,

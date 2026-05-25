@@ -1,5 +1,5 @@
 """
-Unit tests for the read_msp reader.
+Unit tests for the read_rfmix reader (reads .msp.tsv files).
 """
 import pytest
 import importlib
@@ -12,7 +12,7 @@ msp_mod = importlib.import_module("rfmix_reader.readers.read_msp")
 _parse_pop_header = msp_mod._parse_pop_header
 _read_msp_file = msp_mod._read_msp_file
 _segments_to_loci = msp_mod._segments_to_loci
-read_msp = msp_mod.read_msp
+read_rfmix = msp_mod.read_rfmix
 
 _MSP_CONTENT = """\
 #Subpopulation order/codes: AFR=0\tEUR=1
@@ -114,14 +114,14 @@ def test_segments_to_loci_index_offset(msp_file):
 
 
 # ---------------------------------------------------------------------------
-# read_msp end-to-end
+# read_rfmix end-to-end (reads .msp.tsv)
 # ---------------------------------------------------------------------------
 
-def test_read_msp_returns_triple(tmp_path):
+def test_read_rfmix_returns_triple(tmp_path):
     fn = tmp_path / "chr1.msp.tsv"
     fn.write_text(_MSP_CONTENT)
 
-    loci_df, g_anc_out, local_array = read_msp(str(tmp_path), verbose=False)
+    loci_df, g_anc_out, local_array = read_rfmix(str(tmp_path), verbose=False)
 
     assert isinstance(local_array, da.Array)
     assert loci_df.shape[0] == 2
@@ -129,11 +129,11 @@ def test_read_msp_returns_triple(tmp_path):
     assert g_anc_out is None  # no g_anc supplied
 
 
-def test_read_msp_passthrough_g_anc(tmp_path):
+def test_read_rfmix_passthrough_g_anc(tmp_path):
     fn = tmp_path / "chr1.msp.tsv"
     fn.write_text(_MSP_CONTENT)
 
     dummy_g_anc = pd.DataFrame({"sample_id": ["S1"], "AFR": [0.5], "EUR": [0.5]})
-    _, g_anc_out, _ = read_msp(str(tmp_path), g_anc=dummy_g_anc, verbose=False)
+    _, g_anc_out, _ = read_rfmix(str(tmp_path), g_anc=dummy_g_anc, verbose=False)
 
     assert g_anc_out is dummy_g_anc

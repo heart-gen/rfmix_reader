@@ -18,6 +18,13 @@ Readers
    rfmix_reader.readers.read_simu
    rfmix_reader.readers.fb_read
 
+.. note::
+
+   ``read_rfmix`` (in ``rfmix_reader.readers.read_msp``) is the default
+   reader for ``.msp.tsv`` files and the recommended entry point.
+   ``read_rfmix_fb`` (in ``rfmix_reader.readers.read_rfmix``) reads
+   ``.fb.tsv`` binary files for analyses requiring posterior probabilities.
+
 Subpackages
 -----------
 

@@ -98,7 +98,7 @@ def test__subset_populations_odd_cols():
 def test__read_fb_missing_binary(tmp_path):
     fn = make_dummy_tsv(tmp_path, "chr21.fb.tsv")
     nsamples, nloci, pops = 2, 2, ["A", "B"]
-    with pytest.raises(rfmix.BinaryFileNotFoundError):
+    with pytest.raises(rfmix.BinaryFileNotFoundError):  # class-level attr on module
         rfmix._read_fb(fn, nsamples, nloci, pops, str(tmp_path), Chunk())
 
 

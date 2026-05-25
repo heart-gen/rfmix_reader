@@ -43,7 +43,7 @@ else:
     from pandas import DataFrame, concat, CategoricalDtype
 
 
-__all__ = ["read_msp"]
+__all__ = ["read_rfmix"]
 
 _MSP_SUFFIXES = ["msp.tsv", "msp.tsv.gz"]
 _META_COLS = ["#chm", "spos", "epos", "sgpos", "egpos", "n snps"]
@@ -223,11 +223,11 @@ def _read_Q_for_msp(fn: str, pop_map: Dict[str, int]) -> DataFrame:
     raise NotImplementedError(
         "Global ancestry from .msp.tsv is not yet implemented. "
         "Pass a pre-loaded g_anc DataFrame or read it separately with "
-        "read_rfmix() and reuse its g_anc."
+        "read_rfmix_fb() and reuse its g_anc."
     )
 
 
-def read_msp(
+def read_rfmix(
     file_prefix: str,
     g_anc: Optional[DataFrame] = None,
     verbose: bool = True,
@@ -236,18 +236,22 @@ def read_msp(
     """
     Read RFMix `.msp.tsv` files into a loci DataFrame and a Dask ancestry array.
 
-    The `.msp.tsv` format stores piecewise-constant hard ancestry calls as
-    genomic segments and is roughly **2,000× smaller** than the corresponding
-    `.fb.tsv` forward-backward matrix.  Reading it directly eliminates the
-    costly binary-conversion step and is the recommended source when posterior
-    probabilities are not required.
+    This is the **recommended default reader** for RFMix output. The `.msp.tsv`
+    format stores piecewise-constant hard ancestry calls as genomic segments and
+    is roughly **2,000× smaller** than the corresponding `.fb.tsv` forward-backward
+    matrix. Reading it directly eliminates the costly binary-conversion step and is
+    sufficient for the vast majority of local ancestry analyses (GWAS, admixture
+    mapping, QC, visualization).
+
+    Use :func:`read_rfmix_fb` instead when you explicitly require posterior
+    probability values from the forward-backward matrix.
 
     Parameters
     ----------
     file_prefix : str
         Directory or path prefix under which ``.msp.tsv`` files live.
     g_anc : DataFrame, optional
-        Pre-loaded global ancestry DataFrame (from :func:`read_rfmix` or
+        Pre-loaded global ancestry DataFrame (from :func:`read_rfmix_fb` or
         similar).  When provided it is returned unchanged.  When :data:`None`
         the second return value is :data:`None`.
     verbose : bool, default True
@@ -259,7 +263,7 @@ def read_msp(
     -------
     loci_df : DataFrame
         Columns: ``chromosome``, ``physical_position``, ``i``.
-        One row per RFMix window (= segment boundary).
+        One row per RFMix ancestry segment boundary.
     g_anc : DataFrame or None
         Passed through unchanged, or :data:`None` if not supplied.
     local_array : dask.array.Array
@@ -268,19 +272,18 @@ def read_msp(
 
     Notes
     -----
-    Unlike :func:`read_rfmix`, local ancestry here is at **segment resolution**,
-    not window resolution.  Each "locus" is the start position of an ancestry
-    segment.  Use :func:`interpolate_array` with ``method='stepwise'`` or
-    directly expand segments to SNP positions using :func:`write_imputed`
-    for variant-level output.
+    Local ancestry is at **segment resolution** — each row is the start
+    position of one RFMix ancestry segment.  Use :func:`interpolate_array`
+    with ``method='stepwise'`` to expand segments onto a denser variant grid,
+    or use :func:`write_imputed` for direct variant-level output.
 
-    Trade-offs versus `.fb.tsv`:
-    - **Pro**: ~2,000× smaller files; no binary conversion needed; trivially fast.
+    Trade-offs versus :func:`read_rfmix_fb` (`.fb.tsv`):
+    - **Pro**: ~2,000× smaller files; no binary conversion needed; loads in seconds.
     - **Con**: Hard calls only — no posterior uncertainty information.
 
     Examples
     --------
-    >>> loci, g_anc, admix = read_msp("data/rfmix_out/")
+    >>> loci, g_anc, admix = read_rfmix("data/rfmix_out/")
     >>> print(loci.shape, admix.shape)
     (1629, 3) (1629, 81, 2)
     """
@@ -315,6 +318,6 @@ def read_msp(
 
 
 # Expose helpers for tests and downstream code
-read_msp._parse_pop_header = _parse_pop_header
-read_msp._read_msp_file = _read_msp_file
-read_msp._segments_to_loci = _segments_to_loci
+read_rfmix._parse_pop_header = _parse_pop_header
+read_rfmix._read_msp_file = _read_msp_file
+read_rfmix._segments_to_loci = _segments_to_loci

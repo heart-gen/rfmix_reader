@@ -36,7 +36,7 @@ if gpu_available():
 else:
     from pandas import DataFrame, read_csv, concat, CategoricalDtype
 
-def read_rfmix(
+def read_rfmix_fb(
         file_prefix: str, binary_dir: str = "./binary_files",
         generate_binary: bool = False, verbose: bool = True,
         return_hap_matrix: bool = False,
@@ -47,7 +47,15 @@ def read_rfmix(
     | Tuple[DataFrame, DataFrame, Array, Array]
 ):
     """
-    Read RFMix files into data frames and a Dask array.
+    Read RFMix ``.fb.tsv`` files (forward-backward posteriors) into DataFrames and a Dask array.
+
+    Use this reader when your analysis requires **posterior probability values**
+    from the forward-backward matrix — e.g., confidence-weighted regression,
+    uncertainty-aware imputation, or QTL mapping that propagates ancestry
+    uncertainty.
+
+    For the common case of hard ancestry calls, use :func:`read_rfmix` (reads
+    the much smaller ``.msp.tsv`` files with no binary conversion step).
 
     Parameters
     ----------
@@ -406,12 +414,12 @@ def _types(fn: str) -> dict:
 # Convenience: expose helper utilities on the main reader function to make
 # them easy to reach for tests and advanced users who rely on the original
 # script-style API.
-read_rfmix._read_tsv = _read_tsv
-read_rfmix._read_loci = _read_loci
-read_rfmix._read_csv = _read_csv
-read_rfmix._read_Q = _read_Q
-read_rfmix._read_Q_noi = _read_Q_noi
-read_rfmix._subset_populations = _subset_populations
-read_rfmix._read_fb = _read_fb
-read_rfmix._types = _types
-read_rfmix.BinaryFileNotFoundError = BinaryFileNotFoundError
+read_rfmix_fb._read_tsv = _read_tsv
+read_rfmix_fb._read_loci = _read_loci
+read_rfmix_fb._read_csv = _read_csv
+read_rfmix_fb._read_Q = _read_Q
+read_rfmix_fb._read_Q_noi = _read_Q_noi
+read_rfmix_fb._subset_populations = _subset_populations
+read_rfmix_fb._read_fb = _read_fb
+read_rfmix_fb._types = _types
+read_rfmix_fb.BinaryFileNotFoundError = BinaryFileNotFoundError
