@@ -14,7 +14,7 @@ except PackageNotFoundError:
 # Public API
 __all__ = [
     "Chunk",
-    "read_fb", "read_simu", "read_rfmix", "read_flare",
+    "read_fb", "read_simu", "read_rfmix", "read_flare", "read_msp",
     "write_data",
     "admix_to_bed_individual",
     "CHROM_SIZES", "COORDINATES",
@@ -35,6 +35,7 @@ _lazy = {
     "read_simu": (".readers.read_simu", "read_simu"),
     "read_rfmix": (".readers.read_rfmix", "read_rfmix"),
     "read_flare": (".readers.read_flare", "read_flare"),
+    "read_msp": (".readers.read_msp", "read_msp"),
     "write_data": (".io.write_data", "write_data"),
     "admix_to_bed_individual": (".io.loci_bed", "admix_to_bed_individual"),
     "CHROM_SIZES": (".processing.constants", "CHROM_SIZES"),
@@ -83,6 +84,7 @@ if TYPE_CHECKING:
     from .processing.imputation import interpolate_array
     from .io.loci_bed import admix_to_bed_individual
     from .readers.read_flare import read_flare
+    from .readers.read_msp import read_msp
     from .readers.read_rfmix import read_rfmix
     from .readers.read_simu import read_simu
     from .viz.tagore import plot_local_ancestry_tagore

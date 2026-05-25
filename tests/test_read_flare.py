@@ -3,10 +3,16 @@ import gzip
 import importlib
 import pytest
 
-pytest.importorskip("cudf")
-import cudf
+np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 da = pytest.importorskip("dask.array")
+
+try:
+    import cudf
+    _has_cudf = True
+except ImportError:
+    cudf = pd  # fallback so isinstance checks don't crash
+    _has_cudf = False
 
 # Use importlib to get the module, not the function re-exported by __init__.py
 flare = importlib.import_module("rfmix_reader.readers.read_flare")
@@ -84,6 +90,48 @@ def test_load_haplotypes(tmp_flare_dir):
     assert arr.shape[0] == 2  # 2 variants
     assert arr.shape[1] == 2  # 2 samples
     assert arr.shape[2] == 2  # EUR, AFR
+
+
+def test_load_haplotypes_numerical_correctness(tmp_flare_dir):
+    """
+    Verify that _load_haplotypes produces correct ancestry count values (Bug 6).
+
+    VCF content (after Bug 6 fix, numpy arrays are extracted before dask.delayed):
+      Variant 1: Sample_1 AN1=0(EUR) AN2=0(EUR) → EUR=2, AFR=0
+                 Sample_2 AN1=0(EUR) AN2=1(AFR) → EUR=1, AFR=1
+      Variant 2: Sample_1 AN1=1(AFR) AN2=0(EUR) → EUR=1, AFR=1
+                 Sample_2 AN1=0(EUR) AN2=0(EUR) → EUR=2, AFR=0
+
+    ANCESTRY header: EUR=0, AFR=1  → alphabetical sort → AFR=axis0, EUR=axis1
+    """
+    import numpy as np
+
+    vcf_file = tmp_flare_dir / "chr21.anc.vcf"
+    arr = flare._load_haplotypes(str(vcf_file), chunk_size=10)
+    result = arr.compute()  # shape (2 variants, 2 samples, 2 ancestries)
+
+    # Ancestry axis is sorted alphabetically: AFR=0, EUR=1
+    AFR, EUR = 0, 1
+
+    # Variant 0
+    # Sample_1: AN1=0(EUR), AN2=0(EUR) → AFR=0, EUR=2
+    assert result[0, 0, AFR] == 0 and result[0, 0, EUR] == 2, (
+        f"Variant 0 Sample_1 wrong: {result[0, 0, :]}"
+    )
+    # Sample_2: AN1=0(EUR), AN2=1(AFR) → AFR=1, EUR=1
+    assert result[0, 1, AFR] == 1 and result[0, 1, EUR] == 1, (
+        f"Variant 0 Sample_2 wrong: {result[0, 1, :]}"
+    )
+
+    # Variant 1
+    # Sample_1: AN1=1(AFR), AN2=0(EUR) → AFR=1, EUR=1
+    assert result[1, 0, AFR] == 1 and result[1, 0, EUR] == 1, (
+        f"Variant 1 Sample_1 wrong: {result[1, 0, :]}"
+    )
+    # Sample_2: AN1=0(EUR), AN2=0(EUR) → AFR=0, EUR=2
+    assert result[1, 1, AFR] == 0 and result[1, 1, EUR] == 2, (
+        f"Variant 1 Sample_2 wrong: {result[1, 1, :]}"
+    )
 
 
 def test_read_flare(tmp_flare_dir, monkeypatch):

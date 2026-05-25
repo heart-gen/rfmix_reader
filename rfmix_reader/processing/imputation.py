@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
 InterpMethod = Literal["linear", "nearest", "stepwise"]
 
+GPU_ENABLED: bool = _select_array_backend().__name__ == "cupy"
+
 def _to_host(x):
     """Convert an array-module array back to a NumPy array on host."""
     if hasattr(x, "__cuda_array_interface__") and hasattr(x, "get"):
@@ -103,7 +105,10 @@ def _interpolate_1d(
         xp_nan = xp[mask]
         interp_vals = mod.interp(xp_nan, xp_valid, y_valid)
         out = col.copy()
-        # Final ancestry is hard (0/1). Rounding to preserve RFMix semantics
+        # Round to nearest integer to produce hard ancestry calls (0/1/2).
+        # This preserves RFMix semantics for downstream GWAS but discards
+        # posterior uncertainty. Use method='nearest' or 'stepwise' to
+        # assign observed values directly without rounding.
         out[mask] = mod.round(interp_vals).astype(mod.float32)
         return out
 
@@ -111,9 +116,14 @@ def _interpolate_1d(
 
     if method == "stepwise":
         left_idx = mod.where(valid, idx, -1)
+        # maximum.accumulate propagates the last-seen valid index forward.
+        # Positions before the first valid point still hold -1.
         left_nearest = mod.maximum.accumulate(left_idx)
         idx_valid_or_n = mod.where(valid, idx, n)
         first_valid = mod.min(idx_valid_or_n)
+        # Replace pre-first-valid -1 entries with first_valid (forward fill from
+        # left boundary). Trailing NaN positions already have a valid left_nearest
+        # (the last valid index), so they are correctly forward-filled too.
         left_nearest = mod.where(left_nearest < 0, first_valid, left_nearest)
         out = col.copy()
         out[mask] = col[left_nearest[mask]]
@@ -210,7 +220,12 @@ def _expand_array(
     - The resulting Zarr array is saved to disk at the specified path.
     - If the admix array fits within 50% of available system memory it is
       pre-materialized in one ``compute()`` call; otherwise data is read in
-      contiguous slices per batch to reduce redundant Dask I/O.
+      contiguous slices per batch to reduce redundant Dask I/O. The 50%
+      threshold can be a concern for full 22-chromosome datasets concatenated
+      in memory (~2–3 GB); lower it or call per-chromosome to reduce peak RSS.
+    - The non-NaN ``"i"`` values in ``variant_loci_df`` must be monotonically
+      non-decreasing (i.e., the DataFrame must be sorted by genomic position)
+      for the contiguous-slice optimization to produce correct results.
     """
     _print_logger("Generate empty Zarr.")
     n_samples = min(500, admix.shape[1])
@@ -229,6 +244,13 @@ def _expand_array(
     i = variant_loci_df["i"].to_numpy()
     dest_idx = np.flatnonzero(~np.isnan(i))
     src_idx  = i[dest_idx].astype(np.int64)
+
+    if src_idx.size > 1 and not (np.diff(src_idx) >= 0).all():
+        raise ValueError(
+            "The 'i' column of variant_loci_df is not monotonically non-decreasing "
+            "at non-NaN positions. Ensure variant_loci_df is sorted by genomic "
+            "position before calling _expand_array."
+        )
 
     # Pre-materialize admix if it fits in available memory; otherwise use
     # contiguous slice access (src_idx is sorted) to avoid expensive Dask
@@ -252,8 +274,9 @@ def _expand_array(
         if admix_np is not None:
             z[d, :, :] = admix_np[batch_src]
         else:
-            # Use contiguous slice + local reindex to avoid Dask fancy indexing
-            lo, hi = int(batch_src[0]), int(batch_src[-1]) + 1
+            # Use contiguous slice + local reindex to avoid Dask fancy indexing.
+            # Use min/max so this is correct even if src_idx has repeated values.
+            lo, hi = int(batch_src.min()), int(batch_src.max()) + 1
             slab = admix[lo:hi].compute()
             z[d, :, :] = slab[batch_src - lo]
 
@@ -290,8 +313,11 @@ def interpolate_array(
     interpolation : {"linear","nearest","stepwise"}, default "linear"
         Interpolation scheme.
     use_bp_positions : bool, default False
-        If True, use `variant_loci_df['pos']` as the x-axis for interpolation.
-        If False, loci are treated as equally spaced (index-based).
+        If True, use ``variant_loci_df['pos']`` as the x-axis for interpolation,
+        weighting gaps by physical distance. If False, loci are treated as
+        equally spaced (index-based), which is inaccurate across regions of
+        variable window density such as centromeres and telomeres. Prefer
+        ``True`` whenever variant positions span centromeric gaps.
 
     Returns
     -------
@@ -318,6 +344,14 @@ def interpolate_array(
     (2, 2, 3)
     """
     method = _normalize_method(interpolation)
+
+    if "pos" in variant_loci_df.columns:
+        pos_vals = variant_loci_df["pos"].to_numpy(dtype=np.float64)
+        if len(pos_vals) > 1 and not (np.diff(pos_vals) >= 0).all():
+            raise ValueError(
+                "variant_loci_df must be sorted by 'pos' in ascending order. "
+                "Call .sort_values('pos').reset_index(drop=True) before passing."
+            )
 
     _print_logger("Starting expansion!")
     z = _expand_array(variant_loci_df, admix, zarr_outdir,

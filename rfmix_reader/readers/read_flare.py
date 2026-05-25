@@ -291,31 +291,34 @@ def _load_haplotypes(vcf_file: str, chunk_size: int32 = 10_000) -> Array:
         ancestry_map = _parse_ancestry_header(vcf_file)
         n_ancestries = len(ancestry_map)
 
-        def process_chunk(records):
-            chunk_len = len(records)
-            counts = zeros((chunk_len, n_samples, n_ancestries), dtype=int8)
+        import numpy as _np
+        # One-hot identity matrix: eye[k] gives a row with 1 at column k.
+        # Precomputed outside process_chunk to avoid repeated allocation.
+        _eye = _np.eye(n_ancestries, dtype=_np.int8)
 
-            for i, rec in enumerate(records):
-                an1 = rec.format("AN1")
-                an2 = rec.format("AN2")
-
-                # Mask missing values as -1
-                an1 = asarray(an1, dtype=int8).ravel()
-                an2 = asarray(an2, dtype=int8).ravel()
-
-                # Count local ancestries in vectorized fashion
-                for anc_idx in range(n_ancestries):
-                    counts[i, :, anc_idx] = (
-                        (an1 == anc_idx).astype(int8) +
-                        (an2 == anc_idx).astype(int8)
-                    )
-
+        def process_chunk(pairs):
+            """
+            pairs : list of (an1_arr, an2_arr) numpy int8 arrays, each shape
+                    (n_samples,). Extracting numpy arrays before dask.delayed
+                    ensures cyvcf2 Variant objects (C-extension, not safely
+                    picklable) are never stored in the task graph.
+            """
+            chunk_len = len(pairs)
+            counts = _np.zeros((chunk_len, n_samples, n_ancestries),
+                               dtype=_np.int8)
+            for i, (an1, an2) in enumerate(pairs):
+                # eye[an1] shape: (n_samples, n_ancestries) — one-hot per hap.
+                # Summing gives diploid ancestry counts in one vectorized step
+                # instead of 2*n_ancestries per-ancestry comparison passes.
+                counts[i, :, :] = _eye[an1] + _eye[an2]
             return counts
 
-        records_buffer = []
+        records_buffer = []  # holds (an1_np, an2_np) pairs, not Variant objects
         delayed_arrays = []
         for rec in vcf:
-            records_buffer.append(rec)
+            an1 = asarray(rec.format("AN1"), dtype=int8).ravel()
+            an2 = asarray(rec.format("AN2"), dtype=int8).ravel()
+            records_buffer.append((an1, an2))
             if len(records_buffer) == chunk_size:
                 delayed_arrays.append(
                     from_delayed(

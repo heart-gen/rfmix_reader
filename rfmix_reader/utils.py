@@ -209,8 +209,10 @@ def _clean_prefixes(prefixes: list[str]):
         base_name = basename(prefix)
         # Remove the file extensions from the base name
         base = base_name.split(".")[0]
-        # Use regex to find patterns starting with "chr" or "_chr"
-        m = rsearch(r'(_chr|chr)(\d+)', base)
+        # Use regex to find patterns starting with "chr" or "_chr".
+        # [a-zA-Z0-9]+ covers autosomes (chr1-22) and sex/MT chromosomes
+        # (chrX, chrY, chrM) — unlike \d+ which silently drops non-numeric labels.
+        m = rsearch(r'(_chr|chr)([a-zA-Z0-9]+)', base)
         # If a match is found, construct the cleaned prefix
         if m:
             cleaned_prefix = join(dir_path, base)
@@ -353,15 +355,23 @@ def _text_to_binary(input_file: str, output_file: str):
     IOError: If there is an error reading from the input file or
              writing to the output file.
     """
+    import pandas as pd
+
     input_file = Path(input_file); output_file = Path(output_file)
 
-    opener = gzip.open if input_file.suffix == ".gz" else open
-    with opener(input_file, 'rt') as infile, open(output_file, 'wb') as outfile:
-        next(infile); next(infile) # Skip the header
-        # Process and write each line individually
-        for line in infile:
-            data = array(line.split()[4:], dtype=float32)
-            data.tofile(outfile) # Write the binary data
+    # Pandas' C parser is 10-50x faster than Python line-by-line splitting for
+    # wide float files (e.g. 9 GB .fb.tsv with ~175k rows × 2000 columns).
+    # We skip the 2 header rows, drop the 4 metadata columns (chrom, pos, gpos,
+    # snp_idx — which may contain strings), and write each chunk as a raw
+    # float32 binary block in a single .tofile() call.
+    # No global dtype= here because the metadata columns contain strings.
+    CHUNK = 10_000
+    with open(output_file, 'wb') as outfile:
+        for chunk in pd.read_csv(
+            input_file, sep=r"\s+", header=None, skiprows=2,
+            compression="infer", chunksize=CHUNK,
+        ):
+            chunk.iloc[:, 4:].to_numpy(dtype=float32).tofile(outfile)
 
 
 def _process_file(args):
