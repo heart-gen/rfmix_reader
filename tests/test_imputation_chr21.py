@@ -8,7 +8,7 @@ da = pytest.importorskip("dask.array")
 
 from rfmix_reader import interpolate_array, read_rfmix_fb
 from rfmix_reader.processing.imputation import (
-    GPU_ENABLED, _expand_array, _interpolate_1d, interpolate_block,
+    GPU_ENABLED, _expand_array, interpolate_block,
 )
 from rfmix_reader.readers.read_rfmix import gpu_available
 
