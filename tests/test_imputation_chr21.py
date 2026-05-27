@@ -130,9 +130,6 @@ def test_expand_array_slab_path_correctness(tmp_path, monkeypatch):
         "i": [0.0, 1.0, 2.0, np.nan, 3.0],
     })
 
-    vm = psutil.virtual_memory()
-    FakeVM = type(vm)
-
     class FakeVMResult:
         available = 0  # force slab path
 
