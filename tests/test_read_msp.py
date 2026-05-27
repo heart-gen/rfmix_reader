@@ -91,8 +91,6 @@ def test_segments_to_loci_ancestry_counts(msp_file):
     loci_df, local_array = _segments_to_loci(segs_pd, hap_cols, pop_map)
     result = local_array.compute()
 
-    AFR, EUR = 0, 1
-
     # Segment 0
     np.testing.assert_array_equal(result[0, 0, :], [1, 1],
                                   err_msg="Seg0 Sample_1: expected AFR=1,EUR=1")
