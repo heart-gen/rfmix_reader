@@ -47,7 +47,6 @@ __all__ = ["read_rfmix"]
 
 _MSP_SUFFIXES = ["msp.tsv", "msp.tsv.gz"]
 _META_COLS = ["#chm", "spos", "epos", "sgpos", "egpos", "n snps"]
-_N_META = len(_META_COLS)
 
 
 def _parse_pop_header(fn: str) -> Dict[str, int]:
