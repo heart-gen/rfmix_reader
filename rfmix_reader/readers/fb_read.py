@@ -98,4 +98,8 @@ def _read_chunk(
     
     buff = memmap(filepath, dtype=float32, mode="r",
                   offset=offset, shape=size)
+    # astype(int32) always allocates a new buffer (float32→int32 is a type
+    # cast, not a reinterpret), so copy=False has no effect here. Peak memory
+    # per task is 2× chunk size. Dask frees the float32 buffer immediately
+    # after this delayed task returns, so the overhead is short-lived.
     return buff.astype(int32, copy=False)

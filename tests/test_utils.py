@@ -34,6 +34,17 @@ def test__clean_prefixes_basic():
     assert all(not x.endswith(".logs") for x in out)
 
 
+@pytest.mark.parametrize("chrom", ["chrX", "chrY", "chrM"])
+def test_clean_prefixes_sex_chromosomes(chrom):
+    """_clean_prefixes must not silently drop sex/mitochondrial chromosomes (Bug 3)."""
+    prefixes = [f"/tmp/{chrom}.fb.tsv", f"/tmp/{chrom}.rfmix.Q"]
+    out = utils._clean_prefixes(prefixes)
+    assert out, f"_clean_prefixes returned empty for {chrom} — sex chromosomes are being dropped"
+    assert any(chrom.lower() in x.lower() for x in out), (
+        f"Expected {chrom} in cleaned prefixes, got: {out}"
+    )
+
+
 def test_get_prefixes_rfmix_and_flare(tmp_path):
     # Create fake files
     f1 = tmp_path / "chr1.fb.tsv"

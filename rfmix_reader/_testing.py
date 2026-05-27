@@ -1,6 +1,6 @@
 from pathlib import Path
 from rfmix_reader import (
-    read_rfmix,
+    read_rfmix_fb,
     interpolate_array,
     generate_tagore_bed
 )
@@ -14,14 +14,14 @@ def _load_genotypes(plink_prefix_path):
 
 
 def _load_admix(prefix_path, binary_dir):
-    return read_rfmix(prefix_path, binary_dir=binary_dir)
+    return read_rfmix_fb(prefix_path, binary_dir=binary_dir)
 
 
 def _load_real_data():
     basename = "/projects/b1213/resources/processed-data/local-ancestry"
     prefix_path = Path(basename) / "rfmix-version/_m/"
     binary_dir = Path(prefix_path) / "binary_files/"
-    return read_rfmix(prefix_path, binary_dir=binary_dir)
+    return read_rfmix_fb(prefix_path, binary_dir=binary_dir)
 
 
 def _load_simu_data(pop=2):
@@ -30,9 +30,9 @@ def _load_simu_data(pop=2):
     prefix_path = Path(basename) / pop_loc / "_m/rfmix-out/"
     binary_dir = prefix_path / "binary_files"
     if binary_dir.exists():
-        return read_rfmix(prefix_path, binary_dir=binary_dir)
+        return read_rfmix_fb(prefix_path, binary_dir=binary_dir)
     else:
-        return read_rfmix(prefix_path, binary_dir=binary_dir,
+        return read_rfmix_fb(prefix_path, binary_dir=binary_dir,
                           generate_binary=True)
 
 

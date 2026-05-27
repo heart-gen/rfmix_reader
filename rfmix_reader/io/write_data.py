@@ -2,7 +2,6 @@
 Documentation generation assisted by AI.
 """
 from __future__ import annotations
-import sys
 from pathlib import Path
 from zarr import Array as zArray
 from psutil import virtual_memory
@@ -103,6 +102,9 @@ def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
     >>> write_data(loci, g_anc, admix, outdir="./output", prefix="ancestry")
     # This will create ./output/ancestry.chr{1-22}.parquet files
     """
+    from os import makedirs
+    from pyarrow import Table
+    from pyarrow.parquet import write_table
     from dask import config, delayed, compute
     from dask.diagnostics import ProgressBar
     from dask.dataframe import from_pandas as dd_from_pandas
@@ -112,12 +114,6 @@ def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
     concat = df_mod.concat
     use_gpu = df_mod.__name__ == "cudf"
     empty_cache = _get_empty_cache()
-    from os import makedirs
-    from pyarrow import Table
-    from pyarrow.parquet import write_table
-    from dask import config, delayed, compute
-    from dask.diagnostics import ProgressBar
-    from dask.dataframe import from_pandas as dd_from_pandas
 
     # Memory optimization configuration (save/restore to avoid global side-effects)
     _prev_chunk_size = config.get("array.chunk-size", None)
@@ -409,35 +405,36 @@ def _split_by_chrom(
 
 def _debug_partition_alignment(admix_arr, loci_ddf, verbose=False) -> None:
     """
-    Debugging function to check partition alignment between admix_arr and
-    loci_ddf. Exits with an error if partitions do not match.
+    Check partition alignment between admix_arr and loci_ddf.
+
+    Raises RuntimeError on mismatch so the caller's try/finally can run.
+    Row-level checks are skipped unless verbose=True to avoid materializing
+    all loci partitions on every write_data call.
 
     Parameters:
         admix_arr: A Dask array or similar object with `.blocks`.
         loci_ddf: A Dask DataFrame with `.partitions`.
-
-    Returns:
-        None. Exits the program if partitions do not align.
     """
-    # Print rows of admix_arr partitions
     admix_rows = [block.shape[0] for block in admix_arr.blocks]
     if verbose:
         print("Admix array partition rows:", admix_rows)
-    # Print rows of loci_ddf partitions
-    loci_rows = [part.compute().shape[0] for part in loci_ddf.partitions]
-    if verbose:
-        print("Loci Dask DataFrame partition rows:", loci_rows)
-    # Check if the number of partitions match
+
     if admix_arr.numblocks[0] != loci_ddf.npartitions:
-        print("Error: Number of partitions do not match.")
-        sys.exit(1)
-    # Check if the rows of all corresponding partitions match
-    for i, (admix_row, loci_row) in enumerate(zip(admix_rows, loci_rows)):
-        if admix_row != loci_row:
-            print(f"Error: Mismatch in partition {i}:",
-                  f"Admix row = {admix_row}, Loci row = {loci_row}")
-            sys.exit(1)
+        raise RuntimeError(
+            f"Number of partitions do not match: admix has "
+            f"{admix_arr.numblocks[0]} blocks but loci_ddf has "
+            f"{loci_ddf.npartitions} partitions."
+        )
+
     if verbose:
+        loci_rows = [part.compute().shape[0] for part in loci_ddf.partitions]
+        print("Loci Dask DataFrame partition rows:", loci_rows)
+        for i, (admix_row, loci_row) in enumerate(zip(admix_rows, loci_rows)):
+            if admix_row != loci_row:
+                raise RuntimeError(
+                    f"Mismatch in partition {i}: "
+                    f"admix row = {admix_row}, loci row = {loci_row}"
+                )
         print("Number of partitions and rows match.")
 
 
@@ -476,9 +473,10 @@ def _clean_data_imp(admix: Array, variant_loci: DataFrame, z: zArray
     Series = df_mod.Series
     use_gpu = df_mod.__name__ == "cudf"
 
-    from dask.array import from_array
-
-    daz = from_array(z, chunks=admix.chunksize)
+    # Use z.chunks (native Zarr chunk shape) rather than admix.chunksize so
+    # Dask tasks align with Zarr chunk boundaries and avoid cross-chunk read
+    # amplification (2-4x extra I/O with misaligned chunks).
+    daz = from_array(z, chunks=z.chunks)
     idx_arr = from_array(variant_loci[~(variant_loci["_merge"] ==
                                         "right_only")].index.to_numpy())
     admix_I = daz[idx_arr]

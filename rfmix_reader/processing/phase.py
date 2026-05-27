@@ -1129,7 +1129,7 @@ def phase_rfmix_chromosome_to_zarr(
         Dataset containing a ``local_ancestry`` variable with dimensions
         ``(variant, sample, ancestry)`` written to ``output_path``.
     """
-    from ..readers.read_rfmix import read_rfmix
+    from ..readers.read_rfmix import read_rfmix_fb
 
     config = config or PhasingConfig()
 
@@ -1139,7 +1139,7 @@ def phase_rfmix_chromosome_to_zarr(
         output_path,
     )
 
-    loci_df, g_anc, admix, X_raw = read_rfmix(
+    loci_df, g_anc, admix, X_raw = read_rfmix_fb(
         file_prefix,
         binary_dir=binary_dir,
         generate_binary=generate_binary,
