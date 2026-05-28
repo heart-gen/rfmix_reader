@@ -345,13 +345,19 @@ def interpolate_array(
     """
     method = _normalize_method(interpolation)
 
-    if "pos" in variant_loci_df.columns:
+    pos = None
+    if use_bp_positions:
+        if "pos" not in variant_loci_df.columns:
+            raise ValueError(
+                "use_bp_positions=True but 'pos' column not found in variant_loci_df."
+            )
         pos_vals = variant_loci_df["pos"].to_numpy(dtype=np.float64)
         if len(pos_vals) > 1 and not (np.diff(pos_vals) >= 0).all():
             raise ValueError(
                 "variant_loci_df must be sorted by 'pos' in ascending order. "
                 "Call .sort_values('pos').reset_index(drop=True) before passing."
             )
+        pos = pos_vals.astype(np.float32, copy=False)
 
     _print_logger("Starting expansion!")
     z = _expand_array(variant_loci_df, admix, zarr_outdir,
@@ -359,12 +365,6 @@ def interpolate_array(
 
     total_rows, _, _ = z.shape
     _print_logger(f"Interpolating data using method='{method}'!")
-
-    pos = None
-    if use_bp_positions:
-        if "pos" not in variant_loci_df.columns:
-            raise ValueError("use_bp_positions=True but 'pos' column not found in variant_loci_df.")
-        pos = variant_loci_df["pos"].to_numpy(dtype=np.float32)
 
     for start in tqdm(range(0, total_rows, chunk_size),
                       desc="Interpolating chunks", unit="chunk"):

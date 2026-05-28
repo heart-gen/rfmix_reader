@@ -134,6 +134,19 @@ def test_load_haplotypes_numerical_correctness(tmp_flare_dir):
     )
 
 
+def test_diploid_counts_from_haps_missing_codes_are_nan():
+    import numpy as np
+
+    eye = np.eye(2, dtype=np.float32)
+    an1 = np.array([-2147483648, -1, 0, 1, 2], dtype=np.int32)
+    an2 = np.array([0, 1, -1, 1, 0], dtype=np.int32)
+
+    result = flare._diploid_counts_from_haps(an1, an2, eye)
+
+    assert np.isnan(result[[0, 1, 2, 4], :]).all()
+    np.testing.assert_array_equal(result[3, :], [0, 2])
+
+
 def test_read_flare(tmp_flare_dir, monkeypatch):
     def fake_get_prefixes(prefix, mode, verbose):
         return [{

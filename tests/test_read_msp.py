@@ -12,6 +12,7 @@ msp_mod = importlib.import_module("rfmix_reader.readers.read_msp")
 _parse_pop_header = msp_mod._parse_pop_header
 _read_msp_file = msp_mod._read_msp_file
 _segments_to_loci = msp_mod._segments_to_loci
+_get_msp_prefixes = msp_mod._get_msp_prefixes
 read_rfmix = msp_mod.read_rfmix
 
 _MSP_CONTENT = """\
@@ -135,3 +136,12 @@ def test_read_rfmix_passthrough_g_anc(tmp_path):
     _, g_anc_out, _ = read_rfmix(str(tmp_path), g_anc=dummy_g_anc, verbose=False)
 
     assert g_anc_out is dummy_g_anc
+
+
+def test_get_msp_prefixes_accepts_path_prefix(tmp_path):
+    fn = tmp_path / "run_chr1.msp.tsv"
+    fn.write_text(_MSP_CONTENT)
+
+    result = _get_msp_prefixes(str(tmp_path / "run_chr1"), verbose=False)
+
+    assert result == [{"msp.tsv": str(fn)}]
