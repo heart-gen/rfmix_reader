@@ -180,11 +180,24 @@ def _get_msp_prefixes(file_prefix: str, verbose: bool = True) -> List[Dict[str, 
     from os.path import join
 
     fp = Path(file_prefix)
-    candidates = sorted([str(x) for x in fp.glob("*[chr]*")])
-    if not candidates:
-        candidates = sorted(glob(join(str(fp), "*")))
+    prefixes = []
 
-    prefixes = _clean_prefixes(candidates)
+    # Accept both a path prefix ("/path/run_chr1" -> "/path/run_chr1.msp.tsv")
+    # and a complete MSP file path.
+    for sfx in _MSP_SUFFIXES:
+        suffix = f".{sfx}"
+        if str(fp).endswith(suffix) and fp.exists():
+            prefixes.append(str(fp)[:-len(suffix)])
+        elif Path(f"{fp}.{sfx}").exists():
+            prefixes.append(str(fp))
+    prefixes = list(dict.fromkeys(prefixes))
+
+    if not prefixes:
+        candidates = sorted([str(x) for x in fp.glob("*[chr]*")])
+        if not candidates:
+            candidates = sorted(glob(join(str(fp), "*")))
+        prefixes = sorted(_clean_prefixes(candidates))
+
     fn = []
     for pfx in prefixes:
         filemap = {}

@@ -111,6 +111,41 @@ def test_expand_array_unsorted_raises(tmp_path):
         _expand_array(variant_loci_df, admix, zarr_outdir=str(tmp_path / "zarr"))
 
 
+def test_interpolate_array_allows_unsorted_pos_without_bp_interpolation(tmp_path):
+    np_data = np.arange(2, dtype=np.float32).reshape(2, 1, 1)
+    admix = da.from_array(np_data, chunks=(2, 1, 1))
+    variant_loci_df = pd.DataFrame({
+        "pos": [200, 100],
+        "i": [0.0, 1.0],
+    })
+
+    z = interpolate_array(
+        variant_loci_df,
+        admix,
+        zarr_outdir=tmp_path / "zarr-index-interp",
+        chunk_size=2,
+        use_bp_positions=False,
+    )
+
+    np.testing.assert_array_equal(z[:], np_data)
+
+
+def test_interpolate_array_requires_sorted_pos_with_bp_interpolation(tmp_path):
+    admix = da.zeros((2, 1, 1), dtype=np.float32, chunks=(2, 1, 1))
+    variant_loci_df = pd.DataFrame({
+        "pos": [200, 100],
+        "i": [0.0, 1.0],
+    })
+
+    with pytest.raises(ValueError, match="sorted by 'pos'"):
+        interpolate_array(
+            variant_loci_df,
+            admix,
+            zarr_outdir=tmp_path / "zarr-bp-interp",
+            use_bp_positions=True,
+        )
+
+
 def test_expand_array_slab_path_correctness(tmp_path, monkeypatch):
     """
     Slab path (used when admix doesn't fit in memory) must write correct values (Bug 1 fix).

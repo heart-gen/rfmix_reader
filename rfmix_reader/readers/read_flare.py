@@ -294,37 +294,37 @@ def _load_haplotypes(vcf_file: str, chunk_size: int32 = 10_000) -> Array:
         import numpy as _np
         # One-hot identity matrix: eye[k] gives a row with 1 at column k.
         # Precomputed outside process_chunk to avoid repeated allocation.
-        _eye = _np.eye(n_ancestries, dtype=_np.int8)
+        _eye = _np.eye(n_ancestries, dtype=_np.float32)
 
         def process_chunk(pairs):
             """
-            pairs : list of (an1_arr, an2_arr) numpy int8 arrays, each shape
+            pairs : list of (an1_arr, an2_arr) numpy int32 arrays, each shape
                     (n_samples,). Extracting numpy arrays before dask.delayed
                     ensures cyvcf2 Variant objects (C-extension, not safely
                     picklable) are never stored in the task graph.
             """
             chunk_len = len(pairs)
-            counts = _np.zeros((chunk_len, n_samples, n_ancestries),
-                               dtype=_np.int8)
+            counts = _np.empty((chunk_len, n_samples, n_ancestries),
+                               dtype=_np.float32)
             for i, (an1, an2) in enumerate(pairs):
                 # eye[an1] shape: (n_samples, n_ancestries) — one-hot per hap.
                 # Summing gives diploid ancestry counts in one vectorized step
                 # instead of 2*n_ancestries per-ancestry comparison passes.
-                counts[i, :, :] = _eye[an1] + _eye[an2]
+                counts[i, :, :] = _diploid_counts_from_haps(an1, an2, _eye)
             return counts
 
         records_buffer = []  # holds (an1_np, an2_np) pairs, not Variant objects
         delayed_arrays = []
         for rec in vcf:
-            an1 = asarray(rec.format("AN1"), dtype=int8).ravel()
-            an2 = asarray(rec.format("AN2"), dtype=int8).ravel()
+            an1 = _np.asarray(rec.format("AN1"), dtype=_np.int32).ravel()
+            an2 = _np.asarray(rec.format("AN2"), dtype=_np.int32).ravel()
             records_buffer.append((an1, an2))
             if len(records_buffer) == chunk_size:
                 delayed_arrays.append(
                     from_delayed(
                         delayed(process_chunk)(records_buffer),
                         shape=(chunk_size, n_samples, n_ancestries),
-                        dtype=int8,
+                        dtype="float32",
                     )
                 )
                 records_buffer = []
@@ -334,7 +334,7 @@ def _load_haplotypes(vcf_file: str, chunk_size: int32 = 10_000) -> Array:
                 from_delayed(
                     delayed(process_chunk)(records_buffer),
                     shape=(len(records_buffer), n_samples, n_ancestries),
-                    dtype=int8,
+                    dtype="float32",
                 )
             )
     finally:
@@ -350,6 +350,27 @@ def _load_haplotypes(vcf_file: str, chunk_size: int32 = 10_000) -> Array:
     arrays_list = [an_dask_arrays[k] for k in sorted(an_dask_arrays.keys())]
 
     return stack(arrays_list, axis=2)
+
+
+def _diploid_counts_from_haps(an1, an2, eye):
+    """
+    Convert two haplotype ancestry-code arrays into diploid ancestry counts.
+
+    Missing or out-of-range ancestry codes produce an all-NaN count vector for
+    that sample/locus instead of being used as NumPy indexes.
+    """
+    import numpy as _np
+
+    n_ancestries = eye.shape[1]
+    valid = (
+        (an1 >= 0) & (an1 < n_ancestries) &
+        (an2 >= 0) & (an2 < n_ancestries)
+    )
+    counts = _np.full((an1.shape[0], n_ancestries), _np.nan,
+                      dtype=_np.float32)
+    if valid.any():
+        counts[valid, :] = eye[an1[valid]] + eye[an2[valid]]
+    return counts
 
 
 def _parse_ancestry_header(vcf_file: str) -> dict:
