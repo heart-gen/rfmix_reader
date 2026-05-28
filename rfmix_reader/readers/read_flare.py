@@ -359,17 +359,13 @@ def _diploid_counts_from_haps(an1, an2, eye):
     Missing or out-of-range ancestry codes produce an all-NaN count vector for
     that sample/locus instead of being used as NumPy indexes.
     """
-    import numpy as _np
-
     n_ancestries = eye.shape[1]
     valid = (
         (an1 >= 0) & (an1 < n_ancestries) &
         (an2 >= 0) & (an2 < n_ancestries)
     )
-    counts = _np.full((an1.shape[0], n_ancestries), _np.nan,
-                      dtype=_np.float32)
-    if valid.any():
-        counts[valid, :] = eye[an1[valid]] + eye[an2[valid]]
+    counts = full((an1.shape[0], n_ancestries), float("nan"), dtype="float32")
+    counts[valid, :] = eye[an1[valid]] + eye[an2[valid]]
     return counts
 
 

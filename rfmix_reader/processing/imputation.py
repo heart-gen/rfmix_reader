@@ -351,13 +351,12 @@ def interpolate_array(
             raise ValueError(
                 "use_bp_positions=True but 'pos' column not found in variant_loci_df."
             )
-        pos_vals = variant_loci_df["pos"].to_numpy(dtype=np.float64)
-        if len(pos_vals) > 1 and not (np.diff(pos_vals) >= 0).all():
+        pos = variant_loci_df["pos"].to_numpy(dtype=np.float32)
+        if len(pos) > 1 and not (np.diff(pos) >= 0).all():
             raise ValueError(
                 "variant_loci_df must be sorted by 'pos' in ascending order. "
                 "Call .sort_values('pos').reset_index(drop=True) before passing."
             )
-        pos = pos_vals.astype(np.float32, copy=False)
 
     _print_logger("Starting expansion!")
     z = _expand_array(variant_loci_df, admix, zarr_outdir,
