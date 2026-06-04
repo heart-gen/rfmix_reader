@@ -1,6 +1,7 @@
 """
 Unit tests for the read_rfmix reader (reads .msp.tsv files).
 """
+import gzip
 import pytest
 import importlib
 
@@ -13,6 +14,7 @@ _parse_pop_header = msp_mod._parse_pop_header
 _read_msp_file = msp_mod._read_msp_file
 _segments_to_loci = msp_mod._segments_to_loci
 _get_msp_prefixes = msp_mod._get_msp_prefixes
+extract_locus_ancestry = msp_mod.extract_locus_ancestry
 read_rfmix = msp_mod.read_rfmix
 
 _MSP_CONTENT = """\
@@ -145,3 +147,75 @@ def test_get_msp_prefixes_accepts_path_prefix(tmp_path):
     result = _get_msp_prefixes(str(tmp_path / "run_chr1"), verbose=False)
 
     assert result == [{"msp.tsv": str(fn)}]
+
+
+_Q_CONTENT = """\
+#rfmix diploid global ancestry .Q format output
+#sample	AFR	EUR
+Sample_1	0.5	0.5
+Sample_2	0.25	0.75
+"""
+
+
+def test_get_msp_prefixes_accepts_gzip(tmp_path):
+    fn = tmp_path / "chr1.msp.tsv.gz"
+    with gzip.open(fn, "wt") as fh:
+        fh.write(_MSP_CONTENT)
+
+    result = _get_msp_prefixes(str(tmp_path), verbose=False)
+
+    assert result == [{"msp.tsv": str(fn)}]
+
+
+def test_read_rfmix_reads_neighboring_q(tmp_path):
+    (tmp_path / "chr1.msp.tsv").write_text(_MSP_CONTENT)
+    (tmp_path / "chr1.rfmix.Q").write_text(_Q_CONTENT)
+
+    _, g_anc_out, _ = read_rfmix(str(tmp_path), verbose=False)
+
+    assert g_anc_out is not None
+    assert list(g_anc_out.columns) == ["sample_id", "AFR", "EUR", "chrom"]
+    assert list(g_anc_out["sample_id"]) == ["Sample_1", "Sample_2"]
+    assert list(g_anc_out["chrom"]) == ["chr1", "chr1"]
+
+
+def test_read_rfmix_can_skip_q(tmp_path):
+    (tmp_path / "chr1.msp.tsv").write_text(_MSP_CONTENT)
+    (tmp_path / "chr1.rfmix.Q").write_text(_Q_CONTENT)
+
+    _, g_anc_out, _ = read_rfmix(str(tmp_path), verbose=False, read_q=False)
+
+    assert g_anc_out is None
+
+
+def test_extract_locus_ancestry_aggregate_boundary_and_outside(tmp_path):
+    (tmp_path / "chr1.msp.tsv").write_text(_MSP_CONTENT)
+    loci = pd.DataFrame({
+        "variant_id": ["inside", "boundary", "outside"],
+        "chrom": ["1", "chr1", "chr1"],
+        "pos": [10001, 50000, 90001],
+    })
+
+    out = extract_locus_ancestry(str(tmp_path), loci, aggregate=True)
+
+    assert list(out["variant_id"]) == ["inside", "boundary", "outside"]
+    assert list(out["matched"]) == [True, True, False]
+    assert out.loc[0, "AFR_haplotypes"] == 1
+    assert out.loc[0, "EUR_haplotypes"] == 3
+    assert out.loc[1, "AFR_haplotypes"] == 1
+    assert out.loc[1, "EUR_fraction"] == 0.75
+    assert pd.isna(out.loc[2, "AFR_fraction"])
+
+
+def test_extract_locus_ancestry_sample_level_subset(tmp_path):
+    (tmp_path / "chr1.msp.tsv").write_text(_MSP_CONTENT)
+    loci = pd.DataFrame({"chrom": ["chr1"], "pos": [50001], "rsid": ["rs1"]})
+
+    out = extract_locus_ancestry(
+        str(tmp_path), loci, samples=["Sample_2"], aggregate=False
+    )
+
+    assert out.shape[0] == 1
+    assert out.loc[0, "sample_id"] == "Sample_2"
+    assert out.loc[0, "AFR_copies"] == 1
+    assert out.loc[0, "EUR_copies"] == 1
