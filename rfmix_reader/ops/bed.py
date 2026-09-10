@@ -8,6 +8,7 @@ import pandas as pd
 import xarray as xr
 
 from ..core import schema as S
+from ..core.codes import to_str_array
 
 __all__ = ["to_bed", "resolve_sample"]
 
@@ -85,7 +86,7 @@ def to_bed(ds: xr.Dataset, sample: Union[int, str], *, min_segment: int = 1) -> 
     name = ds.la.samples[idx]
     pops = ds.la.ancestries
     counts = np.asarray(ds.la.counts.isel({S.SAMPLE: idx}).values)      # (L, A)
-    chrom = np.asarray(ds[S.CHROMOSOME].values).astype(str)
+    chrom = to_str_array(ds[S.CHROMOSOME].values)
     pos = np.asarray(ds[S.VARIANT_POSITION].values)
     end = np.asarray(ds[S.SEGMENT_END].values) if S.SEGMENT_END in ds.coords else pos
 

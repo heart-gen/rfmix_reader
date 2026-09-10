@@ -9,7 +9,8 @@ import pandas as pd
 import xarray as xr
 
 from ..core import schema as S
-from ..io._layout import flatten_names
+from ..core.codes import to_str_array
+from ..formats.common import flatten_names
 
 __all__ = ["to_parquet"]
 
@@ -41,7 +42,7 @@ def to_parquet(
     if rows_per_file:
         counts = counts.rechunk({0: int(rows_per_file)})
     names = flatten_names(ds.la.samples, ds.la.ancestries)
-    chrom = np.asarray(ds[S.CHROMOSOME].values).astype(str)
+    chrom = to_str_array(ds[S.CHROMOSOME].values)
     pos = np.asarray(ds[S.VARIANT_POSITION].values)
 
     written: List[Path] = []

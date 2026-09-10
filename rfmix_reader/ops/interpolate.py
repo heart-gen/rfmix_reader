@@ -9,7 +9,7 @@ import pandas as pd
 import xarray as xr
 
 from ..core import schema as S
-from ..utils import _normalize_chrom_label
+from ..formats.common import normalize_chrom_label
 
 __all__ = ["interpolate", "build_variant_grid"]
 
@@ -26,13 +26,13 @@ def build_variant_grid(ds: xr.Dataset, variants: pd.DataFrame, *, chrom_col: str
     are kept.
     """
     src_chrom = np.array([str(c) for c in ds[S.CHROMOSOME].values])
-    src_norm = np.array([_normalize_chrom_label(c) for c in src_chrom])
+    src_norm = np.array([normalize_chrom_label(c) for c in src_chrom])
     src_pos = np.asarray(ds[S.VARIANT_POSITION].values, dtype=np.int64)
     source = pd.DataFrame({"_norm": src_norm, "chrom": src_chrom, "pos": src_pos,
                            "i": np.arange(len(src_pos), dtype=float)})
 
     tgt = pd.DataFrame({
-        "_norm": [_normalize_chrom_label(str(c)) for c in variants[chrom_col]],
+        "_norm": [normalize_chrom_label(str(c)) for c in variants[chrom_col]],
         "pos": pd.to_numeric(variants[pos_col], errors="raise").astype(np.int64),
     }).drop_duplicates()
     tgt = tgt[tgt["_norm"].isin(set(src_norm))]

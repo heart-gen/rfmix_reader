@@ -3,10 +3,21 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from rfmix_reader.core.codes import counts_from_hap_codes
 from rfmix_reader.formats import discover, get_parser
 from rfmix_reader.formats.base import codes_from_pairs
 from rfmix_reader.formats.global_ancestry import fractions_from_counts, frame_to_array
-from rfmix_reader.readers._common import counts_from_hap_codes
+
+# tests/data/flare: ##ANCESTRY=<EUR=0,AFR=1>; axis 2 == [EUR, AFR]
+FLARE_EXPECTED = np.array([
+    [[2, 0], [1, 1]], [[1, 1], [2, 0]], [[0, 2], [-1, -1]], [[1, 1], [0, 2]],
+], dtype=np.int8)
+# tests/data/simu: pops sorted CEU, NAT, YRI
+SIMU_EXPECTED = np.array([
+    [[0, 0, 2], [1, 0, 1], [1, 1, 0], [0, 1, 1]],
+    [[1, 0, 1], [1, 0, 1], [0, 2, 0], [0, 1, 1]],
+    [[2, 0, 0], [0, 0, 2], [1, 1, 0], [1, 1, 0]],
+], dtype=np.int8)
 
 
 def _collect(parser, filemap, header, chunk_rows, **opts):
@@ -67,10 +78,10 @@ def test_msp_parser(msp_dir):
     assert end.tolist() == [49999, 89999, 129999, 169999]
     np.testing.assert_array_equal(codes[0], [[0, 0], [0, 1], [1, 1]])
 
-    from rfmix_reader.readers.read_msp import read_rfmix
-    _, g_anc, legacy = read_rfmix(str(msp_dir), verbose=False, chrom="1")
-    np.testing.assert_array_equal(counts_from_hap_codes(codes[..., 0], codes[..., 1], 2), legacy.compute())
-    np.testing.assert_allclose(header.global_ancestry, g_anc[["EUR", "AFR"]].to_numpy(), atol=1e-5)
+    counts = counts_from_hap_codes(codes[..., 0], codes[..., 1], 2)
+    np.testing.assert_array_equal(counts[0], [[2, 0], [1, 1], [0, 2]])
+    q = pd.read_csv(msp_dir / "chr1.rfmix.Q", sep="\t", skiprows=1)
+    np.testing.assert_allclose(header.global_ancestry, q[["EUR", "AFR"]].to_numpy(), atol=1e-5)
 
 
 def test_msp_parser_bad_codes(tmp_path):
@@ -120,8 +131,6 @@ def test_fb_parser_rejects_bad_layout(tmp_path):
 
 # --------------------------------------------------------------------------- flare
 def test_flare_parser(flare_dir):
-    from tests.test_read_flare import EXPECTED
-
     parser = get_parser("flare")
     filemap = discover(str(flare_dir), "flare")[0]
     header = parser.scan(filemap)
@@ -133,14 +142,12 @@ def test_flare_parser(flare_dir):
     assert [len(c) for c in chunks] == [3, 1]
     assert chrom.tolist() == ["chr21"] * 4
     assert pos.tolist() == [5030578, 5030588, 5031000, 5032000]
-    np.testing.assert_array_equal(counts_from_hap_codes(codes[..., 0], codes[..., 1], 2), EXPECTED)
+    np.testing.assert_array_equal(counts_from_hap_codes(codes[..., 0], codes[..., 1], 2), FLARE_EXPECTED)
     assert codes[2, 1, 0] == -1
 
 
 # --------------------------------------------------------------------------- haptools
 def test_haptools_parser(simu_dir):
-    from tests.test_read_simu import EXPECTED
-
     parser = get_parser("haptools")
     filemap = discover(str(simu_dir), "haptools")[0]
     header = parser.scan(filemap)
@@ -152,7 +159,7 @@ def test_haptools_parser(simu_dir):
     assert [len(c) for c in chunks] == [2, 1]
     assert chrom.tolist() == ["chr21"] * 3
     assert pos.tolist() == [100, 5000, 1500000]
-    np.testing.assert_array_equal(counts_from_hap_codes(codes[..., 0], codes[..., 1], 3), EXPECTED)
+    np.testing.assert_array_equal(counts_from_hap_codes(codes[..., 0], codes[..., 1], 3), SIMU_EXPECTED)
 
 
 def test_haptools_parser_unknown_label_is_missing(simu_dir, tmp_path):

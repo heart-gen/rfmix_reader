@@ -6,11 +6,11 @@ Loading the data becomes very fast because data is saved to a Zarr.
 """
 from __future__ import annotations
 
+import logging
 import zarr
 import warnings
 import numpy as np
 from tqdm import tqdm
-from time import strftime
 from pandas import DataFrame
 from typing import Literal, Optional, TYPE_CHECKING
 
@@ -40,28 +40,12 @@ def _to_host(x):
     return np.asarray(x)
 
 
+logger = logging.getLogger(__name__)
+
+
 def _print_logger(message: str) -> None:
-    """
-    Print a timestamped log message to the console.
-
-    This function prepends the current date and time to the provided message
-    and prints it to the console. It's designed for simple logging purposes
-    within a program.
-
-    Parameters
-    ----------
-    message : str
-        The message to be logged. This should be a string containing the
-        information you want to log.
-
-    Returns
-    -------
-    None
-        This function doesn't return any value; it prints the log message
-        directly to the console.
-    """
-    current_time = strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{current_time}] {message}")
+    """Log a progress message."""
+    logger.info(message)
 
 
 def _normalize_method(method: str) -> str:

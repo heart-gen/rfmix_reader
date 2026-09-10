@@ -6,14 +6,14 @@ from typing import Optional, Sequence
 import numpy as np
 import pandas as pd
 
-from ..readers._common import read_rfmix_q
+from .common import read_rfmix_q
 
 __all__ = ["read_rfmix_q", "read_flare_global", "frame_to_array", "fractions_from_counts"]
 
 
 def read_flare_global(fn: str) -> pd.DataFrame:
     """FLARE ``.global.anc.gz`` as ``sample_id`` + one float32 column per ancestry."""
-    from ..readers.read_flare import _read_anc_noi
+    from .flare_vcf import _read_anc_noi
 
     return _read_anc_noi(fn)
 

@@ -1,20 +1,23 @@
+"""
+Compute-layer backend selection.
+
+Parsers are plain NumPy; GPU acceleration is opt-in for the compute layer
+(imputation, plotting helpers) through CuPy when it is importable.
+"""
 from __future__ import annotations
 
 import contextlib
 import importlib
 import importlib.util
 import logging
-from typing import Tuple
 
 _GPU_ARRAY_AVAILABLE: bool | None = None
-_GPU_DF_AVAILABLE: bool | None = None
-_GPU_DASK_DF_AVAILABLE: bool | None = None
 
 logger = logging.getLogger(__name__)
 
 
 def _select_array_backend():
-    """Return cupy if available; otherwise numpy with a warning on failure."""
+    """Return cupy if importable; otherwise numpy."""
     global _GPU_ARRAY_AVAILABLE
     if _GPU_ARRAY_AVAILABLE is False:
         import numpy as np
@@ -30,74 +33,41 @@ def _select_array_backend():
         return module
 
     _GPU_ARRAY_AVAILABLE = False
-    logger.debug(
-        "CuPy unavailable or failed to initialize; "
-        "falling back to NumPy CPU backend."
-    )
+    logger.debug("CuPy unavailable or failed to initialize; using the NumPy backend.")
     import numpy as np
     return np
 
 
-def _select_dataframe_backend():
-    """Return cudf if available; otherwise pandas with a warning on failure."""
-    global _GPU_DF_AVAILABLE
-    if _GPU_DF_AVAILABLE is False:
-        import pandas as pd
-        return pd
-
-    module = None
-    if importlib.util.find_spec("cudf") is not None:
-        with contextlib.suppress(Exception):
-            module = importlib.import_module("cudf")
-
-    if module is not None:
-        _GPU_DF_AVAILABLE = True
-        return module
-
-    _GPU_DF_AVAILABLE = False
-    logger.debug(
-        "cuDF unavailable or failed to initialize; "
-        "falling back to pandas CPU backend."
-    )
-    import pandas as pd
-    return pd
-
-
-def _select_dask_dataframe_backend() -> Tuple[object, bool]:
-    """Return dask_cudf module and True when available; else dask.dataframe."""
-    global _GPU_DASK_DF_AVAILABLE
-    if _GPU_DASK_DF_AVAILABLE is False:
-        import dask.dataframe as dd
-        return dd, False
-
-    module = None
-    if importlib.util.find_spec("dask_cudf") is not None:
-        with contextlib.suppress(Exception):
-            module = importlib.import_module("dask_cudf")
-
-    if module is not None:
-        _GPU_DASK_DF_AVAILABLE = True
-        return module, True
-
-    _GPU_DASK_DF_AVAILABLE = False
-    logger.debug(
-        "dask_cudf unavailable or failed to initialize; "
-        "falling back to dask.dataframe CPU backend."
-    )
-    import dask.dataframe as dd
-    return dd, False
+def use_gpu() -> bool:
+    """``True`` when the CuPy backend is selected."""
+    return _select_array_backend().__name__ == "cupy"
 
 
 def _configure_dask_backends() -> None:
-    """Configure dask to use cudf/cupy when available."""
+    """Configure dask to use cupy for arrays when available."""
     from dask import config
 
-    array_mod = _select_array_backend()
-    df_mod = _select_dataframe_backend()
+    config.set({"array.backend": "cupy" if use_gpu() else "numpy"})
 
-    config.set(
-        {
-            "array.backend": "cupy" if array_mod.__name__ == "cupy" else "numpy",
-            "dataframe.backend": "cudf" if df_mod.__name__ == "cudf" else "pandas",
-        }
-    )
+
+def describe_gpus() -> list[dict]:
+    """
+    Properties of the CUDA devices visible to PyTorch (name, memory in GB,
+    capability); an empty list when PyTorch or CUDA is unavailable.
+    """
+    try:
+        from torch.cuda import device_count, get_device_properties
+    except ImportError:
+        logger.debug("PyTorch is not installed; GPU information is unavailable.")
+        return []
+    devices = []
+    for num in range(device_count()):
+        props = get_device_properties(num)
+        devices.append({
+            "index": num, "name": props.name,
+            "total_memory_gb": props.total_memory / (1024 ** 3),
+            "capability": f"{props.major}.{props.minor}",
+        })
+        logger.info("GPU %d: %s, %.2f GB, CUDA capability %s", num, props.name,
+                    props.total_memory / (1024 ** 3), f"{props.major}.{props.minor}")
+    return devices

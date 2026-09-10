@@ -33,7 +33,8 @@ import pandas as pd
 
 import xarray as xr
 
-from ..backends import _select_array_backend, _select_dataframe_backend
+from ..backends import _select_array_backend
+from ..core.codes import to_str_array
 
 if TYPE_CHECKING:
     from dask.array import Array as DaskArray
@@ -60,29 +61,6 @@ def _to_numpy_array(arr):
     if array_mod.__name__ == "cupy" and isinstance(arr, array_mod.ndarray):
         return array_mod.asnumpy(arr)
     return np.asarray(arr)
-
-
-def _to_pandas_dataframe(obj):
-    """Convert cudf.DataFrame to pandas for consistent downstream handling."""
-
-    df_mod = _select_dataframe_backend()
-    if df_mod.__name__ == "cudf" and isinstance(obj, df_mod.DataFrame):
-        return obj.to_pandas()
-    return obj
-
-
-def _series_to_array(series):
-    """Convert pandas or cuDF Series to a NumPy or CuPy array."""
-
-    df_mod = _select_dataframe_backend()
-    if df_mod.__name__ == "cudf" and isinstance(series, df_mod.Series):
-        if hasattr(series, "to_cupy"):
-            try:
-                return _to_numpy_array(series.to_cupy())
-            except Exception:
-                pass
-        return _to_numpy_array(series.to_numpy())
-    return _to_numpy_array(series.to_numpy())
 
 
 @dataclass
@@ -635,7 +613,7 @@ def build_reference_haplotypes_from_zarr(
             "Ensure it was written with vcf2zarr / vcf_to_zarr."
         )
     sample_to_idx = {
-        sid: i for i, sid in enumerate(ds["sample_id"].values.astype(str))
+        sid: i for i, sid in enumerate(to_str_array(ds["sample_id"].values))
     }
     missing_rep = [s for s in rep_samples if s not in sample_to_idx]
     if missing_rep:
@@ -810,190 +788,6 @@ find_heterozygous_blocks = _find_heterozygous_blocks
 assign_reference_per_window = _assign_reference_per_window
 build_phase_track_from_ref = _build_phase_track_from_ref
 apply_phase_track = _apply_phase_track
-
-
-def count_switch_errors(
-    M_pred: ArrayLike, P_pred: ArrayLike, M_true: ArrayLike,
-    P_true: ArrayLike,
-) -> int:
-    """
-    Count minimal number of phase switches between predicted and truth.
-
-    Counts the minimal number of suffix flips needed to turn
-    ``(M_pred, P_pred)`` into ``(M_true, P_true)``.
-    """
-    xp = _get_array_module(M_pred, P_pred, M_true, P_true)
-
-    M_pred = xp.asarray(M_pred).copy()
-    P_pred = xp.asarray(P_pred).copy()
-    M_true = xp.asarray(M_true)
-    P_true = xp.asarray(P_true)
-
-    if not (M_pred.shape == P_pred.shape == M_true.shape == P_true.shape):
-        raise ValueError("All haplotypes must have the same shape.")
-
-    n_switches = 0
-    L = M_pred.shape[0]
-    for i in range(L):
-        if M_pred[i] != M_true[i]:
-            M_tmp = M_pred[i:].copy()
-            M_pred[i:] = P_pred[i:]
-            P_pred[i:] = M_tmp
-            n_switches += 1
-
-    if not (np.array_equal(M_pred, M_true) and np.array_equal(P_pred, P_true)):
-        raise RuntimeError("Phase error correction did not align with truth.")
-
-    return n_switches
-
-
-def _build_hap_labels_from_rfmix(
-    X_raw: DaskArray | np.ndarray, sample_idx: int, n_anc: int, n_samples: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Reconstruct hap0/hap1 ancestry labels for a sample from the raw RFMix fb matrix.
-
-    Parameters
-    ----------
-    X_raw : (L, n_cols) dask.array or np.ndarray
-        Original RFMix matrix before summing haps. Columns correspond to
-        (ancestry, hap, sample) combinations.
-    sample_idx : int
-    n_anc : int
-    n_samples : int
-
-    Returns
-    -------
-    hap0_labels, hap1_labels : (L,) np.ndarray of int
-        Per-locus ancestry labels (0..n_anc-1) for hap0 and hap1.
-        ``-1`` indicates missing (no ancestry column > 0 at that locus).
-    """
-    import dask.array as da
-
-    base = sample_idx * (n_anc * 2)
-    cols_h0 = base + np.arange(n_anc) * 2
-    cols_h1 = base + np.arange(n_anc) * 2 + 1
-
-    if isinstance(X_raw, da.Array):
-        H0 = X_raw[:, cols_h0].compute()
-        H1 = X_raw[:, cols_h1].compute()
-    else:
-        xp = _get_array_module(X_raw)
-        H0 = xp.asarray(X_raw)[:, cols_h0]
-        H1 = xp.asarray(X_raw)[:, cols_h1]
-
-    xp = _get_array_module(H0, H1)
-
-    hap0_labels = xp.argmax(H0, axis=1).astype(np.int16)
-    hap1_labels = xp.argmax(H1, axis=1).astype(np.int16)
-
-    hap0_labels[H0.sum(axis=1) == 0] = -1
-    hap1_labels[H1.sum(axis=1) == 0] = -1
-
-    return _to_numpy_array(hap0_labels), _to_numpy_array(hap1_labels)
-
-
-def _combine_haps_to_counts(
-    hap0: np.ndarray, hap1: np.ndarray, n_anc: int,
-) -> np.ndarray:
-    """
-    Combine haplotype-level ancestry labels back into summed counts (0,1,2).
-
-    Parameters
-    ----------
-    hap0, hap1 : (L,) array_like of int
-    n_anc : int
-
-    Returns
-    -------
-    out : (L, n_anc) np.ndarray of int8
-    """
-    hap0 = _to_numpy_array(hap0)
-    hap1 = _to_numpy_array(hap1)
-
-    xp = np
-
-    if hap0.shape != hap1.shape:
-        raise ValueError("hap0 and hap1 must have same shape.")
-
-    L = hap0.shape[0]
-    out = xp.zeros((L, n_anc), dtype=np.int8)
-
-    idx = np.arange(L)
-
-    valid0 = (hap0 >= 0) & (hap0 < n_anc)
-    out[idx[valid0], hap0[valid0]] += 1
-
-    valid1 = (hap1 >= 0) & (hap1 < n_anc)
-    out[idx[valid1], hap1[valid1]] += 1
-
-    return out
-
-
-def phase_admix_sample_from_zarr_with_index(
-    admix_sample: np.ndarray,  # (L, A) counts
-    X_raw: DaskArray | np.ndarray,  # (L, n_cols) raw RFMix matrix
-    sample_idx: int, n_samples: int, positions: np.ndarray,  # (L,)
-    chrom: str, ref_zarr_root: str, sample_annot_path: str,
-    config: PhasingConfig, groups: Optional[list[str]] = None,
-    hap_index_in_zarr: int = 0, refs: Optional[np.ndarray] = None,
-) -> np.ndarray:
-    """
-    Phase-correct local ancestry for one sample using RFMix + VCF-Zarr references.
-
-    Steps
-    -----
-    1. Use ``X_raw`` to build hap0/hap1 ancestry labels.
-    2. Run gnomix-style phasing via :func:`phase_local_ancestry_sample_from_zarr`.
-    3. Recombine corrected hap0/hap1 into 0/1/2 counts.
-
-    If ``refs`` is provided, precomputed reference haplotypes are reused and the
-    Zarr loading step is skipped.
-
-    Returns
-    -------
-    admix_corr : (L, A) np.ndarray of int
-        Phase-corrected summed ancestry counts for this sample.
-    """
-    admix_sample = _to_numpy_array(admix_sample)
-    positions = _to_numpy_array(positions).astype(np.int64)
-
-    L, A = admix_sample.shape
-
-    hap0, hap1 = _build_hap_labels_from_rfmix(
-        X_raw=X_raw, sample_idx=sample_idx, n_anc=A, n_samples=n_samples
-    )
-
-    if hap0.shape[0] != L:
-        raise ValueError("Length of hap0/hap1 does not match admix_sample.")
-
-    if refs is None:
-        hap0_corr, hap1_corr, _match_stats = phase_local_ancestry_sample_from_zarr(
-            hap0=hap0,
-            hap1=hap1,
-            positions=positions,
-            chrom=chrom,
-            ref_zarr_root=ref_zarr_root,
-            sample_annot_path=sample_annot_path,
-            groups=groups,
-            config=config,
-            hap_index_in_zarr=hap_index_in_zarr,
-        )
-    else:
-        if refs.shape[1] != L:
-            raise ValueError("Reference haplotypes do not match admix_sample length.")
-
-        refs = _to_numpy_array(refs)
-
-        hap0_corr, hap1_corr = phase_local_ancestry_sample(
-            hap0=hap0,
-            hap1=hap1,
-            refs=refs,
-            config=config,
-        )
-
-    admix_corr = _combine_haps_to_counts(hap0_corr, hap1_corr, n_anc=A)
-    return admix_corr
 
 
 def gnomix_switch_mask_sample(
@@ -1273,60 +1067,6 @@ def phase_dataset(
     return out
 
 
-def phase_admix_dask_with_index(
-    admix: "DaskArray",  # (L, S, A) summed counts
-    X_raw: "DaskArray | np.ndarray",  # (L, n_cols) raw RFMix matrix
-    positions: np.ndarray,  # (L,)
-    chrom: str, ref_zarr_root: str, sample_annot_path: str,
-    config: PhasingConfig, groups: Optional[list[str]] = None,
-    hap_index_in_zarr: int = 0,
-) -> "DaskArray":
-    """
-    Deprecated: phase-correct from the raw RFMix matrix and return **counts**.
-
-    Diploid counts are invariant to haplotype flips, so this function's output
-    equals its ``admix`` input; it is kept only for backwards compatibility.
-    Use :func:`phase_haplotypes` / :func:`phase_dataset` to obtain the
-    corrected haplotype codes.
-    """
-    import warnings
-    import dask.array as da
-
-    warnings.warn(
-        "phase_admix_dask_with_index returns summed counts, which do not change "
-        "under phasing; use phase_haplotypes / phase_dataset for haplotype codes.",
-        DeprecationWarning, stacklevel=2,
-    )
-    if not isinstance(admix, da.Array):
-        raise TypeError("admix must be a dask.array.Array")
-    n_loci, n_samples, n_anc = admix.shape
-    X = da.asarray(X_raw).rechunk((min(n_loci, 20_000), n_samples * 2 * n_anc))
-    codes = da.map_blocks(
-        lambda b: _codes_from_posterior_block(b, n_samples, n_anc), X, dtype=np.int8,
-        new_axis=2, chunks=(X.chunks[0], (n_samples,), (2,)),
-    )
-    phased = phase_haplotypes(codes, positions, chrom, ref_zarr_root, sample_annot_path,
-                              config=config, groups=groups, hap_index_in_zarr=hap_index_in_zarr,
-                              method="reference")
-    return da.map_blocks(
-        lambda b: _combine_block(b, n_anc), phased, dtype=np.int8,
-        chunks=(phased.chunks[0], phased.chunks[1], (n_anc,)),
-    )
-
-
-def _codes_from_posterior_block(block: np.ndarray, n_samples: int, n_anc: int) -> np.ndarray:
-    b4 = np.asarray(block).reshape(block.shape[0], n_samples, 2, n_anc)
-    codes = b4.argmax(axis=-1).astype(np.int8)
-    codes[~(b4 > 0).any(axis=-1)] = -1
-    return codes
-
-
-def _combine_block(block: np.ndarray, n_anc: int) -> np.ndarray:
-    from ..readers._common import counts_from_hap_codes
-
-    return counts_from_hap_codes(block[..., 0], block[..., 1], n_anc)
-
-
 def phase_rfmix_chromosome_to_zarr(
     file_prefix: str, ref_zarr_root: Optional[str], sample_annot_path: Optional[str],
     output_path: str, *, chrom: Optional[str] = None,
@@ -1403,7 +1143,7 @@ def _write_schema_zarr(ds: xr.Dataset, output_path: str) -> None:
         var.encoding.pop("chunks", None)
         var.encoding.pop("preferred_chunks", None)
         if var.dtype.kind in ("U", "O"):
-            values = np.array([str(v) for v in np.asarray(var.values).tolist()], dtype=object)
+            values = to_str_array(var.values)
             out = out.assign_coords({name: (var.dims, values)}) if name in out.coords \
                 else out.assign({name: (var.dims, values)})
     out.to_zarr(output_path, mode="w", consolidated=False)
@@ -1426,14 +1166,14 @@ def merge_phased_zarrs(
     """
     from ..core import schema as S
     from ..core.zarr_io import open_store
-    from ..utils import _chrom_sort_key
+    from ..formats.common import chrom_sort_key
 
     if not chrom_zarr_paths:
         raise ValueError("No Zarr paths provided for merging.")
     logger.info("[merge_phased_zarrs] Opening %d per-chromosome Zarr stores", len(chrom_zarr_paths))
     paths = [Path(p) for p in chrom_zarr_paths]
     if sort:
-        paths = sorted(paths, key=lambda p: _chrom_sort_key(p.stem))
+        paths = sorted(paths, key=lambda p: chrom_sort_key(p.stem))
     combined = S.concat_datasets([open_store(p) for p in paths])
     logger.info("[merge_phased_zarrs] Writing merged dataset with %d variants to %s",
                 combined.sizes.get(S.VARIANT, 0), output_path)

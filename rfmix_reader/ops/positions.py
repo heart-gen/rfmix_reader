@@ -8,7 +8,7 @@ import pandas as pd
 import xarray as xr
 
 from ..core import schema as S
-from ..utils import _normalize_chrom_label
+from ..formats.common import normalize_chrom_label
 
 __all__ = ["at_positions"]
 
@@ -79,9 +79,9 @@ def at_positions(
         sample_idx = np.array([all_samples.index(s) for s in samples])
         selected = [str(s) for s in samples]
 
-    q_chrom = np.array([_normalize_chrom_label(str(v).strip()) for v in loci[chrom_col]])
+    q_chrom = np.array([normalize_chrom_label(str(v).strip()) for v in loci[chrom_col]])
     q_pos = pd.to_numeric(loci[pos_col], errors="raise").to_numpy(dtype=np.int64)
-    src_chrom = np.array([_normalize_chrom_label(str(c)) for c in ds[S.CHROMOSOME].values])
+    src_chrom = np.array([normalize_chrom_label(str(c)) for c in ds[S.CHROMOSOME].values])
     src_pos = np.asarray(ds[S.VARIANT_POSITION].values, dtype=np.int64)
     src_end = (np.asarray(ds[S.SEGMENT_END].values, dtype=np.int64)
                if S.SEGMENT_END in ds.coords else src_pos)

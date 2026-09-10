@@ -20,7 +20,7 @@ from typing import Iterable, Optional, Sequence
 import numpy as np
 import xarray as xr
 
-from ..readers._common import MISSING
+from .codes import MISSING, to_str_array
 
 __all__ = [
     "MISSING",
@@ -85,7 +85,7 @@ def build_dataset(
     hap = hap.astype(np.int8).rechunk((chunk_rows, S, 2))
     L = int(hap.shape[0])
 
-    chromosome = np.asarray(chromosome).astype(str)
+    chromosome = to_str_array(chromosome)
     variant_position = np.asarray(variant_position, dtype=np.int32)
     segment_end = (variant_position if segment_end is None
                    else np.asarray(segment_end, dtype=np.int32))

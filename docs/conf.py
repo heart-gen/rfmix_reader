@@ -97,10 +97,11 @@ napoleon_google_docstring = True
 napoleon_attr_annotations = True
 
 # Mock heavy deps during autodoc import
+# Only optional extras are mocked; the core (numpy, pandas, dask, xarray,
+# zarr, cyvcf2) is installed by the docs environment and imported for real.
 autodoc_mock_imports = [
-    "psutil", "zarr", "pyarrow", "xarray", "bio2zarr",
-    "torch", "cupy", "cudf", "cuml", "dask_cuda", "numba",
-    "scanpy", "anndata", "cyvcf2", "pysam"
+    "torch", "cupy", "cudf", "dask_cudf", "bio2zarr", "pysam",
+    "matplotlib", "seaborn", "cairosvg",
 ]
 
 # Intersphinx
@@ -109,7 +110,8 @@ intersphinx_mapping = {
     "numpy": ("https://numpy.org/doc/stable/", None),
     "pandas": ("https://pandas.pydata.org/pandas-docs/stable/", None),
     "dask": ("https://docs.dask.org/en/latest/", None),
-    "rapids": ("https://docs.rapids.ai/api/cudf/stable/", None),
+    "xarray": ("https://docs.xarray.dev/en/stable/", None),
+    "zarr": ("https://zarr.readthedocs.io/en/stable/", None),
 }
 
 # HTML
@@ -137,4 +139,15 @@ nitpick_ignore = [
     ("py:class", "numpy.ndarray"),
     ("py:class", "pandas.DataFrame"),
     ("py:class", "pandas.Series"),
+]
+# Type-hint renderings that do not resolve to documented objects
+nitpick_ignore_regex = [
+    ("py:class", r"pandas\.core\..*"),
+    ("py:class", r"xarray\.core\..*"),
+    ("py:class", r"xarray\.(Dataset|DataArray)"),
+    ("py:class", r"dask\..*"),
+    ("py:class", r"zarr\..*"),
+    ("py:class", r"(optional|default .*|L|S|A|array-like|array_like|int8|str or Path)"),
+    ("py:(mod|func|class|data)", r"(core|ops|processing|formats)\..*"),
+    ("py:class", r"rfmix_reader\.formats\.base\.(Header|Chunk)"),
 ]

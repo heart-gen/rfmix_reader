@@ -3,6 +3,7 @@ Adapted from `main.py` script in the `tagore` package.
 Source: https://github.com/jordanlab/tagore/blob/master/src/tagore/main.py
 """
 from __future__ import annotations
+import logging
 import re
 from pickle import loads
 from os import path
@@ -15,12 +16,13 @@ from ..processing import CHROM_SIZES, COORDINATES
 if TYPE_CHECKING:
     from pandas import DataFrame
 
+logger = logging.getLogger(__name__)
+
+
 def _printif(message: str, verbose: bool):
-    """
-    Print message if a boolean (e.g. verbose) is true
-    """
+    """Log a progress message when ``verbose``."""
     if verbose:
-        print(message)
+        logger.info(re.sub(r"\x1b\[[0-9;]*m", "", message))
 
 
 def _draw_local_ancestry(
@@ -57,7 +59,7 @@ def _draw_local_ancestry(
         svg_fh = open(svg_fn, "w")
         svg_fh.write(svg_header)
     except (IOError, EOFError) as e:
-        print("Error opening output file!")
+        logger.error("Error opening output file!")
         raise e
 
     # Validate required columns
@@ -176,7 +178,7 @@ def plot_local_ancestry_tagore(
         raise ValueError(f"\033[91mBuild must be 'hg37' or 'hg38', got '{build}'\033[0m")
 
     if oformat.lower() not in ["png", "pdf"]:
-        print(f"\033[93m{oformat} is not supported. Using PNG instead.\033[0m")
+        logger.warning("%s is not supported. Using PNG instead.", oformat)
         oformat = "png"
 
     # Draw local ancestry SVG file

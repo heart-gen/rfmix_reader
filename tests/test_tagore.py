@@ -11,11 +11,13 @@ matplotlib.use("Agg")  # headless backend
 
 import rfmix_reader.viz.tagore as tagore
 
-def test__printif(capsys):
-    tagore._printif("hi", verbose=True)
-    out = capsys.readouterr().out
-    assert "hi" in out
-    tagore._printif("no", verbose=False)  # should print nothing
+def test__printif(caplog):
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="rfmix_reader.viz.tagore"):
+        tagore._printif("\033[92mhi\033[0m", verbose=True)
+        tagore._printif("no", verbose=False)  # should log nothing
+    assert [r.getMessage() for r in caplog.records] == ["hi"]
 
 
 def make_bed_df():

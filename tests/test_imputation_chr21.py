@@ -4,7 +4,7 @@ np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
 da = pytest.importorskip("dask.array")
 
-from rfmix_reader import interpolate_array, read_rfmix_fb
+from rfmix_reader import interpolate_array, open_rfmix
 from rfmix_reader.processing.imputation import (
     GPU_ENABLED, _expand_array, interpolate_block,
 )
@@ -22,12 +22,9 @@ def gpu_available() -> bool:
 @pytest.mark.filterwarnings("ignore:.*cupy not installed.*")
 @pytest.mark.parametrize("method", ["linear", "nearest", "stepwise"])
 def test_imputation_chr21_interpolation(tmp_path, method, chr21_lfs):
-    loci_df, g_anc, admix = read_rfmix_fb(
-        str(chr21_lfs),
-        binary_dir=tmp_path / "binary",
-        generate_binary=True,
-        verbose=False,
-    )
+    loci_df, g_anc, admix = open_rfmix(
+        str(chr21_lfs), source="fb", cache_dir=tmp_path / "cache", verbose=False,
+    ).la.to_legacy()
 
     loci_pd = loci_df.to_pandas() if hasattr(loci_df, "to_pandas") else loci_df.copy()
     renamed = loci_pd.rename(columns={"chromosome": "chrom", "physical_position": "pos"})
@@ -190,12 +187,9 @@ def test_expand_array_slab_path_correctness(tmp_path, monkeypatch):
 
 @pytest.mark.slow
 def test_imputation_ignores_nan_metadata(tmp_path, chr21_lfs):
-    loci_df, _, admix = read_rfmix_fb(
-        str(chr21_lfs),
-        binary_dir=tmp_path / "binary",
-        generate_binary=True,
-        verbose=False,
-    )
+    loci_df, _, admix = open_rfmix(
+        str(chr21_lfs), source="fb", cache_dir=tmp_path / "cache", verbose=False,
+    ).la.to_legacy()
 
     loci_pd = loci_df.to_pandas() if hasattr(loci_df, "to_pandas") else loci_df.copy()
     renamed = loci_pd.rename(columns={"chromosome": "chrom", "physical_position": "pos"})

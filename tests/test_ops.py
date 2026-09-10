@@ -167,3 +167,23 @@ def test_to_tagore(msp_dir):
         assert col in out.columns
     bed = ds.la.to_bed("Sample_1")
     assert out.shape[0] == int(bed[["Sample_1_EUR", "Sample_1_AFR"]].to_numpy().sum())
+
+
+# ------------------------------------------------------------------ zarr-backed inputs
+def test_ops_on_cached_dataset(msp_dir, tmp_path):
+    """Operations must accept the string dtypes a Zarr-backed Dataset returns."""
+    pytest.importorskip("pyarrow")
+    from rfmix_reader import open_local_ancestry
+
+    mem = open_rfmix(str(msp_dir), verbose=False)
+    open_rfmix(str(msp_dir), cache_dir=tmp_path / "c", verbose=False)
+    ds = open_local_ancestry(tmp_path / "c")
+
+    pd.testing.assert_frame_equal(to_bed(ds, "Sample_1"), to_bed(mem, "Sample_1"))
+    loci = pd.DataFrame({"chrom": ["chr1", "chr2"], "pos": [10001, 25000]})
+    pd.testing.assert_frame_equal(at_positions(ds, loci), at_positions(mem, loci))
+    files = to_parquet(ds, tmp_path / "pq", prefix="la")
+    assert [f.name for f in files] == ["la.chr1-0.parquet", "la.chr2-0.parquet"]
+    out = interpolate(ds, loci, tmp_path / "z", method="stepwise")
+    assert out.sizes["variant"] == 10 and out.chromosome.values.tolist()[:5] == ["chr1"] * 5
+    assert ds.la.to_legacy()[0]["chromosome"].astype(str).tolist() == mem.la.to_legacy()[0]["chromosome"].astype(str).tolist()

@@ -109,7 +109,7 @@ def test_phase_haplotypes_flips_tail_and_keeps_counts(fake_refs):
     np.testing.assert_array_equal(res[:, 0, 1], 1)
     np.testing.assert_array_equal(res[:, 1, :], -1)
     # diploid counts are unchanged by phasing
-    from rfmix_reader.readers._common import counts_from_hap_codes
+    from rfmix_reader.core.codes import counts_from_hap_codes
     np.testing.assert_array_equal(counts_from_hap_codes(res[..., 0], res[..., 1], 2),
                                   counts_from_hap_codes(hap[..., 0], hap[..., 1], 2))
 
@@ -144,17 +144,6 @@ def test_phase_dataset_and_zarr_round_trip(fake_refs, msp_dir, tmp_path):
                                       str(tmp_path / "merged.zarr"))
     assert merged.la.chromosomes == ["chr1", "chr2"] and merged.sizes["variant"] == 8
     assert open_local_ancestry(tmp_path, chrom="1").sizes["variant"] == 4
-
-
-def test_phase_admix_dask_with_index_is_deprecated(fake_refs):
-    import dask.array as da
-
-    X = np.array([[1, 0, 0, 1], [0.9, 0.1, 0.2, 0.8]], dtype=np.float32)   # 1 sample, 2 pops
-    admix = da.from_array(np.array([[[1, 1]], [[1, 1]]], dtype=np.int8))
-    with pytest.warns(DeprecationWarning, match="phase_haplotypes"):
-        out = phase.phase_admix_dask_with_index(admix, da.from_array(X), np.array([1, 2]), "chr1",
-                                                "ref", "annot", phase.PhasingConfig(1, 1))
-    np.testing.assert_array_equal(out.compute(), admix.compute())
 
 
 # ---------------------------------------------------------------------------

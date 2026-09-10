@@ -1,5 +1,8 @@
+import logging
 from pathlib import Path
 from typing import List, Optional, Sequence
+
+logger = logging.getLogger(__name__)
 
 
 def _import_bio2zarr():
@@ -39,7 +42,7 @@ def convert_vcf_to_zarr(
         If True, log progress messages to stdout.
     """
     if verbose:
-        print(f"[INFO] Converting VCF to Zarr: {vcf_path} -> {out_path}")
+        logger.info(f"Converting VCF to Zarr: {vcf_path} -> {out_path}")
 
     vcf_path = str(vcf_path); out_path = str(out_path)
 
@@ -52,8 +55,8 @@ def convert_vcf_to_zarr(
     )
 
     if verbose:
-        print("[INFO] Conversion to Zarr complete.")
-        print(f"[DONE] VCF Zarr store ready: {out_path}")
+        logger.info("Conversion to Zarr complete.")
+        logger.info(f"VCF Zarr store ready: {out_path}")
 
 
 def convert_vcfs_to_zarr(

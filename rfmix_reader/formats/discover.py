@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from ..utils import filter_file_maps_by_chrom, get_prefixes
+from .common import filter_file_maps_by_chrom, get_prefixes
 
 __all__ = ["discover", "FORMATS"]
 
@@ -33,7 +33,7 @@ def discover(path: str, fmt: str, chrom: Optional[str] = None) -> List[Dict[str,
         maps = get_prefixes(path, "flare", verbose=False)
         return filter_file_maps_by_chrom(maps, chrom, kind="FLARE")
     if fmt == "haptools":
-        from ..readers.read_simu import _get_vcf_files
+        from .haptools_vcf import _get_vcf_files
 
         return [{"vcf": f} for f in _get_vcf_files(path, chrom=chrom)]
     raise ValueError(f"Unknown format {fmt!r}; choose from {FORMATS}.")
