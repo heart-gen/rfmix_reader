@@ -1,6 +1,6 @@
 """
 Import hygiene: the core imports quietly, without torch, and the removed
-pre-1.0 names raise a helpful error.
+legacy names raise a helpful error.
 """
 import subprocess
 import sys
@@ -72,5 +72,5 @@ def test_prepare_reference_import_without_bio2zarr():
 def test_removed_names_point_to_replacement(name):
     import rfmix_reader
 
-    with pytest.raises(AttributeError, match="removed in 1.0"):
+    with pytest.raises(AttributeError, match="removed in 0.6"):
         getattr(rfmix_reader, name)

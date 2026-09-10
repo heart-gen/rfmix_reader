@@ -1,12 +1,14 @@
 # Changelog
 
-## 1.0.0
+## 0.6.0
 
-The rebuild is complete: one `xarray.Dataset` schema, streaming parsers, a
+Release candidate for 1.0: the rebuild is complete but the version stays
+below 1.0 until CI on every supported Python and the benchmark comparison
+against 0.3.1 have been reviewed. One `xarray.Dataset` schema: one `xarray.Dataset` schema, streaming parsers, a
 per-chromosome Zarr cache, and Dataset operations. See `MIGRATION.md`.
 
 ### Removed
-- The pre-1.0 triple API and its modules (`read_*`, `write_data`,
+- The legacy triple API (0.5 and earlier) and its modules (`read_*`, `write_data`,
   `admix_to_bed_individual`, `generate_tagore_bed`, `extract_locus_ancestry`,
   `create_binaries`, `Chunk`, `BinaryFileNotFoundError`, `rfmix_reader.readers`,
   `rfmix_reader.utils`, the `.bin` cache, `create-binaries`).

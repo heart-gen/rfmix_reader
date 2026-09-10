@@ -86,7 +86,7 @@ def __getattr__(name: str):
         return obj
     if name in _REMOVED:
         raise AttributeError(
-            f"rfmix_reader.{name} was removed in 1.0; use {_REMOVED[name]} "
+            f"rfmix_reader.{name} was removed in 0.6; use {_REMOVED[name]} "
             "(see MIGRATION.md)."
         )
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

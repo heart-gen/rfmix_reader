@@ -1,5 +1,5 @@
 """
-Build a Dataset from the pre-1.0 ``(loci_df, g_anc, local_array)`` triple.
+Build a Dataset from the legacy (0.5 and earlier) ``(loci_df, g_anc, local_array)`` triple.
 """
 from __future__ import annotations
 

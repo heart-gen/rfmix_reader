@@ -104,7 +104,7 @@ every `open_*` call does):
 | `ds.la.global_ancestry` | long DataFrame (`sample_id`, ancestries, `chrom`) |
 | `ds.la.samples`, `.ancestries`, `.chromosomes`, `.n_variants`, `.n_samples` | labels / sizes |
 | `ds.la.sel_region("chr21", start, end)` | Dataset subset |
-| `ds.la.to_legacy()` | the pre-1.0 `(loci_df, g_anc, local_array)` triple |
+| `ds.la.to_legacy()` | the legacy (0.5 and earlier) `(loci_df, g_anc, local_array)` triple |
 
 ## Operations
 
@@ -193,7 +193,7 @@ plot_local_ancestry_tagore(ds.la.to_tagore("NA19700"), prefix="NA19700", build="
 
 ## Migrating from 0.x
 
-See [MIGRATION.md](MIGRATION.md). Every pre-1.0 name maps to one call on the
+See [MIGRATION.md](MIGRATION.md). Every legacy (0.5 and earlier) name maps to one call on the
 Dataset; `ds.la.to_legacy()` returns the old triple and
 `rfmix_reader.from_legacy(loci_df, g_anc, admix)` builds a Dataset from one.
 

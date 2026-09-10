@@ -1,7 +1,7 @@
-# Migrating to rfmix_reader 1.0
+# Migrating to rfmix_reader 0.6
 
-Version 1.0 completes the rebuild around a single lazily-evaluated
-`xarray.Dataset` (see the README for the schema) and removes the pre-1.0
+Version 0.6 completes the rebuild around a single lazily-evaluated
+`xarray.Dataset` (see the README for the schema) and removes the legacy
 `(loci_df, g_anc, local_array)` API that 0.5 had deprecated.
 
 ## Readers

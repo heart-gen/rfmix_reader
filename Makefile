@@ -9,7 +9,7 @@ test-slow:
 lint:
 	poetry run ruff check --select F rfmix_reader tests
 
-# Usage: make release v=1.0.0
+# Usage: make release v=0.6.0
 # Bumps the version, commits and tags; the Release workflow builds and
 # publishes when the tag is pushed (after the test workflow passes).
 release: lint test

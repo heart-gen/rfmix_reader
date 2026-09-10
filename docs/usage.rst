@@ -59,7 +59,7 @@ The Dataset
    ds.la.global_ancestry        # DataFrame: sample_id, <ancestries>, chrom
    ds.la.samples, ds.la.ancestries, ds.la.chromosomes
    ds.la.sel_region("chr21", 15_000_000, 20_000_000)
-   loci_df, g_anc, local_array = ds.la.to_legacy()   # the pre-1.0 triple
+   loci_df, g_anc, local_array = ds.la.to_legacy()   # the legacy (0.5) triple
 
 Operations
 ----------
@@ -148,6 +148,6 @@ Visualization
 Migrating from 0.x
 ------------------
 
-See ``MIGRATION.md`` in the repository: every pre-1.0 function maps to one
+See ``MIGRATION.md`` in the repository: every legacy (0.5 and earlier) function maps to one
 call on the Dataset, ``ds.la.to_legacy()`` returns the old triple, and
 ``rfmix_reader.from_legacy(loci_df, g_anc, admix)`` builds a Dataset from one.
