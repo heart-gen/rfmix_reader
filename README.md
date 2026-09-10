@@ -79,6 +79,58 @@ print(local_array.shape)   # (n_segments, n_samples, n_ancestries)
 
 ---
 
+## The Dataset API (`open_*`, new in 0.4)
+
+The `open_*` functions parse a source **once** and return a lazily-evaluated
+[`xarray.Dataset`](https://docs.xarray.dev) shared by every format:
+
+```python
+from rfmix_reader import open_rfmix, open_flare, open_simu, open_local_ancestry
+
+ds = open_rfmix("two_pops/out/", cache_dir="la_cache/")   # .msp.tsv (default)
+ds = open_rfmix("two_pops/out/", source="fb", keep_posteriors=True, cache_dir="la_cache/")
+ds = open_flare("flare_runs/", cache_dir="la_cache/")
+ds = open_simu("simulations/", cache_dir="la_cache/")
+
+ds = open_local_ancestry("la_cache/")            # instant reopen, all chromosomes
+ds = open_local_ancestry("la_cache/", chrom="21")
+```
+
+```text
+dims:   variant, sample, ploidy (=2), ancestry, contig
+vars:   haplotype_ancestry (variant, sample, ploidy)            int8  code into `ancestry`, -1 missing
+        posterior          (variant, sample, ploidy, ancestry)  float32  optional (fb, keep_posteriors=True)
+        global_ancestry    (contig, sample, ancestry)           float32
+coords: chromosome, variant_position, segment_end (variant); sample_id; ancestry (tool order); contig
+```
+
+`ds.la` gives the convenient views:
+
+| Accessor | Returns |
+|---|---|
+| `ds.la.counts` | `(variant, sample, ancestry)` int8 diploid counts 0/1/2 (lazy dask) |
+| `ds.la.haplotypes` | `(variant, sample, ploidy)` int8 haplotype codes |
+| `ds.la.posterior` | float32 posteriors, or `None` |
+| `ds.la.global_ancestry` | long DataFrame (`sample_id`, ancestries, `chrom`) |
+| `ds.la.samples`, `.ancestries`, `.chromosomes` | labels |
+| `ds.la.sel_region("chr21", start, end)` | subset Dataset |
+| `ds.la.to_legacy()` | the `(loci_df, g_anc, local_array)` triple of the `read_*` readers |
+
+With `cache_dir`, each chromosome is written once to `<cache_dir>/<chrom>.zarr`
+(int8 haplotype codes, compressed; a few MB per chromosome) in a single
+streaming pass — the `.fb.tsv` path no longer needs `create_binaries` or the
+7.5 GB `.bin` files — and reopens in well under a second. Without `cache_dir`
+the Dataset is built in memory. The same conversion is available on the
+command line:
+
+```bash
+rfmix-reader convert fb two_pops/out/ la_cache/ --keep-posteriors
+rfmix-reader info la_cache/
+```
+
+The `read_*` functions below remain available and return the same data as
+`ds.la.to_legacy()`.
+
 ## Choosing a Reader
 
 RFMix produces several output file types. The right reader depends on what
