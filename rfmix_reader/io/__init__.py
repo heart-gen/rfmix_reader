@@ -1,6 +1,8 @@
 """Reference-panel conversion helpers (``prepare-reference``)."""
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 __all__ = ["convert_vcf_to_zarr", "convert_vcfs_to_zarr"]
 
 _lazy = {
@@ -19,3 +21,8 @@ def __getattr__(name: str):
         globals()[name] = obj
         return obj
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+# Make type checkers happy without importing bio2zarr at runtime
+if TYPE_CHECKING:
+    from .prepare_reference import convert_vcf_to_zarr, convert_vcfs_to_zarr
