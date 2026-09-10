@@ -17,7 +17,7 @@ def plot_global_ancestry(
         save_path: Optional[str] = "global_ancestry",
         show_labels: bool = False, sort_by: Optional[str] = None, **kwargs
 ) -> None:
-    """
+    r"""
     Plot global ancestry proportions across all individuals.
 
     Parameters:
@@ -46,10 +46,10 @@ def plot_global_ancestry(
     \*\*kwargs : dict
         Additional arguments passed to save_multi_format()
 
-    Example:
-    -------
-    >>> loci, g_anc, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
-    >>> plot_global_ancestry(g_anc, dpi=300, bbox_inches="tight")
+    Examples
+    --------
+    >>> ds = open_rfmix("two_pops/out/", cache_dir="la_cache/")
+    >>> plot_global_ancestry(ds.la.global_ancestry, dpi=300, bbox_inches="tight")
     """
     _configure_dask_backends()
     from pandas import Series
@@ -120,7 +120,7 @@ def plot_global_ancestry(
 def plot_ancestry_by_chromosome(
         g_anc: DataFrame, figsize: Tuple[int,int] = (14,6), palette: str = 'Set1',
         save_path: Optional[str] = "chromosome_summary", **kwargs) -> None:
-    """
+    r"""
     Plot chromosome-wise ancestry distribution using boxplots.
 
     Parameters:
@@ -140,10 +140,10 @@ def plot_ancestry_by_chromosome(
     \*\*kwargs : dict
         Additional arguments passed to save_multi_format()
 
-    Example:
+    Examples
     --------
-    >>> loci, g_anc, admix = read_rfmix(prefix_path, binary_dir=binary_dir)
-    >>> plot_ancestry_by_chromosome(g_anc, dpi=300, bbox_inches="tight")
+    >>> ds = open_rfmix("two_pops/out/", cache_dir="la_cache/")
+    >>> plot_ancestry_by_chromosome(ds.la.global_ancestry, dpi=300, bbox_inches="tight")
     """
     # Melt to long-form for Seaborn
     df_long = g_anc.melt(id_vars=['sample_id', 'chrom'], var_name='Ancestry',
@@ -165,7 +165,7 @@ def plot_ancestry_by_chromosome(
 
 def save_multi_format(filename: str, formats: Tuple[str, ...] = ('png', 'pdf'),
                       **kwargs) -> None:
-    """
+    r"""
     Save current figure to multiple file formats.
 
     Parameters:

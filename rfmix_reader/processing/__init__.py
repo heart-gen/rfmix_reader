@@ -6,6 +6,8 @@ lazily on first attribute access.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from .constants import CHROM_SIZES, COORDINATES
 
 __all__ = [
@@ -45,3 +47,16 @@ def __getattr__(name: str):
 
 def __dir__():
     return sorted(list(globals().keys()) + __all__)
+
+
+# Make type checkers happy without importing zarr / xarray at runtime
+if TYPE_CHECKING:
+    from .imputation import interpolate_array
+    from .phase import (
+        PhasingConfig,
+        gnomix_switch_mask,
+        merge_phased_zarrs,
+        phase_dataset,
+        phase_haplotypes,
+        phase_rfmix_chromosome_to_zarr,
+    )

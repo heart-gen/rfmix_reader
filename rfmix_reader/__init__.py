@@ -11,7 +11,7 @@ try:
     __version__ = _v("rfmix-reader")  # distribution name
 except PackageNotFoundError:
     try:
-        from ._version import __version__  # fallback for local builds
+        from ._version import __version__  # type: ignore[import-not-found]  # generated at build time
     except Exception:
         __version__ = "0.0.0"
 
