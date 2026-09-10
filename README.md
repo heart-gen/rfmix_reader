@@ -128,8 +128,47 @@ rfmix-reader convert fb two_pops/out/ la_cache/ --keep-posteriors
 rfmix-reader info la_cache/
 ```
 
-The `read_*` functions below remain available and return the same data as
-`ds.la.to_legacy()`.
+Operations on the Dataset (all lazy or streaming; `sample` is an index or ID):
+
+| Operation | Result |
+|---|---|
+| `ds.la.at_positions(loci_df, method="stepwise"\|"nearest", samples=None, aggregate=True)` | ancestry at listed `chrom`/`pos` (haplotype counts and fractions, or per-sample copies) |
+| `ds.la.to_bed(sample, min_segment=1)` | constant-ancestry intervals for one sample |
+| `ds.la.to_tagore(sample, palette="tab10")` | the BED annotated for TAGORE plots |
+| `ds.la.to_parquet(outdir, prefix=..., rows_per_file=...)` | `<prefix>.<chrom>-<k>.parquet` files, one dask block at a time |
+| `ds.la.interpolate(variants_df, zarr_outdir, method="linear"\|"nearest"\|"stepwise")` | counts on a denser variant grid, Zarr-backed per chromosome |
+| `ds.la.phase(ref_zarr_root, sample_annot_path, config=PhasingConfig())` | phase-corrected haplotype codes (single chromosome) |
+
+The legacy `read_*`, `write_data`, `admix_to_bed_individual`,
+`generate_tagore_bed`, `extract_locus_ancestry` and `create_binaries` names
+still work but now run on the Dataset core and emit a `DeprecationWarning`;
+they will be removed in 1.0. `read_rfmix_fb(binary_dir=...)` reuses
+`binary_dir` as the Zarr cache instead of writing `.bin` files.
+
+**Phasing.** `ds.la.phase()` corrects switch errors between the two
+haplotypes per sample the way gnomix does: heterozygous blocks are found from
+the haplotype codes, each window inside a block is scored by how well the two
+posterior tracks match the block-start orientation versus the swapped one,
+uninformative windows inherit the previous state, and the two haplotypes
+(codes and posteriors) are exchanged wherever the track says "switched".
+It needs no reference panel; open the `.fb.tsv` output with
+`keep_posteriors=True` so the posteriors are available (without them the
+hard calls are used). The output Dataset adds a `phase_swapped (variant, sample)`
+mask. Tune `PhasingConfig(window_size, min_block_len, posterior_margin)`.
+
+```python
+from rfmix_reader import open_rfmix
+from rfmix_reader.processing.phase import PhasingConfig
+
+ds = open_rfmix("two_pops/out/", source="fb", keep_posteriors=True, cache_dir="la_cache/", chrom="21")
+phased = ds.la.phase(config=PhasingConfig(window_size=50, min_block_len=20))
+phased["phase_swapped"].sum("variant")      # exchanged loci per sample
+```
+
+The previous reference-panel matcher remains available as
+`method="reference"` (with `ref_zarr_root` / `sample_annot_path`) for
+comparison only: it compares ancestry labels against reference *allele*
+codes, which is not a sound test of phase.
 
 ## Choosing a Reader
 

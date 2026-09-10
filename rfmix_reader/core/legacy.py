@@ -1,0 +1,127 @@
+"""
+Bridges between the legacy ``(loci_df, g_anc, local_array)`` triple and the
+Dataset, plus the deprecation helper used by the old public names.
+"""
+from __future__ import annotations
+
+import warnings
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+import xarray as xr
+
+from ..readers._common import MISSING
+from . import schema as S
+
+__all__ = ["codes_from_counts", "from_legacy", "deprecated"]
+
+
+def deprecated(old: str, new: str, extra: str = "") -> None:
+    """Emit the standard ``DeprecationWarning`` for a legacy entry point."""
+    warnings.warn(
+        f"{old} is deprecated and will be removed in rfmix_reader 1.0; use {new} instead."
+        + (f" {extra}" if extra else ""),
+        DeprecationWarning, stacklevel=3,
+    )
+
+
+def codes_from_counts(counts) -> np.ndarray:
+    """
+    ``(..., A)`` diploid counts (0/1/2, ``-1`` missing) -> ``(..., 2)`` int8
+    haplotype codes.  The phase is unknown, so the lower ancestry index is
+    assigned to haplotype 0 (deterministic).  Float inputs are rounded.
+    """
+    c = np.asarray(counts)
+    if c.dtype.kind == "f":
+        c = np.where(np.isnan(c), -1, np.rint(c)).astype(np.int16)
+    else:
+        c = c.astype(np.int16, copy=False)
+    missing = (c < 0).any(axis=-1)
+    c = np.clip(c, 0, 2)
+    cum = np.cumsum(c, axis=-1)
+    hap0 = np.argmax(cum >= 1, axis=-1)
+    hap1 = np.argmax(cum >= 2, axis=-1)
+    total = c.sum(axis=-1)
+    codes = np.stack([hap0, hap1], axis=-1).astype(np.int8)
+    bad = missing | (total != 2)
+    if bad.any():
+        codes[bad] = MISSING
+    return codes
+
+
+def from_legacy(
+    loci_df: pd.DataFrame, g_anc: Optional[pd.DataFrame], admix,
+    *, source_format: str = "legacy", chunk_rows: int = 10_000,
+) -> xr.Dataset:
+    """
+    Build a Dataset from a legacy ``(loci_df, g_anc, admix)`` triple.
+
+    ``admix`` is ``(loci, samples, ancestries)`` counts (dask or numpy).
+    ``g_anc`` supplies sample IDs and ancestry labels; when it is ``None``
+    samples are named ``Sample_1..N`` and ancestries ``anc_0..A-1``.
+    """
+    import dask.array as da
+
+    loci_df = loci_df.to_pandas() if hasattr(loci_df, "to_pandas") else loci_df
+    if g_anc is not None and hasattr(g_anc, "to_pandas"):
+        g_anc = g_anc.to_pandas()
+
+    admix = da.asarray(admix)
+    if admix.ndim != 3:
+        raise ValueError(f"admix must be (loci, samples, ancestries); got shape {admix.shape}.")
+    L, n_samples, n_anc = admix.shape
+
+    chrom_col = "chromosome" if "chromosome" in loci_df.columns else "chrom"
+    pos_col = "physical_position" if "physical_position" in loci_df.columns else "pos"
+    if chrom_col not in loci_df.columns or pos_col not in loci_df.columns:
+        raise ValueError("loci_df needs chromosome/physical_position (or chrom/pos) columns.")
+    if len(loci_df) != L:
+        raise ValueError(f"loci_df has {len(loci_df)} rows but admix has {L} loci.")
+
+    if g_anc is not None:
+        from ..utils import get_pops
+        from ..io._layout import sample_id_list
+
+        samples = sample_id_list(g_anc)
+        pops = [str(p) for p in get_pops(g_anc)]
+        if len(samples) != n_samples or len(pops) != n_anc:
+            raise ValueError(
+                f"g_anc implies {len(samples)} samples x {len(pops)} ancestries but admix is "
+                f"{n_samples} x {n_anc}."
+            )
+        contigs = [str(c) for c in dict.fromkeys(g_anc["chrom"].astype(str))] if "chrom" in g_anc else None
+        if contigs:
+            ga = np.stack([
+                g_anc.loc[g_anc["chrom"].astype(str) == c].set_index("sample_id")
+                .loc[samples, pops].to_numpy(dtype=np.float32)
+                for c in contigs
+            ])
+        else:
+            ga = g_anc.set_index("sample_id").loc[samples, pops].to_numpy(dtype=np.float32)
+            contigs = None
+    else:
+        samples = [f"Sample_{i + 1}" for i in range(n_samples)]
+        pops = [f"anc_{a}" for a in range(n_anc)]
+        ga, contigs = None, None
+
+    hap = da.map_blocks(
+        codes_from_counts, admix.rechunk({2: n_anc}), dtype=np.int8,
+        chunks=(admix.chunks[0], admix.chunks[1], (2,)),
+    )
+    ds = S.build_dataset(
+        loci_df[chrom_col].astype(str).to_numpy(), loci_df[pos_col].to_numpy(), None, hap,
+        samples, pops, global_ancestry=ga, contig=contigs,
+        source_format=source_format, chunk_rows=chunk_rows,
+    )
+    if ga is None:
+        # derive global ancestry from the counts (fraction of valid haplotypes)
+        from ..formats.global_ancestry import fractions_from_counts
+
+        c = np.asarray(admix)
+        valid = c >= 0
+        totals = np.where(valid, c, 0).sum(axis=0)
+        ga_arr = fractions_from_counts(totals)
+        ds = ds.assign({S.GLOBAL_ANCESTRY: ((S.CONTIG, S.SAMPLE, S.ANCESTRY),
+                                            np.stack([ga_arr] * ds.sizes[S.CONTIG]))})
+    return ds

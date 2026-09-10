@@ -6,7 +6,7 @@ Regression checks on the real chr21 RFMix output (git-LFS).  Run with
 import numpy as np
 import pytest
 
-from rfmix_reader import read_rfmix_fb
+from rfmix_reader.readers.read_rfmix import read_rfmix_fb  # legacy .bin path
 from rfmix_reader.io import Chunk
 from rfmix_reader.utils import get_pops
 
@@ -75,3 +75,24 @@ def test_chr21_fb_convert_matches_legacy(tmp_path, chr21_lfs):
     store_bytes = sum(p.stat().st_size for p in (tmp_path / "cache").rglob("*") if p.is_file())
     print(f"\nchr21 fb -> zarr: convert {convert_s:.1f}s, reopen {open_s:.3f}s, "
           f"store {store_bytes / 1e6:.1f} MB")
+
+
+@pytest.mark.slow
+def test_chr21_gnomix_phasing_on_posteriors(tmp_path, chr21_lfs):
+    """gnomix-style phasing of the whole chromosome from the RFMix posteriors."""
+    import time
+
+    from rfmix_reader import open_rfmix
+    from rfmix_reader.processing.phase import PhasingConfig
+
+    ds = open_rfmix(str(chr21_lfs), source="fb", keep_posteriors=True,
+                    cache_dir=tmp_path / "cache", verbose=False)
+    t0 = time.time()
+    phased = ds.la.phase(config=PhasingConfig(window_size=50, min_block_len=20))
+    swapped = phased["phase_swapped"].values
+    phase_s = time.time() - t0
+    assert swapped.shape == (ds.la.n_variants, 500)
+    np.testing.assert_array_equal(phased.la.counts.values, ds.la.counts.values)
+    frac = swapped.mean()
+    print(f"\nchr21 gnomix phasing: {phase_s:.1f}s, {frac:.2%} of sample-loci exchanged")
+    assert 0 <= frac < 0.5

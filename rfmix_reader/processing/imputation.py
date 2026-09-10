@@ -377,16 +377,31 @@ def interpolate_array(
 
     mod = _select_array_backend()
     remaining = np.zeros((z.shape[1], z.shape[2]), dtype=bool)
+    # Rows that carry observed data (non-NaN 'i'); used to give every chunk the
+    # nearest observed row before and after it as context, so the result does
+    # not depend on chunk_size and no chunk starts or ends inside a gap.
+    observed = np.flatnonzero(~np.isnan(variant_loci_df["i"].to_numpy(dtype=float)))
     for start in tqdm(range(0, total_rows, chunk_size),
                       desc="Interpolating chunks", unit="chunk"):
         end = min(start + chunk_size, total_rows)
-        chunk = mod.array(z[start:end, :, :], dtype=mod.float32)
-        pos_chunk = None if pos is None else pos[start:end]
+        k = np.searchsorted(observed, start)
+        prev_row = int(observed[k - 1]) if k > 0 else None
+        k2 = np.searchsorted(observed, end)
+        next_row = int(observed[k2]) if k2 < observed.size else None
+        lead = 1 if prev_row is not None else 0
+        parts = ([z[prev_row:prev_row + 1]] if lead else []) + [z[start:end]] + \
+                ([z[next_row:next_row + 1]] if next_row is not None else [])
+        chunk = mod.array(np.concatenate(parts, axis=0), dtype=mod.float32)
+        pos_chunk = None
+        if pos is not None:
+            pos_parts = ([pos[prev_row:prev_row + 1]] if lead else []) + [pos[start:end]] + \
+                        ([pos[next_row:next_row + 1]] if next_row is not None else [])
+            pos_chunk = np.concatenate(pos_parts)
         if start == 0 and not mod.isnan(chunk).any():
             warnings.warn(
                 "No NaNs detected in first chunk; interpolation may be unnecessary."
             )
-        interp_chunk = interpolate_block(chunk, method=method, pos=pos_chunk)
+        interp_chunk = interpolate_block(chunk, method=method, pos=pos_chunk)[lead:lead + (end - start)]
         remaining |= _to_host(mod.isnan(interp_chunk).any(axis=0))
         z[start:end, :, :] = _to_host(interp_chunk)
 
