@@ -68,15 +68,19 @@ To restrict to a single chromosome:
    )
 
 The returned ``local_array`` is a Dask array with shape
-``(n_segments, n_samples, n_ancestries)`` and dtype ``int32``. Values
+``(n_segments, n_samples, n_ancestries)`` and dtype ``int8``. Values
 are diploid ancestry counts:
 
 * ``0`` — neither allele is from ancestry *k*
 * ``1`` — one allele is from ancestry *k*
 * ``2`` — both alleles are from ancestry *k*
+* ``-1`` — no ancestry call for this sample at this locus
 
-Populations are ordered alphabetically (matching ``read_rfmix_fb`` and
-``read_flare``). Each row corresponds to one RFMix ancestry segment;
+Populations follow the order of the RFMix header
+(``#Subpopulation order/codes``), and the ancestry columns of ``g_anc``
+are returned in the same order, so ``get_pops(g_anc)`` labels axis 2.
+Every reader (``read_rfmix_fb``, ``read_flare``, ``read_simu``) follows the
+same convention. Each row corresponds to one RFMix ancestry segment;
 use :func:`interpolate_array` with ``interpolation="stepwise"`` to expand
 segments onto a denser variant grid.
 

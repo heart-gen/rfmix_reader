@@ -1,330 +1,229 @@
 """
-Revision of `_read_rfmix.py` to work with FLARE output data.
+Reader for FLARE local-ancestry output (``.anc.vcf.gz`` + ``.global.anc.gz``).
+
+The VCF carries per-haplotype ancestry codes in the ``AN1`` / ``AN2`` FORMAT
+fields; the ``##ANCESTRY=<EUR=0,AFR=1>`` header line maps codes to labels.
+Axis 2 of the returned ancestry array follows those codes.
 """
+from __future__ import annotations
+
+import warnings
+from os.path import exists
 from re import search
+from typing import Dict, Tuple, Iterator, Optional
+
+import numpy as np
+import pandas as pd
 from tqdm import tqdm
 from cyvcf2 import VCF
-from numpy import int32
 from dask import delayed
-from os.path import exists
-from re import match as rmatch
-from typing import List, Tuple, Iterator, Optional
-from collections import OrderedDict as odict
-from dask.array import Array, concatenate, from_delayed, stack
+from dask.array import Array, concatenate, from_delayed
 
+from ._common import (
+    align_g_anc_columns,
+    check_pop_order_consistent,
+    counts_from_hap_codes,
+    maybe_report_gpu,
+    maybe_to_backend_frames,
+    pops_by_code,
+)
 from ..utils import (
+    _extract_chrom_from_path,
     _read_file,
     filter_file_maps_by_chrom,
     get_prefixes,
-    set_gpu_environment,
 )
 
-try:
-    from torch.cuda import is_available as gpu_available
-except ModuleNotFoundError as e:
-    print("Warning: PyTorch is not installed. Using CPU!")
-    def gpu_available():
-        return False
+__all__ = ["read_flare"]
 
-if gpu_available():
-    from cupy import array, full, zeros, asarray, int8
-    from cudf import DataFrame, read_csv, concat, CategoricalDtype
-else:
-    from numpy import array, full, zeros, asarray, int8
-    from pandas import DataFrame, read_csv, concat, CategoricalDtype
 
 def read_flare(
-        file_prefix: str, chunk_size: int32 = 1_000_000, verbose: bool = True,
+        file_prefix: str, chunk_size: int = 1_000_000, verbose: bool = True,
         chrom: Optional[str] = None,
-) -> Tuple[DataFrame, DataFrame, Array]:
+) -> Tuple[pd.DataFrame, pd.DataFrame, Array]:
     """
-    Read Flare files into data frames and a Dask array.
+    Read FLARE files into data frames and a Dask array.
 
     Parameters
     ----------
     file_prefix : str
-        Path prefix to the set of Flare files. It will load all of the chromosomes
-        at once.
+        Directory, file, or path prefix of the FLARE output files.  All
+        chromosomes found are loaded unless ``chrom`` is given.
     chunk_size : int
-        Number of records to read per chunk.
+        Number of records per chunk when reading loci; ``chunk_size / 100``
+        records per dask block for the ancestry array.
     verbose : bool, optional
-        :const:`True` for progress information; :const:`False` otherwise.
-        Default:`True`.
+        Show progress bars.  Default ``True``.
     chrom : str, optional
         Restrict parsing to a single chromosome (matching with or without a
         ``chr`` prefix).
 
     Returns
     -------
-    loci_df : :class:`DataFrame`
-        Loci information for the FB data.
-    g_anc : :class:`DataFrame`
-        Global ancestry by chromosome from Flare.
-    local_array : :class:`dask.array.Array`
-        Local ancestry per population stacked (variants, samples, ancestries).
-        This is in alphabetical order of the populations. This matches RFMix.
-
-    Notes
-    -----
-    Local ancestry output will be either :const:`0`, :const:`1`, :const:`2`, or
-    :data:`math.nan`:
-
-    - :const:`0` No alleles are associated with this ancestry
-    - :const:`1` One allele is associated with this ancestry
-    - :const:`2` Both alleles are associated with this ancestry
+    loci_df : DataFrame
+        ``chromosome``, ``physical_position``, ``i``; one row per variant.
+    g_anc : DataFrame
+        Global ancestry by chromosome from ``.global.anc.gz``, ancestry
+        columns ordered like axis 2 of ``local_array``.
+    local_array : dask.array.Array, int8
+        Shape ``(variants, samples, ancestries)`` with diploid counts
+        ``0/1/2``; ``-1`` where a haplotype ancestry is missing.  Axis 2
+        follows the codes of the ``##ANCESTRY`` header.
     """
-    # Device information
-    if verbose and gpu_available():
-        set_gpu_environment()
+    maybe_report_gpu(verbose)
 
-    # Get file prefixes
     fn = filter_file_maps_by_chrom(
         get_prefixes(file_prefix, "flare", verbose), chrom, kind="FLARE"
     )
 
-    # Load loci information
+    pops = check_pop_order_consistent(
+        [pops_by_code(_parse_ancestry_header(f["anc.vcf"])) for f in fn],
+        kind="FLARE",
+    )
+
+    # Loci information
     pbar = tqdm(desc="Mapping loci information", total=len(fn),
                 disable=not verbose)
-    loci_dfs = _read_file(fn, lambda f: _read_loci(f["anc.vcf"], chunk_size),
-                      pbar)
+    loci_dfs = _read_file(fn, lambda f: _read_loci(f["anc.vcf"], chunk_size), pbar)
     pbar.close()
 
     index_offset = 0
-    for df in loci_dfs: # Modify in-place
-        df["i"] = range(index_offset, index_offset + df.shape[0])
+    for df in loci_dfs:  # modify in-place
+        df["i"] = np.arange(index_offset, index_offset + df.shape[0], dtype=np.int64)
         index_offset += df.shape[0]
-    loci_df = concat(loci_dfs, axis=0, ignore_index=True)
+    loci_df = pd.concat(loci_dfs, axis=0, ignore_index=True)
 
-    # Load global ancestry per chromosome
+    # Global ancestry per chromosome
     pbar = tqdm(desc="Mapping global ancestry files", total=len(fn),
                 disable=not verbose)
-    g_anc = _read_file(fn, lambda f: _read_anc(f["global.anc"]), pbar)
+    g_anc_list = _read_file(fn, lambda f: _read_anc(f["global.anc"]), pbar)
     pbar.close()
-    g_anc = concat(g_anc, axis=0, ignore_index=True)
+    g_anc = pd.concat(g_anc_list, axis=0, ignore_index=True)
+    g_anc = align_g_anc_columns(g_anc, pops)
 
-    # Loading local ancestry by loci
+    # Local ancestry
     pbar = tqdm(desc="Mapping local ancestry files", total=len(fn),
                 disable=not verbose)
-    local_array = _read_file(
+    local_arrays = _read_file(
         fn,
-        lambda f: _load_haplotypes(f["anc.vcf"], int(chunk_size / 100)),
-        pbar
+        lambda f: _load_haplotypes(f["anc.vcf"], max(1, int(chunk_size / 100))),
+        pbar,
     )
     pbar.close()
-    local_array = concatenate(local_array, axis=0)
+    local_array = concatenate(local_arrays, axis=0)
+
+    loci_df, g_anc = maybe_to_backend_frames(loci_df, g_anc)
     return loci_df, g_anc, local_array
 
 
-def _read_vcf(fn: str, chunk_size: int32 = 1_000_000) -> DataFrame:
-    """
-    Read a VCF file into a DataFrame.
-
-    Parameters:
-    ----------
-    fn : str
-        File name of the VCF file.
-    chunk_size : int
-        Number of records to include per chunk.
-
-    Returns:
-    -------
-    DataFrame: DataFrame containing specified columns from the VCF file.
-    """
-    header = {"chromosome": CategoricalDtype(), "physical_position": int32}
+def _read_vcf(fn: str, chunk_size: int = 1_000_000) -> pd.DataFrame:
+    """Read ``chromosome`` / ``physical_position`` of every record into a DataFrame."""
     try:
-       chunks = list(_load_vcf_info(fn, chunk_size))
-       df = concat(chunks, ignore_index=True)
+        chunks = list(_load_vcf_info(fn, chunk_size))
+        df = pd.concat(chunks, ignore_index=True)
     except FileNotFoundError:
         raise FileNotFoundError(f"File {fn} not found.")
     except Exception as e:
         raise OSError(f"Error reading file {fn}: {e}") from e
 
-    # Validate that resulting DataFrame is correct type
-    if not isinstance(df, DataFrame):
-        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
-    # Ensure DataFrame contains correct columns
-    if not all(column in df.columns for column in list(header.keys())):
-        raise ValueError(f"DataFrame does not contain expected columns: {list(header.keys())}")
+    df["chromosome"] = df["chromosome"].astype("category")
+    df["physical_position"] = df["physical_position"].astype(np.int32)
     return df
 
 
-def _read_loci(fn: str, chunk_size: int32 = 1_000_000) -> DataFrame:
-    """
-    Read loci information from a TSV file and add a sequential index column.
-
-    Parameters:
-    ----------
-    fn : str
-        The file path of the TSV file containing loci information.
-    chunk_size : int
-        Number of records to include per chunk.
-
-    Returns:
-    -------
-    DataFrame: A DataFrame containing the loci information with an
-               additional 'i' column for indexing.
-    """
+def _read_loci(fn: str, chunk_size: int = 1_000_000) -> pd.DataFrame:
+    """Loci table with a sequential ``i`` index column."""
     df = _read_vcf(fn, chunk_size)
-    df["i"] = range(df.shape[0])
+    df["i"] = np.arange(df.shape[0], dtype=np.int64)
     return df
 
 
-def _read_csv(fn: str, header: dict) -> DataFrame:
+def _read_anc_noi(fn: str) -> pd.DataFrame:
     """
-    Read a CSV file into a pandas DataFrame with specified data types.
+    Read a FLARE ``.global.anc.gz`` table without the ``chrom`` column.
 
-    Parameters:
-    ----------
-    fn (str): The file path of the CSV file.
-    header (dict): A dictionary mapping column names to data types.
+    Format (tab separated, one header line)::
 
-    Returns:
-    -------
-    DataFrame: The data read from the CSV file as a pandas DataFrame.
+        SAMPLE  EUR  AFR
+        Sample_1  0.7  0.3
     """
     try:
-        df = read_csv(fn, sep="\t", names=list(header.keys()),
-                      dtype=header, skiprows=1)
+        df = pd.read_csv(fn, sep="\t", compression="infer")
+    except FileNotFoundError:
+        raise FileNotFoundError(f"File '{fn}' not found.")
     except Exception as e:
         raise OSError(f"Error reading file {fn}: {e}") from e
+    if df.shape[1] < 2:
+        raise ValueError(f"Global ancestry file '{fn}' has no ancestry columns.")
 
-    # Validate that resulting DataFrame is correct type
-    if not isinstance(df, DataFrame):
-        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
+    df = df.rename(columns={df.columns[0]: "sample_id"})
+    df["sample_id"] = df["sample_id"].astype(str)
+    for col in df.columns[1:]:
+        df[col] = df[col].astype(np.float32)
     return df
 
 
-def _read_anc(fn: str) -> DataFrame:
-    """
-    Read the Q matrix from a file and add the chromosome information.
-
-    Parameters:
-    ----------
-    fn (str): The file path of the Q matrix file.
-
-    Returns:
-    -------
-    DataFrame: The Q matrix with the chromosome information added.
-    """
+def _read_anc(fn: str) -> pd.DataFrame:
+    """Global ancestry table with a ``chrom`` column inferred from the file name."""
     df = _read_anc_noi(fn)
-    m = search(r'chr[\w]+', fn)
-    if m:
-        chrom = m.group(0)
-        df["chrom"] = chrom
+    label = _extract_chrom_from_path(fn)
+    if label is not None:
+        df["chrom"] = f"chr{label}"
     else:
-        print(f"Warning: Could not extract chromosome information from '{fn}'")
+        warnings.warn(
+            f"Could not extract chromosome information from '{fn}'", stacklevel=2
+        )
     return df
 
 
-def _read_anc_noi(fn: str) -> DataFrame:
+def _load_haplotypes(vcf_file: str, chunk_size: int = 10_000) -> Array:
     """
-    Read the Q matrix from a file without adding chromosome information.
+    Load diploid ancestry counts from a FLARE VCF into a dask array.
 
-    Parameters:
-    ----------
-    fn (str): The file path of the Q matrix file.
-
-    Returns:
-    -------
-    DataFrame: The Q matrix without chromosome information.
-    """
-    try:
-        header = odict(_types(fn))
-        return _read_csv(fn, header)
-    except Exception as e:
-        raise OSError(f"Error reading file {fn}: {e}") from e
-
-
-def _load_haplotypes(vcf_file: str, chunk_size: int32 = 10_000) -> Array:
-    """
-    Load haplotype ancestry counts from a VCF file into a stacked dask array.
-
-    The function parses the `##ANCESTRY` header from the FLARE VCF to identify
-    ancestries and their indices. It chunks variant records to efficiently
-    process large files with minimal memory usage. For each variant and sample,
-    it sums haplotype ancestries according to the following logic:
-    - If both haplotype ancestries (AN1 and AN2) are identical, their count
-      is summed and assigned to the single ancestry.
-    - If different, each haplotype ancestry is counted individually.
-
-    The ancestries are arranged alphabetically by their label. For example,
-    with populations ["AFR", "EUR"], slice 0 corresponds to "AFR" and slice 1
-    corresponds to "EUR".
+    The ``##ANCESTRY`` header gives the code → label mapping; axis 2 of the
+    result is ordered by code.  Each sample/variant sums the ancestries of the
+    two haplotypes (``AN1``, ``AN2``) into ``0/1/2`` counts (int8).  A missing
+    or out-of-range code yields ``-1`` for every ancestry of that sample.
 
     Parameters
     ----------
     vcf_file : str
-        Path to the BGZF compressed and indexed VCF file containing haplotype
-        ancestry information in FORMAT fields AN1 and AN2.
-
+        Path to the FLARE VCF (``.anc.vcf`` or ``.anc.vcf.gz``).
     chunk_size : int, optional
-        Number of variant records to process per chunk for efficiency.
-        Default is 10,000.
+        Number of variant records per dask block.  Default 10,000.
 
     Returns
     -------
-    dask.array.Array
-        A 3D stacked dask array with shape (num_variants, num_samples, num_ancestries),
-        where the last dimension indexes ancestry populations alphabetically.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the specified VCF file does not exist or cannot be opened.
-
-    Examples
-    --------
-    >>> dask_array = _load_haplotypes("chr21.anc.vcf.gz", chunk_size=5_000)
-    >>> print(dask_array.shape)
-    (270000, 500, 2)
-    >>> afr_counts = dask_array[:, :, 0]  # Access AFR ancestry slice
+    dask.array.Array, int8, shape ``(num_variants, num_samples, num_ancestries)``
     """
     if not exists(vcf_file):
         raise FileNotFoundError(f"VCF file not found: {vcf_file}")
 
+    ancestry_map = _parse_ancestry_header(vcf_file)
+    n_ancestries = len(pops_by_code(ancestry_map))
+
     vcf = VCF(vcf_file)
     try:
-        samples = vcf.samples
-        n_samples = len(samples)
-
-        # Parse ancestry header
-        ancestry_map = _parse_ancestry_header(vcf_file)
-        n_ancestries = len(ancestry_map)
-
-        import numpy as _np
-        # One-hot identity matrix: eye[k] gives a row with 1 at column k.
-        # Precomputed outside process_chunk to avoid repeated allocation.
-        _eye = _np.eye(n_ancestries, dtype=_np.float32)
+        n_samples = len(vcf.samples)
 
         def process_chunk(pairs):
-            """
-            pairs : list of (an1_arr, an2_arr) numpy int32 arrays, each shape
-                    (n_samples,). Extracting numpy arrays before dask.delayed
-                    ensures cyvcf2 Variant objects (C-extension, not safely
-                    picklable) are never stored in the task graph.
-            """
-            chunk_len = len(pairs)
-            counts = _np.empty((chunk_len, n_samples, n_ancestries),
-                               dtype=_np.float32)
-            for i, (an1, an2) in enumerate(pairs):
-                # eye[an1] shape: (n_samples, n_ancestries) — one-hot per hap.
-                # Summing gives diploid ancestry counts in one vectorized step
-                # instead of 2*n_ancestries per-ancestry comparison passes.
-                counts[i, :, :] = _diploid_counts_from_haps(an1, an2, _eye)
-            return counts
+            """pairs: list of (an1, an2) int32 arrays of shape (n_samples,)."""
+            an1 = np.stack([p[0] for p in pairs], axis=0)
+            an2 = np.stack([p[1] for p in pairs], axis=0)
+            return counts_from_hap_codes(an1, an2, n_ancestries)
 
-        records_buffer = []  # holds (an1_np, an2_np) pairs, not Variant objects
+        records_buffer = []  # holds (an1, an2) numpy pairs, not Variant objects
         delayed_arrays = []
         for rec in vcf:
-            an1 = _np.asarray(rec.format("AN1"), dtype=_np.int32).ravel()
-            an2 = _np.asarray(rec.format("AN2"), dtype=_np.int32).ravel()
+            an1 = np.asarray(rec.format("AN1"), dtype=np.int32).ravel()
+            an2 = np.asarray(rec.format("AN2"), dtype=np.int32).ravel()
             records_buffer.append((an1, an2))
             if len(records_buffer) == chunk_size:
                 delayed_arrays.append(
                     from_delayed(
                         delayed(process_chunk)(records_buffer),
                         shape=(chunk_size, n_samples, n_ancestries),
-                        dtype="float32",
+                        dtype=np.int8,
                     )
                 )
                 records_buffer = []
@@ -334,52 +233,28 @@ def _load_haplotypes(vcf_file: str, chunk_size: int32 = 10_000) -> Array:
                 from_delayed(
                     delayed(process_chunk)(records_buffer),
                     shape=(len(records_buffer), n_samples, n_ancestries),
-                    dtype="float32",
+                    dtype=np.int8,
                 )
             )
     finally:
         vcf.close()
 
-    # Build dask arrays by stacking (variants, samples, ancestries)
-    combined = concatenate(delayed_arrays, axis=0)
-
-    an_dask_arrays = {
-        label: combined[:, :, ancestry_map[label]]
-        for label in ancestry_map.keys()
-    }
-    arrays_list = [an_dask_arrays[k] for k in sorted(an_dask_arrays.keys())]
-
-    return stack(arrays_list, axis=2)
+    if not delayed_arrays:
+        raise ValueError(f"No variant records found in {vcf_file}")
+    return concatenate(delayed_arrays, axis=0)
 
 
-def _diploid_counts_from_haps(an1, an2, eye):
-    """
-    Convert two haplotype ancestry-code arrays into diploid ancestry counts.
-
-    Missing or out-of-range ancestry codes produce an all-NaN count vector for
-    that sample/locus instead of being used as NumPy indexes.
-    """
-    n_ancestries = eye.shape[1]
-    valid = (
-        (an1 >= 0) & (an1 < n_ancestries) &
-        (an2 >= 0) & (an2 < n_ancestries)
-    )
-    counts = full((an1.shape[0], n_ancestries), float("nan"), dtype="float32")
-    counts[valid, :] = eye[an1[valid]] + eye[an2[valid]]
-    return counts
+def _diploid_counts_from_haps(an1, an2, n_ancestries: int) -> np.ndarray:
+    """Diploid counts (int8, ``-1`` for missing) from two haplotype code arrays."""
+    return counts_from_hap_codes(an1, an2, n_ancestries)
 
 
-def _parse_ancestry_header(vcf_file: str) -> dict:
+def _parse_ancestry_header(vcf_file: str) -> Dict[str, int]:
     """
     Parse ancestry population index from the VCF header.
 
     Looks for a line starting with '##ANCESTRY=' formatted like:
     '##ANCESTRY=<EUR=0,AFR=1>'
-
-    Parameters
-    ----------
-    vcf_file : str
-        Path to the VCF file.
 
     Returns
     -------
@@ -388,100 +263,37 @@ def _parse_ancestry_header(vcf_file: str) -> dict:
     """
     vcf = VCF(vcf_file)
     try:
-        ancestries = {}
+        ancestries: Dict[str, int] = {}
         for hline in vcf.raw_header.splitlines():
             if hline.startswith("##ANCESTRY="):
                 m = search(r"<(.+)>", hline)
                 if m:
-                    pairs = m.group(1).split(",")
-                    for pair in pairs:
+                    for pair in m.group(1).split(","):
                         label, idx = pair.split("=")
-                        ancestries[label] = int(idx)
+                        ancestries[label.strip()] = int(idx)
                 break
     finally:
         vcf.close()
+    if not ancestries:
+        raise ValueError(f"No '##ANCESTRY=<...>' header line found in {vcf_file}")
     return ancestries
 
 
-def _load_vcf_info(vcf_file: str, chunk_size: int32 = 1_000_000
-                   ) -> Iterator[DataFrame]:
+def _load_vcf_info(vcf_file: str, chunk_size: int = 1_000_000
+                   ) -> Iterator[pd.DataFrame]:
     """
-    Load VCF records from a BGZF compressed and convert to DataFrames.
-
-    Parameters
-    ----------
-    vcf_file : str
-        Path to BGZF compressed VCF (.vcf.gz) with an associated .tbi index.
-    chunk_size : int
-        Number of records to include per chunk.
-
-    Yields
-    ------
-    DataFrame
-        DataFrame with 'chromosome' and 'physical_position' columns loaded chunk.
+    Yield DataFrames of ``chromosome`` / ``physical_position`` in chunks.
     """
     vcf = VCF(vcf_file)
     try:
-        records, count = [], 0
-
+        chroms, positions = [], []
         for rec in vcf:
-            records.append({'chromosome': rec.CHROM, 'physical_position': rec.POS})
-            count += 1
-            if count % chunk_size == 0:
-                yield DataFrame(records)
-                records = []
-
-        if records:
-            yield DataFrame(records)
+            chroms.append(rec.CHROM)
+            positions.append(rec.POS)
+            if len(chroms) == chunk_size:
+                yield pd.DataFrame({"chromosome": chroms, "physical_position": positions})
+                chroms, positions = [], []
+        if chroms:
+            yield pd.DataFrame({"chromosome": chroms, "physical_position": positions})
     finally:
         vcf.close()
-
-
-def _types(fn: str) -> dict:
-    """
-    Infer the data types of columns in a TSV file.
-    For FLARE global ancestry (global.anc.gz), force float32.
-
-    Parameters:
-    ----------
-    fn (str) : File name of the TSV file.
-
-    Returns:
-    -------
-    dict : Dictionary mapping column names to their inferred data types.
-    """
-    try:
-        df = read_csv(fn, sep="\t", nrows=2)
-    except FileNotFoundError:
-        raise FileNotFoundError(f"File '{fn}' not found.")
-    except Exception as e:
-        raise OSError(f"Error reading file {fn}: {e}") from e
-
-    # Validate that the resulting DataFrame is of the correct type
-    if not isinstance(df, DataFrame):
-        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
-    # Ensure the DataFrame contains at least one column
-    if df.shape[1] < 1:
-        raise ValueError("The DataFrame does not contain any columns.")
-
-    # Initialize the header dictionary with the sample_id column
-    header = {"sample_id": CategoricalDtype()}
-    # For global ancestry files, force float32
-    if fn.endswith("global.anc.gz"):
-        for col in df.columns[1:]:
-            header[col] = 'float32'
-    else:
-        header.update(df.dtypes[1:].to_dict())
-
-    return header
-
-
-# Convenience: expose helpers on the main reader function for easy access
-# in downstream code and tests. This mirrors patterns used in other
-# readers within the package.
-read_flare._parse_ancestry_header = _parse_ancestry_header
-read_flare._load_vcf_info = _load_vcf_info
-read_flare._read_loci = _read_loci
-read_flare._read_anc = _read_anc
-read_flare._load_haplotypes = _load_haplotypes
-read_flare.get_prefixes = get_prefixes

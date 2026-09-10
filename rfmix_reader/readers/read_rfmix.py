@@ -1,298 +1,218 @@
 """
-Adapted from `_read.py` script in the `pandas-plink` package.
+Reader for RFMix v2 ``.fb.tsv`` (forward-backward posterior) files.
+
+Adapted from `_read.py` in the `pandas-plink` package.
 Source: https://github.com/limix/pandas-plink/blob/main/pandas_plink/_read.py
+
+Format (2-line header, then one row per variant)::
+
+    #reference_panel_population:  AFR  EUR
+    chromosome  physical_position  genetic_position  genetic_marker_index  S1:::hap1:::AFR  S1:::hap1:::EUR  S1:::hap2:::AFR  S1:::hap2:::EUR ...
+    chr21  5030578  0.00000  0  1.00000  0.00000  1.00000  0.00000 ...
+
+Data columns are sample-major, then haplotype, then population, so the data
+block of a row reshapes to ``(n_samples, 2, n_pops)``.
 """
 from __future__ import annotations
-import warnings
+
+import gzip
+from os.path import basename, join, exists
+from typing import Optional, List, Tuple
+
+import numpy as np
+import pandas as pd
 from tqdm import tqdm
-from glob import glob
-from numpy import int32, array
-from collections import OrderedDict as odict
-from typing import Optional, List, Tuple, Dict
-from dask.array import Array, concatenate, stack
-from os.path import basename, dirname, join, exists
+from dask.array import Array, concatenate, map_blocks
 
 from .fb_read import read_fb
-from ..io import BinaryFileNotFoundError, Chunk
+from ._common import (
+    align_g_anc_columns,
+    check_pop_order_consistent,
+    counts_from_hap_codes,
+    maybe_report_gpu,
+    maybe_to_backend_frames,
+    read_rfmix_q,
+)
+from ..io.chunk import Chunk
+from ..io.errors import BinaryFileNotFoundError
 from ..utils import (
-    _extract_chrom_from_path,
     _read_file,
     create_binaries,
     filter_file_maps_by_chrom,
     get_prefixes,
-    set_gpu_environment,
 )
 
-try:
-    from torch.cuda import is_available as gpu_available
-except ModuleNotFoundError as e:
-    print("Warning: PyTorch is not installed. Using CPU!")
-    def gpu_available():
-        return False
+__all__ = ["read_rfmix_fb"]
 
-
-if gpu_available():
-    from cudf import DataFrame, read_csv, concat, CategoricalDtype
-else:
-    from pandas import DataFrame, read_csv, concat, CategoricalDtype
 
 def read_rfmix_fb(
         file_prefix: str, binary_dir: str = "./binary_files",
         generate_binary: bool = False, verbose: bool = True,
-        return_hap_matrix: bool = False,
         return_original: bool = False,
         chrom: Optional[str] = None,
+        chunk: Optional[Chunk] = None,
 ) -> (
-    Tuple[DataFrame, DataFrame, Array]
-    | Tuple[DataFrame, DataFrame, Array, Array]
+    Tuple[pd.DataFrame, pd.DataFrame, Array]
+    | Tuple[pd.DataFrame, pd.DataFrame, Array, Array]
 ):
     """
     Read RFMix ``.fb.tsv`` files (forward-backward posteriors) into DataFrames and a Dask array.
 
-    Use this reader when your analysis requires **posterior probability values**
-    from the forward-backward matrix — e.g., confidence-weighted regression,
-    uncertainty-aware imputation, or QTL mapping that propagates ancestry
-    uncertainty.
-
-    For the common case of hard ancestry calls, use :func:`read_rfmix` (reads
-    the much smaller ``.msp.tsv`` files with no binary conversion step).
+    Use this reader when your analysis requires the **posterior probability
+    values** (``return_original=True``).  For hard ancestry calls the much
+    smaller ``.msp.tsv`` files read by :func:`read_rfmix` are sufficient.
 
     Parameters
     ----------
     file_prefix : str
-        Path prefix to the set of RFMix files. It will load all of the chromosomes
-        at once.
+        Directory, or path prefix, of the RFMix output files.  All chromosomes
+        found are loaded unless ``chrom`` is given.
     binary_dir : str, optional
-        Path prefix to the binary version of RFMix (*fb.tsv) files. Default is
-        "./binary_files".
-    generate_binary: bool, optional
-       :const:`True` generate the binary file. Default: `False`.
+        Directory holding the binary versions of the ``.fb.tsv`` files
+        (see :func:`create_binaries`).  Default ``"./binary_files"``.
+    generate_binary : bool, optional
+        Generate the binary files before reading.  Default ``False``.
     verbose : bool, optional
-        :const:`True` for progress information; :const:`False` otherwise.
-        Default:`True`.
-    return_hap_index : bool, optional
-        Return the haplotypes index for reconstruction of hap0 / hap1.
+        Show progress bars.  Default ``True``.
     return_original : bool, optional
-        Return the original RFMix matrix ``X_raw`` along with the summed
-        ancestry counts.
+        Also return ``X_raw``, the raw float32 posterior matrix.
     chrom : str, optional
-        If provided, restrict reading to a single chromosome whose label
-        matches ``chrom`` (with or without the ``chr`` prefix).
+        Restrict reading to one chromosome (with or without ``chr`` prefix).
+    chunk : Chunk, optional
+        Dask block sizes for the posterior matrix.  Default ``Chunk()``.
 
     Returns
     -------
-    loci_df : :class:`pandas.DataFrame`
-        Loci information for the FB data.
-    g_anc : :class:`pandas.DataFrame`
-        Global ancestry by chromosome from RFMix.
-    local_array : :class:`dask.array.Array`
-        Local ancestry per population stacked (variants, samples, ancestries).
-        This is in order of the populations see `g_anc`.
-    X_raw : :class:`dask.array.Array`, optional
-        Returned only when ``return_original`` is :const:`True`. The unphased
-        RFMix matrix prior to haplotype summarization.
-    return_hap_matrix : bool
-        Whether to return local ancestry with haplotypes (hap0 / hap1) level
-        information.
+    loci_df : pandas.DataFrame
+        ``chromosome``, ``physical_position``, ``i``; one row per variant.
+    g_anc : pandas.DataFrame
+        Global ancestry per chromosome from ``.rfmix.Q``.  Ancestry columns
+        are in the RFMix reference-panel order, which is also the order of
+        axis 2 of ``local_array``.
+    local_array : dask.array.Array, int8
+        Shape ``(variants, samples, ancestries)``.  Hard diploid ancestry
+        counts ``0/1/2`` obtained by taking, for each haplotype, the ancestry
+        with the highest posterior.  ``-1`` marks a haplotype with no
+        posterior mass (all zeros).
+    X_raw : dask.array.Array, float32, optional
+        Only when ``return_original`` is true.  Shape
+        ``(variants, samples * 2 * ancestries)``, columns in file order.
 
     Notes
     -----
-    Local ancestry output will be either :const:`0`, :const:`1`, :const:`2`, or
-    :data:`math.nan`:
-
-    - :const:`0` No alleles are associated with this ancestry
-    - :const:`1` One allele is associated with this ancestry
-    - :const:`2` Both alleles are associated with this ancestry
+    Populations of the returned arrays follow the ``#reference_panel_population``
+    header of the ``.fb.tsv`` file so that ``get_pops(g_anc)`` labels axis 2.
     """
-    # Device information
-    if verbose and gpu_available():
-        set_gpu_environment()
+    chunk = chunk or Chunk()
+    maybe_report_gpu(verbose)
 
-    # Get file prefixes
     fn = filter_file_maps_by_chrom(
         get_prefixes(file_prefix, "rfmix", verbose), chrom, kind="RFMix"
     )
 
-    # Load loci information
+    # Population order from the .fb.tsv header (authoritative for axis 2)
+    pops = check_pop_order_consistent(
+        [_read_fb_pops(f["fb.tsv"]) for f in fn], kind="RFMix .fb.tsv"
+    )
+
+    # Loci information
     pbar = tqdm(desc="Mapping loci information", total=len(fn), disable=not verbose)
     loci_dfs = _read_file(fn, lambda f: _read_loci(f["fb.tsv"]), pbar)
     pbar.close()
 
-    # Adjust loci indices and concatenate
-    nmarkers = {}; index_offset = 0; loci_by_fn = {}
-    for i, bi in enumerate(loci_dfs):
-        nmarkers[fn[i]["fb.tsv"]] = bi.shape[0]
-        bi["i"] += index_offset
-        index_offset += bi.shape[0]
-        loci_by_fn[fn[i]["fb.tsv"]] = bi
+    nmarkers = {}
+    index_offset = 0
+    for f, df in zip(fn, loci_dfs):
+        nmarkers[f["fb.tsv"]] = df.shape[0]
+        df["i"] += index_offset
+        index_offset += df.shape[0]
+    loci_df = pd.concat(loci_dfs, axis=0, ignore_index=True)
 
-    loci_df = concat(loci_dfs, axis=0, ignore_index=True)
-
-    # Load global ancestry per chromosome
+    # Global ancestry per chromosome
     pbar = tqdm(desc="Mapping global ancestry files", total=len(fn),
                 disable=not verbose)
-    g_anc = _read_file(fn, lambda f: _read_Q(f["rfmix.Q"]), pbar)
+    g_anc_list = _read_file(fn, lambda f: _read_Q(f["rfmix.Q"]), pbar)
     pbar.close()
 
-    nsamples = g_anc[0].shape[0]
-    pops = g_anc[0].drop(["sample_id", "chrom"], axis=1).columns.values
-    g_anc = concat(g_anc, axis=0, ignore_index=True)
+    nsamples = g_anc_list[0].shape[0]
+    g_anc = pd.concat(g_anc_list, axis=0, ignore_index=True)
+    g_anc = align_g_anc_columns(g_anc, pops)
 
-    # Loading local ancestry by loci
+    # Local ancestry
     if generate_binary:
-        create_binaries(file_prefix, binary_dir)
+        create_binaries(file_prefix, binary_dir, chrom=chrom, verbose=verbose)
 
     pbar = tqdm(desc="Mapping local ancestry files", total=len(fn),
                 disable=not verbose)
     local_data = _read_file(
         fn,
         lambda f: _read_fb(
-            f["fb.tsv"], nsamples, nmarkers[f["fb.tsv"]], pops,
-            binary_dir, Chunk(),
+            f["fb.tsv"], nsamples, nmarkers[f["fb.tsv"]], pops, binary_dir, chunk,
         ),
         pbar,
     )
     pbar.close()
 
-    # Unpack data
-    admix_list = [admix for admix, X_raw in local_data]
-    X_raw_list = [X_raw for admix, X_raw in local_data]
+    local_array = concatenate([admix for admix, _ in local_data], axis=0)
+    loci_df, g_anc = maybe_to_backend_frames(loci_df, g_anc)
 
-    # Stack across chromosomes
-    local_array = concatenate(admix_list, axis=0)
     if return_original:
-        X_raw = concatenate(X_raw_list, axis=0)
+        X_raw = concatenate([X for _, X in local_data], axis=0)
         return loci_df, g_anc, local_array, X_raw
     return loci_df, g_anc, local_array
 
 
-def _read_tsv(fn: str) -> DataFrame:
-    """
-    Read a TSV file into a pandas DataFrame.
+def _read_fb_pops(fn: str) -> List[str]:
+    """Population labels, in file order, from the first line of a ``.fb.tsv``."""
+    opener = gzip.open if fn.endswith(".gz") else open
+    with opener(fn, "rt") as fh:
+        line = fh.readline().strip()
+    if not line.startswith("#reference_panel_population"):
+        raise ValueError(
+            f"Unexpected first line in '{fn}'. Expected "
+            "'#reference_panel_population:\\tPOP1\\tPOP2 ...'."
+        )
+    pops = line.split(":", 1)[1].split()
+    if not pops:
+        raise ValueError(f"No populations listed in the header of '{fn}'.")
+    return pops
 
-    Parameters:
-    ----------
-    fn (str): File name of the TSV file.
 
-    Returns:
-    -------
-    DataFrame: DataFrame containing specified columns from the TSV file.
-    """
-    header = {"chromosome": CategoricalDtype(), "physical_position": int32}
+def _read_tsv(fn: str) -> pd.DataFrame:
+    """Read ``chromosome`` and ``physical_position`` from a ``.fb.tsv`` file."""
+    header = {"chromosome": "category", "physical_position": np.int32}
     try:
-        if gpu_available():
-            df = read_csv(fn, sep="\t", header=0, usecols=list(header.keys()),
-                          dtype=header, comment="#", compression="infer")
-        else:
-            chunks = read_csv(
-                fn, sep=r"\s+", header=0, usecols=list(header.keys()),
-                dtype=header, comment="#", compression="infer",
-                chunksize=100_000, # Low memory chunks
-            )
-            # Concatenate chunks into single DataFrame
-            df = concat(chunks, ignore_index=True)
+        chunks = pd.read_csv(
+            fn, sep=r"\s+", header=0, usecols=list(header.keys()),
+            dtype=header, comment="#", compression="infer",
+            chunksize=100_000,  # low-memory chunks
+        )
+        df = pd.concat(chunks, ignore_index=True)
     except FileNotFoundError:
         raise FileNotFoundError(f"File {fn} not found.")
     except Exception as e:
         raise OSError(f"Error reading file {fn}: {e}") from e
 
-    # Validate that resulting DataFrame is correct type
-    if not isinstance(df, DataFrame):
-        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
-    # Ensure DataFrame contains correct columns
-    if not all(column in df.columns for column in list(header.keys())):
-        raise ValueError(f"DataFrame does not contain expected columns: {list(header.keys())}")
+    if not all(column in df.columns for column in header):
+        raise ValueError(f"DataFrame does not contain expected columns: {list(header)}")
     return df
 
 
-def _read_loci(fn: str) -> DataFrame:
-    """
-    Read loci information from a TSV file and add a sequential index column.
-
-    Parameters:
-    ----------
-    fn (str): The file path of the TSV file containing loci information.
-
-    Returns:
-    -------
-    DataFrame: A DataFrame containing the loci information with an
-               additional 'i' column for indexing.
-    """
+def _read_loci(fn: str) -> pd.DataFrame:
+    """Loci table with a sequential ``i`` index column."""
     df = _read_tsv(fn)
-    df["i"] = range(df.shape[0])
+    df["i"] = np.arange(df.shape[0], dtype=np.int64)
     return df
 
 
-def _read_csv(fn: str, header: dict) -> DataFrame:
-    """
-    Read a CSV file into a pandas DataFrame with specified data types.
-
-    Parameters:
-    ----------
-    fn (str): The file path of the CSV file.
-    header (dict): A dictionary mapping column names to data types.
-
-    Returns:
-    -------
-    DataFrame: The data read from the CSV file as a pandas DataFrame.
-    """
-    try:
-        if gpu_available():
-            df = read_csv(fn, sep="\t", header=None, names=list(header.keys()),
-                          dtype=header, comment="#")
-        else:
-            df = read_csv(fn, sep=r"\s+", header=None,
-                          names=list(header.keys()), dtype=header, comment="#",
-                          compression=None, engine="c", iterator=False)
-    except Exception as e:
-        raise OSError(f"Error reading file {fn}: {e}") from e
-
-    # Validate that resulting DataFrame is correct type
-    if not isinstance(df, DataFrame):
-        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
-    return df
+def _read_Q(fn: str) -> pd.DataFrame:
+    """Q matrix with a ``chrom`` column inferred from the file name."""
+    return read_rfmix_q(fn, add_chrom=True)
 
 
-def _read_Q(fn: str) -> DataFrame:
-    """
-    Read the Q matrix from a file and add the chromosome information.
-
-    Parameters:
-    ----------
-    fn (str): The file path of the Q matrix file.
-
-    Returns:
-    -------
-    DataFrame: The Q matrix with the chromosome information added.
-    """
-    df = _read_Q_noi(fn)
-
-    chrom_label = _extract_chrom_from_path(fn)
-    if chrom_label is not None:
-        df["chrom"] = f"chr{chrom_label}"
-    else:
-        print(f"Warning: Could not extract chromosome information from '{fn}'")
-
-    return df
-
-
-def _read_Q_noi(fn: str) -> DataFrame:
-    """
-    Read the Q matrix from a file without adding chromosome information.
-
-    Parameters:
-    ----------
-    fn (str): The file path of the Q matrix file.
-
-    Returns:
-    -------
-    DataFrame: The Q matrix without chromosome information.
-    """
-    try:
-        header = odict(_types(fn))
-        return _read_csv(fn, header)
-    except Exception as e:
-        raise OSError(f"Error reading file {fn}: {e}") from e
+def _read_Q_noi(fn: str) -> pd.DataFrame:
+    """Q matrix without the ``chrom`` column."""
+    return read_rfmix_q(fn, add_chrom=False)
 
 
 def _read_fb(
@@ -300,126 +220,79 @@ def _read_fb(
     chunk: Optional[Chunk] = None,
 ) -> Tuple[Array, Array]:
     """
-    Read the forward-backward matrix from a file as a Dask Array.
+    Read the binary forward-backward matrix as lazy dask arrays.
 
-    Parameters:
-    ----------
-    fn (str): The file path of the forward-backward matrix file.
-    nsamples (int): The number of samples in the dataset.
-    nloci (int): The number of loci in the dataset.
-    pops (list): A list of population labels.
-    chunk (Chunk, optional): A Chunk object specifying the chunk size for reading.
-
-    Returns:
+    Returns
     -------
-    tuple
-        The summed forward-backward matrix and the original raw matrix.
+    admix : dask.array.Array, int8, ``(nloci, nsamples, npops)``
+        Hard diploid counts (see :func:`_posteriors_to_counts`).
+    X : dask.array.Array, float32, ``(nloci, nsamples * 2 * npops)``
+        Raw posteriors.
     """
+    chunk = chunk or Chunk()
     npops = len(pops)
+    stride = 2 * npops  # columns per sample
     nrows = nloci
-    ncols = (nsamples * npops * 2)
+    ncols = nsamples * stride
+
     row_chunk = nrows if chunk.nloci is None else min(nrows, chunk.nloci)
-    col_chunk = ncols if chunk.nsamples is None else min(ncols, chunk.nsamples)
+    col_chunk = ncols if chunk.nsamples is None else min(ncols, chunk.nsamples * stride)
     max_npartitions = 16_384
     row_chunk = max(nrows // max_npartitions, row_chunk)
     col_chunk = max(ncols // max_npartitions, col_chunk)
-    binary_fn = join(temp_dir,
-                     basename(fn).split(".")[0] + ".bin")
+    # Column blocks must hold whole samples.
+    col_chunk = max(stride, (col_chunk // stride) * stride)
 
-    if exists(binary_fn):
-        X = read_fb(binary_fn, nrows, ncols, row_chunk, col_chunk)
-    else:
+    binary_fn = join(temp_dir, basename(fn).split(".")[0] + ".bin")
+    if not exists(binary_fn):
         raise BinaryFileNotFoundError(binary_fn, temp_dir)
-    # Subset populations and sum adjacent columns
-    admix = _subset_populations(X, npops)
 
+    X = read_fb(binary_fn, nrows, ncols, row_chunk, col_chunk)
+    admix = _posteriors_to_counts(X, npops)
     return admix, X
 
 
-def _subset_populations(X: Array, npops: int) -> Array:
+def _block_counts(block: np.ndarray, npops: int) -> np.ndarray:
+    """Per-block posterior → hard diploid counts (numpy)."""
+    nloci, ncols = block.shape
+    nsamples = ncols // (2 * npops)
+    b4 = block.reshape(nloci, nsamples, 2, npops)
+    codes = b4.argmax(axis=-1)
+    no_mass = ~(b4 > 0).any(axis=-1)  # haplotype with all-zero posteriors
+    codes = np.where(no_mass, -1, codes)
+    return counts_from_hap_codes(codes[..., 0], codes[..., 1], npops)
+
+
+def _posteriors_to_counts(X: Array, npops: int) -> Array:
     """
-    Subset and process the input array X based on populations.
+    Convert the raw posterior matrix into hard diploid ancestry counts.
 
-    Parameters:
-    X (dask.array): Input array where columns represent data for different populations.
-    npops (int): Number of populations for column processing.
+    For every sample and haplotype the ancestry with the highest posterior is
+    taken; the two haplotype calls are then summed into ``0/1/2`` counts per
+    ancestry (int8).  A haplotype whose posteriors are all zero yields
+    ``-1`` for every ancestry of that sample/locus.
 
-    Returns:
-    admix_summed : dask.array.Array
-        Processed array with adjacent columns summed for each population subset.
+    Parameters
+    ----------
+    X : dask.array.Array, ``(nloci, nsamples * 2 * npops)``
+    npops : int
+
+    Returns
+    -------
+    dask.array.Array, int8, ``(nloci, nsamples, npops)``
     """
-    import numpy as np
-    ncols = X.shape[1]
-    if ncols % npops != 0:
-        raise ValueError("The number of columns in X must be divisible by npops.")
-
-    if ncols % (2 * npops) != 0:
+    ncols = int(X.shape[1])
+    stride = 2 * npops
+    if ncols % stride != 0:
         raise ValueError(
             "The number of columns in X must be divisible by (2 * npops). "
             "Expected layout: 2 haplotypes per sample per ancestry."
         )
+    if any(c % stride for c in X.chunks[1]):
+        # Make every column block hold whole samples.
+        X = X.rechunk({1: ncols})
 
-    nsamples = ncols // (2 * npops)
-    pop_subset = []
-
-    for pop_start in range(npops):
-        X0 = X[:, pop_start::npops] # Subset based on populations
-        if int(X0.shape[1]) % 2 != 0:
-            raise ValueError("Number of columns must be even.")
-
-        X0_summed = X0[:, ::2] + X0[:, 1::2] # Sum adjacent columns
-        pop_subset.append(X0_summed)
-
-    return stack(pop_subset, axis=2)
-
-
-def _types(fn: str) -> dict:
-    """
-    Infer the data types of columns in a TSV file.
-
-    Parameters:
-    ----------
-    fn (str) : File name of the TSV file.
-
-    Returns:
-    -------
-    dict : Dictionary mapping column names to their inferred data types.
-    """
-    try:
-        # Read the first two rows of the file, skipping the first row
-        if gpu_available():
-            df = read_csv(fn, sep="\t", nrows=2, skiprows=1)
-        else:
-            df = read_csv(fn, sep=r"\s+", nrows=2, skiprows=1)
-
-    except FileNotFoundError:
-        raise FileNotFoundError(f"File '{fn}' not found.")
-    except Exception as e:
-        raise OSError(f"Error reading file {fn}: {e}") from e
-
-    # Validate that the resulting DataFrame is of the correct type
-    if not isinstance(df, DataFrame):
-        raise ValueError(f"Expected a DataFrame but got {type(df)} instead.")
-    # Ensure the DataFrame contains at least one column
-    if df.shape[1] < 1:
-        raise ValueError("The DataFrame does not contain any columns.")
-
-    # Initialize the header dictionary with the sample_id column
-    header = {"sample_id": CategoricalDtype()}
-    # Update the header dictionary with the data types of the remaining columns
-    header.update(df.dtypes[1:].to_dict())
-    return header
-
-
-# Convenience: expose helper utilities on the main reader function to make
-# them easy to reach for tests and advanced users who rely on the original
-# script-style API.
-read_rfmix_fb._read_tsv = _read_tsv
-read_rfmix_fb._read_loci = _read_loci
-read_rfmix_fb._read_csv = _read_csv
-read_rfmix_fb._read_Q = _read_Q
-read_rfmix_fb._read_Q_noi = _read_Q_noi
-read_rfmix_fb._subset_populations = _subset_populations
-read_rfmix_fb._read_fb = _read_fb
-read_rfmix_fb._types = _types
-read_rfmix_fb.BinaryFileNotFoundError = BinaryFileNotFoundError
+    out_chunks = (X.chunks[0], tuple(c // stride for c in X.chunks[1]), (npops,))
+    return map_blocks(
+        _block_counts, X, npops, dtype=np.int8, new_axis=2, chunks=out_chunks,
+    )

@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 np = pytest.importorskip("numpy")
@@ -10,14 +8,22 @@ from rfmix_reader import interpolate_array, read_rfmix_fb
 from rfmix_reader.processing.imputation import (
     GPU_ENABLED, _expand_array, interpolate_block,
 )
-from rfmix_reader.readers.read_rfmix import gpu_available
 
 
+def gpu_available() -> bool:
+    try:
+        from torch.cuda import is_available
+    except ImportError:
+        return False
+    return bool(is_available())
+
+
+@pytest.mark.slow
 @pytest.mark.filterwarnings("ignore:.*cupy not installed.*")
 @pytest.mark.parametrize("method", ["linear", "nearest", "stepwise"])
-def test_imputation_chr21_interpolation(tmp_path, method):
+def test_imputation_chr21_interpolation(tmp_path, method, chr21_lfs):
     loci_df, g_anc, admix = read_rfmix_fb(
-        "data/",
+        str(chr21_lfs),
         binary_dir=tmp_path / "binary",
         generate_binary=True,
         verbose=False,
@@ -182,9 +188,10 @@ def test_expand_array_slab_path_correctness(tmp_path, monkeypatch):
         )
 
 
-def test_imputation_ignores_nan_metadata(tmp_path):
-    loci_df, _, admix = read_rfmix(
-        "data/",
+@pytest.mark.slow
+def test_imputation_ignores_nan_metadata(tmp_path, chr21_lfs):
+    loci_df, _, admix = read_rfmix_fb(
+        str(chr21_lfs),
         binary_dir=tmp_path / "binary",
         generate_binary=True,
         verbose=False,
@@ -220,3 +227,51 @@ def test_imputation_ignores_nan_metadata(tmp_path):
 
     assert z.shape == (len(variant_loci_df), admix.shape[1], admix.shape[2])
     assert not np.isnan(z[:]).any()
+
+
+def test_expand_array_sentinel_becomes_nan(tmp_path):
+    """int8 ``-1`` (missing call) from the readers must become NaN in the Zarr."""
+    import dask.array as da
+
+    data = np.array([[[2, 0]], [[-1, -1]], [[1, 1]]], dtype=np.int8)
+    admix = da.from_array(data, chunks=(3, 1, 2))
+    variant_loci_df = pd.DataFrame({"pos": [10, 20, 30], "i": [0.0, 1.0, 2.0]})
+    z = _expand_array(variant_loci_df, admix, str(tmp_path), batch_size=10)
+    assert np.isnan(z[1, 0, :]).all()
+    np.testing.assert_array_equal(z[0, 0, :], [2, 0])
+    np.testing.assert_array_equal(z[2, 0, :], [1, 1])
+
+    z2 = interpolate_array(variant_loci_df, admix, str(tmp_path / "interp"),
+                           interpolation="stepwise", chunk_size=3)
+    np.testing.assert_array_equal(z2[1, 0, :], [2, 0])
+
+
+@pytest.mark.parametrize("method", ["linear", "nearest", "stepwise"])
+def test_interpolate_array_fills_gaps_longer_than_chunk(tmp_path, method):
+    """A missing run spanning several chunks must still be filled."""
+    import dask.array as da
+
+    data = np.zeros((10, 2, 2), dtype=np.int8)
+    data[:, 0, :] = [2, 0]
+    data[:, 1, :] = [1, 1]
+    data[3:8, 1, :] = -1            # sample 1 missing for rows 3..7 (chunk_size=2)
+    admix = da.from_array(data, chunks=(5, 2, 2))
+    variant_loci_df = pd.DataFrame({"pos": np.arange(10) * 100, "i": np.arange(10, dtype=float)})
+
+    z = interpolate_array(variant_loci_df, admix, str(tmp_path), chunk_size=2,
+                          interpolation=method, use_bp_positions=True)
+    out = z[:]
+    assert not np.isnan(out).any()
+    np.testing.assert_array_equal(out[:, 1, :], np.tile([1, 1], (10, 1)))
+    np.testing.assert_array_equal(out[:, 0, :], np.tile([2, 0], (10, 1)))
+
+
+def test_interpolate_array_warns_when_column_has_no_data(tmp_path):
+    import dask.array as da
+
+    data = np.zeros((4, 1, 2), dtype=np.int8) - 1   # everything missing
+    admix = da.from_array(data, chunks=(4, 1, 2))
+    variant_loci_df = pd.DataFrame({"pos": np.arange(4), "i": np.arange(4, dtype=float)})
+    with pytest.warns(UserWarning, match="remain NaN"):
+        z = interpolate_array(variant_loci_df, admix, str(tmp_path), chunk_size=2)
+    assert np.isnan(z[:]).all()

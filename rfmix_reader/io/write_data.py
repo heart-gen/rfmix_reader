@@ -3,7 +3,6 @@ Documentation generation assisted by AI.
 """
 from __future__ import annotations
 from pathlib import Path
-from zarr import Array as zArray
 from psutil import virtual_memory
 from typing import Tuple, List, Dict, TYPE_CHECKING
 
@@ -12,11 +11,12 @@ from ..backends import (
     _select_dataframe_backend,
     _select_dask_dataframe_backend,
 )
-
-from ..processing import interpolate_array
+from ._layout import flatten_names, sample_id_list, to_2d
 
 if TYPE_CHECKING:
     from dask.array import Array
+    from pandas import DataFrame
+    from zarr import Array as zArray
 
 __all__ = ["write_data", "write_imputed"]
 
@@ -66,8 +66,10 @@ def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
         to generate column names for the admixture data.
 
     admix : dask.Array
-        A Dask array containing local ancestry haplotypes for each sample and
-        locus.
+        Local ancestry array ``(loci, samples, ancestries)`` as returned by
+        the readers (a 2-D ``(loci, samples * ancestries)`` sample-major array
+        is also accepted).  Output columns are named ``<sample>_<ancestry>``
+        in sample-major order.
 
     base_rows : int, optional (default=100,000)
         Controls how many rows each chunk (partition) of `admix` Dask array
@@ -124,6 +126,8 @@ def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
             # Convert input partition to DataFrame
             output_path = str(path_template).format(partition_idx)
             df = DataFrame.from_records(partition, columns=col_names)
+            # Align on position, not on the original loci index labels.
+            loci_chunk = loci_chunk.reset_index(drop=True)
             df = concat([loci_chunk, df], axis=1)
             if use_gpu:
                 # Leverage cuDF
@@ -134,8 +138,8 @@ def write_data(loci: DataFrame, g_anc: DataFrame, admix: Array,
             empty_cache()
             return None
 
-        # Column name processing
-        col_names = _get_names(g_anc)
+        # Column name processing; flatten (loci, samples, ancestries) -> 2-D
+        admix, col_names = to_2d(admix, g_anc)
         loci = _rename_loci_columns(loci)
         loci["pos"] = loci["pos"]
         loci["hap"] = loci['chrom'].astype(str) + '_' + loci['pos'].astype(str)
@@ -283,6 +287,7 @@ def write_imputed(
     # This will create ./output/imputed-ancestry.chr{1-22}.parquet files
     """
     if z is None:
+        from ..processing.imputation import interpolate_array
         try:
             z = interpolate_array(
                 variant_loci_df=variant_loci, admix=admix,
@@ -309,20 +314,16 @@ def _get_names(g_anc: DataFrame) -> List[str]:
 
     Returns:
     --------
-    List[str]: A list of combined sample names in the format "sampleID_ancestry".
+    List[str]: Sample-major names ``"sampleID_ancestry"`` (all ancestries of
+    sample 1, then sample 2, ...), matching :func:`to_2d`.
 
     Note:
     -----
     - The function assumes input from `read_rfmix`.
     - It uses cuDF-specific methods if available, otherwise falls back to pandas.
     """
-    if _is_gpu_dataframe():
-        sample_id = list(g_anc.sample_id.unique().to_pandas())
-    else:
-        sample_id = list(g_anc.sample_id.unique())
     ancestries = list(g_anc.drop(["sample_id", "chrom"], axis=1).columns.values)
-    sample_names = [f"{sid}_{anc}" for anc in ancestries for sid in sample_id]
-    return sample_names
+    return flatten_names(sample_id_list(g_anc), ancestries)
 
 
 def _rename_loci_columns(loci: DataFrame) -> DataFrame:

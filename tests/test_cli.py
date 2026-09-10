@@ -31,3 +31,15 @@ def test_cli_version_flag(monkeypatch, capsys):
     assert excinfo.value.code == 0
     out = capsys.readouterr().out
     assert cli.__version__ in out
+
+
+def test_cli_reports_errors(monkeypatch, capsys):
+    def boom(file_path, binary_dir):
+        raise FileNotFoundError("no fb files here")
+
+    monkeypatch.setattr(cli, "create_binaries", boom)
+    monkeypatch.setattr(sys, "argv", ["prog", "input_dir"])
+    with pytest.raises(SystemExit) as excinfo:
+        cli.main()
+    assert excinfo.value.code == 1
+    assert "no fb files here" in capsys.readouterr().err

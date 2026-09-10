@@ -1,7 +1,16 @@
 from pathlib import Path
 from typing import List, Optional, Sequence
 
-import bio2zarr.vcf as v2z
+
+def _import_bio2zarr():
+    try:
+        import bio2zarr.vcf as v2z
+    except ImportError as e:  # pragma: no cover - depends on environment
+        raise ImportError(
+            "bio2zarr is required for reference conversion. "
+            "Install it with `pip install rfmix-reader[reference]`."
+        ) from e
+    return v2z
 
 def convert_vcf_to_zarr(
     vcf_path: str, out_path: str, *, chunk_length: int = 100_000,
@@ -34,6 +43,7 @@ def convert_vcf_to_zarr(
 
     vcf_path = str(vcf_path); out_path = str(out_path)
 
+    v2z = _import_bio2zarr()
     v2z.convert(
         [vcf_path], out_path, variants_chunk_size=chunk_length,
         samples_chunk_size=samples_chunk_size,

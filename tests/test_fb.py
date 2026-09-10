@@ -1,45 +1,68 @@
+import numpy as np
 import pytest
-
-np = pytest.importorskip("numpy")
 
 import rfmix_reader.readers.fb_read as fb
 
-# ---------------------------
-# FB READ TESTS
-# ---------------------------
 
-def test_read_fb_and_chunk(tmp_path):
-    nrows, ncols = 4, 6
-    data = np.arange(nrows * ncols, dtype=np.float32).reshape(nrows, ncols)
-    file_path = tmp_path / "test.fb"
-    data.tofile(file_path)
+def _write(tmp_path, data, name="test.fb"):
+    path = tmp_path / name
+    data.tofile(path)
+    return str(path)
 
-    arr = fb.read_fb(str(file_path), nrows, ncols, row_chunk=2, col_chunk=3)
-    result = arr.compute()
 
-    assert result.shape == (nrows, ncols)
-    assert result.dtype == np.int32
+@pytest.mark.parametrize("row_chunk", [1, 2, 6])
+@pytest.mark.parametrize("col_chunk", [1, 3, 4, 8])
+def test_read_fb_column_chunks_roundtrip(tmp_path, row_chunk, col_chunk):
+    """Every (row_chunk, col_chunk) combination must reproduce the file exactly."""
+    rng = np.random.default_rng(0)
+    data = rng.random((6, 8), dtype=np.float32)  # non-integral posteriors
+    path = _write(tmp_path, data)
+
+    arr = fb.read_fb(path, 6, 8, row_chunk=row_chunk, col_chunk=col_chunk)
+    assert arr.dtype == np.float32
+    np.testing.assert_array_equal(arr.compute(), data)
+
+
+def test_read_fb_keeps_fractional_values(tmp_path):
+    data = np.array([[0.99, 0.01, 0.6, 0.4]], dtype=np.float32)
+    path = _write(tmp_path, data)
+    out = fb.read_fb(path, 1, 4, 1, 4).compute()
+    np.testing.assert_allclose(out, data)
 
 
 def test__read_chunk_direct(tmp_path):
     nrows, ncols = 3, 3
-    data = np.arange(nrows * ncols, dtype=np.float32).reshape(nrows, ncols)
-    file_path = tmp_path / "test_chunk.fb"
-    data.tofile(file_path)
+    data = np.arange(nrows * ncols, dtype=np.float32).reshape(nrows, ncols) + 0.5
+    path = _write(tmp_path, data, "test_chunk.fb")
 
-    out = fb._read_chunk(str(file_path), nrows, ncols,
-                         row_start=1, row_end=3,
+    out = fb._read_chunk(path, nrows, ncols, row_start=1, row_end=3,
                          col_start=1, col_end=3)
+    assert out.dtype == np.float32
+    np.testing.assert_array_equal(out, data[1:3, 1:3])
 
-    assert out.dtype == np.int32
-    assert np.all(np.isin(out, data.astype(np.int32)))
+
+def test__read_chunk_bounds(tmp_path):
+    path = _write(tmp_path, np.zeros((2, 2), dtype=np.float32))
+    with pytest.raises(ValueError):
+        fb._read_chunk(path, 2, 2, 0, 3, 0, 2)
+    with pytest.raises(ValueError):
+        fb._read_chunk(path, 2, 2, 0, 2, 1, 3)
 
 
 def test_read_fb_invalid_chunks(tmp_path):
-    file_path = tmp_path / "dummy.fb"
-    np.zeros(4, dtype=np.float32).tofile(file_path)
+    path = _write(tmp_path, np.zeros(4, dtype=np.float32), "dummy.fb")
+    with pytest.raises(ValueError):
+        fb.read_fb(path, 2, 2, row_chunk=0, col_chunk=2)
+    with pytest.raises(ValueError):
+        fb.read_fb(path, 2, 2, row_chunk=2, col_chunk=0)
 
-    with pytest.raises(ValueError):
-        fb.read_fb(str(file_path), 2, 2, row_chunk=0, col_chunk=2)
-    with pytest.raises(ValueError):
-        fb.read_fb(str(file_path), 2, 2, row_chunk=2, col_chunk=0)
+
+def test_read_fb_size_mismatch_raises(tmp_path):
+    path = _write(tmp_path, np.zeros((2, 3), dtype=np.float32))
+    with pytest.raises(ValueError, match="stale"):
+        fb.read_fb(path, 2, 4, 2, 4)
+
+
+def test_read_fb_missing_file(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        fb.read_fb(str(tmp_path / "nope.bin"), 1, 1, 1, 1)

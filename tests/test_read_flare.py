@@ -1,36 +1,28 @@
-# tests/test_read_flare.py
 import gzip
 import importlib
+import shutil
+
+import numpy as np
 import pytest
+import dask.array as da
 
-np = pytest.importorskip("numpy")
-pd = pytest.importorskip("pandas")
-da = pytest.importorskip("dask.array")
+from rfmix_reader.utils import get_pops
 
-try:
-    import cudf
-    _has_cudf = True
-except ImportError:
-    cudf = pd  # fallback so isinstance checks don't crash
-    _has_cudf = False
-
-# Use importlib to get the module, not the function re-exported by __init__.py
 flare = importlib.import_module("rfmix_reader.readers.read_flare")
+
+# tests/data/flare: ##ANCESTRY=<EUR=0,AFR=1>; axis 2 == [EUR, AFR]
+EXPECTED = np.array([
+    [[2, 0], [1, 1]],     # rs1: S1 0/0, S2 0/1
+    [[1, 1], [2, 0]],     # rs2: S1 1/0, S2 0/0
+    [[0, 2], [-1, -1]],   # rs3: S1 1/1, S2 ./1 -> missing
+    [[1, 1], [0, 2]],     # rs4
+], dtype=np.int8)
 
 
 @pytest.fixture
-def tmp_flare_dir(tmp_path):
-    """
-    Create a temporary directory with minimal FLARE-style outputs:
-    - chr21.anc.vcf (with ancestry header + 2 variants, no bgzip/tabix)
-    - chr21.global.anc.gz (simple global ancestry table)
-    """
-    d = tmp_path
-
-    # Minimal FLARE-style VCF with GT, AN1, AN2
+def plain_vcf(tmp_path):
+    """Uncompressed FLARE-style VCF (cyvcf2 iterates it without an index)."""
     vcf_content = """##fileformat=VCFv4.2
-##filedate=20250423
-##source=flare.test
 ##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">
 ##FORMAT=<ID=AN1,Number=1,Type=Integer,Description="Ancestry of first haplotype">
 ##FORMAT=<ID=AN2,Number=1,Type=Integer,Description="Ancestry of second haplotype">
@@ -40,125 +32,90 @@ def tmp_flare_dir(tmp_path):
 chr21\t5030578\trs1\tC\tT\t.\tPASS\t.\tGT:AN1:AN2\t0|0:0:0\t0|1:0:1
 chr21\t5030588\trs2\tT\tC\t.\tPASS\t.\tGT:AN1:AN2\t0|0:1:0\t0|0:0:0
 """
-    vcf_path = d / "chr21.anc.vcf"
-    with open(vcf_path, "w") as f:
-        f.write(vcf_content)
-
-    # Global ancestry file (tab-delimited, typical of FLARE outputs)
-    global_content = "SAMPLE\tEUR\tAFR\nSample_1\t0.7\t0.3\nSample_2\t0.2\t0.8\n"
-    global_path = d / "chr21.global.anc.gz"
-    with gzip.open(global_path, "wt") as f:
-        f.write(global_content)
-
-    return d
+    path = tmp_path / "chr21.anc.vcf"
+    path.write_text(vcf_content)
+    return path
 
 
-def test_parse_ancestry_header(tmp_flare_dir):
-    vcf_file = tmp_flare_dir / "chr21.anc.vcf"
-    mapping = flare._parse_ancestry_header(str(vcf_file))
+def test_parse_ancestry_header(flare_dir):
+    mapping = flare._parse_ancestry_header(str(flare_dir / "chr21.anc.vcf.gz"))
     assert mapping == {"EUR": 0, "AFR": 1}
 
 
-def test_load_vcf_info(tmp_flare_dir):
-    vcf_file = tmp_flare_dir / "chr21.anc.vcf"
-    chunks = list(flare._load_vcf_info(str(vcf_file), chunk_size=1))
-    df = chunks[0]
-    assert isinstance(df, (pd.DataFrame, cudf.DataFrame))  # use same import style as module
-    assert "chromosome" in df.columns
-    assert "physical_position" in df.columns
+def test_parse_ancestry_header_missing(tmp_path):
+    path = tmp_path / "x.vcf"
+    path.write_text("##fileformat=VCFv4.2\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
+    with pytest.raises(ValueError, match="ANCESTRY"):
+        flare._parse_ancestry_header(str(path))
 
 
-def test_read_loci(tmp_flare_dir):
-    vcf_file = tmp_flare_dir / "chr21.anc.vcf"
-    df = flare._read_loci(str(vcf_file), chunk_size=1)
-    assert "i" in df.columns
-    assert df.shape[0] == 2  # 2 variants
+def test_load_vcf_info_and_loci(plain_vcf):
+    chunks = list(flare._load_vcf_info(str(plain_vcf), chunk_size=1))
+    assert len(chunks) == 2
+    assert list(chunks[0].columns) == ["chromosome", "physical_position"]
+
+    df = flare._read_loci(str(plain_vcf), chunk_size=1)
+    assert df["i"].tolist() == [0, 1]
+    assert df["physical_position"].dtype == np.int32
 
 
-def test_read_anc(tmp_flare_dir):
-    global_file = tmp_flare_dir / "chr21.global.anc.gz"
-    df = flare._read_anc(str(global_file))
-    assert "chrom" in df.columns
-    assert set(df.columns) >= {"sample_id", "EUR", "AFR"}
+def test_read_anc(flare_dir):
+    df = flare._read_anc(str(flare_dir / "chr21.global.anc.gz"))
+    assert list(df.columns) == ["sample_id", "EUR", "AFR", "chrom"]
+    assert df["chrom"].iloc[0] == "chr21"
+    assert df["EUR"].dtype == np.float32
 
 
-def test_load_haplotypes(tmp_flare_dir):
-    vcf_file = tmp_flare_dir / "chr21.anc.vcf"
-    arr = flare._load_haplotypes(str(vcf_file), chunk_size=10)
+def test_load_haplotypes_header_order_and_sentinel(flare_dir):
+    arr = flare._load_haplotypes(str(flare_dir / "chr21.anc.vcf.gz"), chunk_size=3)
     assert isinstance(arr, da.Array)
-    # shape (variants, samples, ancestries)
-    assert arr.shape[0] == 2  # 2 variants
-    assert arr.shape[1] == 2  # 2 samples
-    assert arr.shape[2] == 2  # EUR, AFR
+    assert arr.dtype == np.int8
+    assert arr.shape == (4, 2, 2)
+    assert arr.chunks[0] == (3, 1)
+    np.testing.assert_array_equal(arr.compute(), EXPECTED)
 
 
-def test_load_haplotypes_numerical_correctness(tmp_flare_dir):
-    """
-    Verify that _load_haplotypes produces correct ancestry count values (Bug 6).
-
-    VCF content (after Bug 6 fix, numpy arrays are extracted before dask.delayed):
-      Variant 1: Sample_1 AN1=0(EUR) AN2=0(EUR) → EUR=2, AFR=0
-                 Sample_2 AN1=0(EUR) AN2=1(AFR) → EUR=1, AFR=1
-      Variant 2: Sample_1 AN1=1(AFR) AN2=0(EUR) → EUR=1, AFR=1
-                 Sample_2 AN1=0(EUR) AN2=0(EUR) → EUR=2, AFR=0
-
-    ANCESTRY header: EUR=0, AFR=1  → alphabetical sort → AFR=axis0, EUR=axis1
-    """
-    import numpy as np
-
-    vcf_file = tmp_flare_dir / "chr21.anc.vcf"
-    arr = flare._load_haplotypes(str(vcf_file), chunk_size=10)
-    result = arr.compute()  # shape (2 variants, 2 samples, 2 ancestries)
-
-    # Ancestry axis is sorted alphabetically: AFR=0, EUR=1
-    AFR, EUR = 0, 1
-
-    # Variant 0
-    # Sample_1: AN1=0(EUR), AN2=0(EUR) → AFR=0, EUR=2
-    assert result[0, 0, AFR] == 0 and result[0, 0, EUR] == 2, (
-        f"Variant 0 Sample_1 wrong: {result[0, 0, :]}"
-    )
-    # Sample_2: AN1=0(EUR), AN2=1(AFR) → AFR=1, EUR=1
-    assert result[0, 1, AFR] == 1 and result[0, 1, EUR] == 1, (
-        f"Variant 0 Sample_2 wrong: {result[0, 1, :]}"
-    )
-
-    # Variant 1
-    # Sample_1: AN1=1(AFR), AN2=0(EUR) → AFR=1, EUR=1
-    assert result[1, 0, AFR] == 1 and result[1, 0, EUR] == 1, (
-        f"Variant 1 Sample_1 wrong: {result[1, 0, :]}"
-    )
-    # Sample_2: AN1=0(EUR), AN2=0(EUR) → AFR=0, EUR=2
-    assert result[1, 1, AFR] == 0 and result[1, 1, EUR] == 2, (
-        f"Variant 1 Sample_2 wrong: {result[1, 1, :]}"
-    )
+def test_load_haplotypes_plain_vcf(plain_vcf):
+    result = flare._load_haplotypes(str(plain_vcf), chunk_size=10).compute()
+    EUR, AFR = 0, 1
+    assert result[0, 0, EUR] == 2 and result[0, 0, AFR] == 0
+    assert result[0, 1, EUR] == 1 and result[0, 1, AFR] == 1
+    assert result[1, 0, EUR] == 1 and result[1, 0, AFR] == 1
+    assert result[1, 1, EUR] == 2 and result[1, 1, AFR] == 0
 
 
-def test_diploid_counts_from_haps_missing_codes_are_nan():
-    import numpy as np
-
-    eye = np.eye(2, dtype=np.float32)
+def test_diploid_counts_from_haps_missing_codes_are_sentinel():
     an1 = np.array([-2147483648, -1, 0, 1, 2], dtype=np.int32)
     an2 = np.array([0, 1, -1, 1, 0], dtype=np.int32)
-
-    result = flare._diploid_counts_from_haps(an1, an2, eye)
-
-    assert np.isnan(result[[0, 1, 2, 4], :]).all()
+    result = flare._diploid_counts_from_haps(an1, an2, 2)
+    assert result.dtype == np.int8
+    assert (result[[0, 1, 2, 4], :] == -1).all()
     np.testing.assert_array_equal(result[3, :], [0, 2])
 
 
-def test_read_flare(tmp_flare_dir, monkeypatch):
-    def fake_get_prefixes(prefix, mode, verbose):
-        return [{
-            "anc.vcf": str(tmp_flare_dir / "chr21.anc.vcf"),
-            "global.anc": str(tmp_flare_dir / "chr21.global.anc.gz"),
-        }]
-    monkeypatch.setattr(flare, "get_prefixes", fake_get_prefixes)
+def test_read_flare_end_to_end(flare_dir):
+    loci_df, g_anc, local_array = flare.read_flare(str(flare_dir), verbose=False)
+    assert loci_df.shape[0] == 4
+    assert loci_df["i"].tolist() == [0, 1, 2, 3]
+    assert list(get_pops(g_anc)) == ["EUR", "AFR"]
+    assert local_array.dtype == np.int8
+    np.testing.assert_array_equal(local_array.compute(), EXPECTED)
 
-    loci_df, g_anc, local_array = flare.read_flare(str(tmp_flare_dir))
-    assert isinstance(loci_df, (pd.DataFrame, cudf.DataFrame))
-    assert isinstance(g_anc, (pd.DataFrame, cudf.DataFrame))
-    assert isinstance(local_array, da.Array)
-    assert loci_df.shape[0] == 2
-    assert g_anc.shape[0] == 2
-    assert local_array.shape[2] == 2
+
+def test_read_flare_g_anc_reordered_to_header(flare_dir, tmp_path):
+    """global.anc columns not in ##ANCESTRY order are realigned to axis 2."""
+    for name in ("chr21.anc.vcf.gz", "chr21.anc.vcf.gz.tbi"):
+        shutil.copy(flare_dir / name, tmp_path / name)
+    with gzip.open(tmp_path / "chr21.global.anc.gz", "wt") as fh:
+        fh.write("SAMPLE\tAFR\tEUR\nSample_1\t0.375\t0.625\nSample_2\t0.625\t0.375\n")
+
+    _, g_anc, _ = flare.read_flare(str(tmp_path), verbose=False)
+    assert list(g_anc.columns) == ["sample_id", "EUR", "AFR", "chrom"]
+    assert g_anc.loc[0, "EUR"] == pytest.approx(0.625)
+
+
+def test_read_flare_chrom_filter(flare_dir):
+    _, _, arr = flare.read_flare(str(flare_dir), verbose=False, chrom="21")
+    assert arr.shape[0] == 4
+    with pytest.raises(FileNotFoundError):
+        flare.read_flare(str(flare_dir), verbose=False, chrom="1")

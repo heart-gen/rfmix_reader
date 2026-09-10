@@ -8,7 +8,6 @@ import pandas as pd
 pytest.importorskip("matplotlib")
 import matplotlib
 matplotlib.use("Agg")  # headless backend
-import matplotlib.pyplot as plt
 
 import rfmix_reader.viz.tagore as tagore
 

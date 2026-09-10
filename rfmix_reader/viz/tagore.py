@@ -5,12 +5,15 @@ Source: https://github.com/jordanlab/tagore/blob/master/src/tagore/main.py
 from __future__ import annotations
 import re
 from pickle import loads
-from os import X_OK, path
+from os import path
 from cairosvg import svg2png, svg2pdf
 from importlib.resources import open_binary
-from subprocess import check_output, CalledProcessError
+from typing import TYPE_CHECKING
 
 from ..processing import CHROM_SIZES, COORDINATES
+
+if TYPE_CHECKING:
+    from pandas import DataFrame
 
 def _printif(message: str, verbose: bool):
     """
@@ -131,7 +134,7 @@ def _draw_local_ancestry(
     svg_fh.write("</svg>")
     svg_fh.close()
 
-    _printif(f"\033[92mSuccessfully created SVG\033[0m", verbose)
+    _printif("\033[92mSuccessfully created SVG\033[0m", verbose)
 
 
 def plot_local_ancestry_tagore(

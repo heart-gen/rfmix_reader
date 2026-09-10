@@ -26,7 +26,10 @@ def main() -> None:
         help="The directory where the binary files will be stored. Defaults to './binary_files'.")
 
     args = parser.parse_args()
-    create_binaries(args.file_path, args.binary_dir)
+    try:
+        create_binaries(args.file_path, args.binary_dir)
+    except Exception as e:  # surface library errors as a clean CLI failure
+        parser.exit(1, f"error: {e}\n")
 
 
 if __name__ == "__main__":

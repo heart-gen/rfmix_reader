@@ -1,48 +1,64 @@
+"""
+Lazy reader for the raw float32 binary produced by :func:`create_binaries`.
+
+The binary is a headerless, row-major ``float32`` dump of the data columns of
+an RFMix ``.fb.tsv`` file (``nrows x ncols``).  Each dask block is produced by
+memory-mapping a range of *whole rows* and slicing the requested columns, so
+column chunks narrower than a row are read correctly.
+"""
+from __future__ import annotations
+
+from os.path import getsize
+
+import numpy as np
 from dask.delayed import delayed
 from dask.array import from_delayed, Array, concatenate
-from numpy import (
-    float32,
-    memmap,
-    int32
-)
 
 __all__ = ["read_fb"]
+
+_ITEMSIZE = np.dtype(np.float32).itemsize
+
 
 def read_fb(
         filepath: str, nrows: int, ncols: int, row_chunk: int, col_chunk: int
 ) -> Array:
     """
-    Read and process data from a file in chunks, skipping the first
-    2 rows (comments) and 4 columns (loci annotation).
+    Build a lazy ``(nrows, ncols)`` float32 dask array over a binary FB file.
 
     Parameters
     ----------
     filepath : str
-        Path to the binary file.
-    nrows : int
-        Total number of rows in the dataset.
-    ncols : int
-        Total number of columns in the dataset.
-    row_chunk : int
-        Number of rows to process in each chunk.
-    col_chunk : int
-        Number of columns to process in each chunk.
+        Path to the binary file written by :func:`create_binaries`.
+    nrows, ncols : int
+        Shape of the matrix stored in the file.
+    row_chunk, col_chunk : int
+        Block size along rows and columns.
 
     Returns
     -------
-    dask.array: Concatenated array of processed data.
+    dask.array.Array
+        Lazy float32 array with the posterior probabilities as written.
 
     Raises
     ------
-    ValueError: If row_chunk or col_chunk is not a positive integer.
-    FileNotFoundError: If the specified file does not exist.
-    IOError: If there is an error reading the file.
+    ValueError
+        If the chunk sizes are not positive, or if the file size does not
+        match ``nrows * ncols * 4`` bytes (stale or mismatched binary).
+    FileNotFoundError
+        If the file does not exist.
     """
-    # Validate input parameters
     if row_chunk <= 0 or col_chunk <= 0:
         raise ValueError("row_chunk and col_chunk must be positive integers.")
-    
-    # Calculate row size and total size for memory mapping
+
+    expected = nrows * ncols * _ITEMSIZE
+    actual = getsize(filepath)
+    if actual != expected:
+        raise ValueError(
+            f"Binary file {filepath} has {actual} bytes but nrows*ncols*4 = "
+            f"{expected} ({nrows} x {ncols}). The .bin is stale or was built "
+            "from a different .fb.tsv; regenerate it with create_binaries()."
+        )
+
     col_sx: list[Array] = []
     row_start = 0
     while row_start < nrows:
@@ -52,21 +68,14 @@ def read_fb(
         while col_start < ncols:
             col_end = min(col_start + col_chunk, ncols)
             x = delayed(_read_chunk)(
-                filepath,
-                nrows,
-                ncols,
-                row_start,
-                row_end,
-                col_start,
-                col_end,
+                filepath, nrows, ncols, row_start, row_end, col_start, col_end,
             )
             shape = (row_end - row_start, col_end - col_start)
-            row_sx.append(from_delayed(x, shape, dtype=int32))
+            row_sx.append(from_delayed(x, shape, dtype=np.float32))
             col_start = col_end
         col_sx.append(concatenate(row_sx, 1, True))
         row_start = row_end
-        
-    # Concatenate all chunks
+
     X = concatenate(col_sx, 0, True)
     assert isinstance(X, Array)
     return X
@@ -74,32 +83,22 @@ def read_fb(
 
 def _read_chunk(
         filepath, nrows, ncols, row_start, row_end, col_start, col_end
-):
+) -> np.ndarray:
     """
-    Helper function to read a chunk of data from the binary file.
+    Read rows ``[row_start, row_end)`` and columns ``[col_start, col_end)``.
 
-    Parameters
-    ----------
-    filepath (str): Path to the binary file.
-    nrows (int): Total number of rows in the dataset.
-    ncols (int): Total number of columns in the dataset.
-    row_start (int): Starting row index for the chunk.
-    row_end (int): Ending row index for the chunk.
-    col_start (int): Starting column index for the chunk.
-    col_end (int): Ending column index for the chunk.
-
-    Returns
-    -------
-    np.ndarray: The chunk of data read from the file.
+    Whole rows are memory-mapped (they are contiguous on disk) and the column
+    range is sliced from the map; the result is copied into a contiguous
+    array so the mapping is released when the task returns.
     """
-    base_size = float32().nbytes
-    offset = (row_start * ncols + col_start) * base_size
-    size = (row_end - row_start, col_end - col_start)
-    
-    buff = memmap(filepath, dtype=float32, mode="r",
-                  offset=offset, shape=size)
-    # astype(int32) always allocates a new buffer (float32→int32 is a type
-    # cast, not a reinterpret), so copy=False has no effect here. Peak memory
-    # per task is 2× chunk size. Dask frees the float32 buffer immediately
-    # after this delayed task returns, so the overhead is short-lived.
-    return buff.astype(int32, copy=False)
+    if not (0 <= row_start < row_end <= nrows):
+        raise ValueError(f"Row range [{row_start}, {row_end}) is outside [0, {nrows}).")
+    if not (0 <= col_start < col_end <= ncols):
+        raise ValueError(f"Column range [{col_start}, {col_end}) is outside [0, {ncols}).")
+
+    offset = row_start * ncols * _ITEMSIZE
+    buff = np.memmap(
+        filepath, dtype=np.float32, mode="r", offset=offset,
+        shape=(row_end - row_start, ncols),
+    )
+    return np.array(buff[:, col_start:col_end], dtype=np.float32)
