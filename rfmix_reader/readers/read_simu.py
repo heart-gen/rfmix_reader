@@ -5,19 +5,21 @@ Revision of `_read_flare.py` to work with data generated from
 import numpy as np
 from re import sub
 from tqdm import tqdm
-from glob import glob
 from cyvcf2 import VCF
 from pathlib import Path
 import dask.array as da
 from pandas import DataFrame, concat
 from typing import List, Tuple, Iterator, Optional
-from dask import delayed, compute as dask_compute
+from dask import delayed
 from dask.array import Array, concatenate, from_delayed
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from os.path import isdir, join, isfile, dirname, basename, exists
+from concurrent.futures import ThreadPoolExecutor
+from os.path import join, dirname, basename, exists
 
+from ._common import counts_from_hap_codes, maybe_to_backend_frames
 from ..utils import _read_file, filter_paths_by_chrom
 
+#: Haplotype code used internally for a population label that is not in the
+#: ancestry list; it becomes ``-1`` in the returned count array.
 MISSING = np.uint8(255)
 
 def read_simu(
@@ -34,8 +36,10 @@ def read_simu(
         Path to directory containing BGZF-compressed VCF files (`.vcf.gz`)
         (e.g., one per chromosome).
     chunk_size : int, default=1_000_000
-        Number of variant records to process per chunk when reading. Smaller
+        Number of base pairs per tabix region pulled at a time. Smaller
         values reduce memory footprint, at the cost of more I/O.
+    n_threads : int, default=16
+        Threads used to pull regions in parallel (also passed to htslib).
     verbose : bool, default=True
         If True, show progress bars during parsing.
     chrom : str, optional
@@ -50,10 +54,12 @@ def read_simu(
     g_anc : :class:`DataFrame`
         Per-sample global ancestry proportions for each chromosome.
         Columns: ['sample_id', <ancestry labels...>, 'chrom'].
-    local_array : :class:`dask.array.Array`
-        Local ancestry counts with shape (variants, samples, ancestries).
-        The last axis is ordered alphabetically by ancestry label, ensuring
-        compatibility with RFMix-style conventions.
+    local_array : :class:`dask.array.Array`, int8
+        Diploid ancestry counts ``0/1/2`` with shape
+        (variants, samples, ancestries); ``-1`` where a haplotype carries a
+        population label that is not in the ancestry list.  haptools defines
+        no population order, so the last axis is ordered alphabetically by
+        label and ``g_anc`` columns use the same order.
     """
     # Get VCF file prefixes
     fn = _get_vcf_files(vcf_path, chrom=chrom)
@@ -94,6 +100,7 @@ def read_simu(
     # Combine local ancestry Dask arrays
     local_array = concatenate(local_chunks, axis=0)
 
+    loci_df, g_anc = maybe_to_backend_frames(loci_df, g_anc)
     return loci_df, g_anc, local_array
 
 
@@ -179,16 +186,11 @@ def _read_haplotypes(
     # Thread pool mapping
     starts = range(1, chrom_len + 1, chunk_size)
     local_chunks = []
-    with ThreadPoolExecutor(max_workers=vcf_threads) as executor:
-        futures = {executor.submit(process_region, start): start for start in starts}
-        for future in as_completed(futures):
-            try:
-                result = future.result()
-                local_chunks.extend(result)
-            except Exception as e:
-                start = futures[future]
-                print(f"[ERROR] Chunk at start={start} failed: {e}")
-                raise
+    with ThreadPoolExecutor(max_workers=max(1, vcf_threads)) as executor:
+        futures = [executor.submit(process_region, start) for start in starts]
+        # Consume in submission (genomic) order so rows align with loci_df.
+        for future in futures:
+            local_chunks.extend(future.result())
 
     # Build final dask.array
     if not local_chunks:
@@ -204,8 +206,18 @@ def _init_vcf(vcf_file, vcf_threads):
         if vcf_threads and hasattr(vcf, "set_threads"):
             vcf.set_threads(vcf_threads)
         samples = vcf.samples
-        seqname = vcf.seqnames[0]
-        seqlen = vcf.seqlens[0]
+        first = next(iter(vcf), None)
+        if first is None:
+            raise ValueError(f"VCF has no records: {vcf_file}")
+        seqname = first.CHROM
+        seqnames = list(vcf.seqnames)
+        if seqname not in seqnames:
+            raise ValueError(
+                f"Contig '{seqname}' of the first record is not declared in the "
+                f"header of {vcf_file}; add '##contig=<ID={seqname},length=...>' "
+                "(see README: reheader before calling read_simu)."
+            )
+        seqlen = vcf.seqlens[seqnames.index(seqname)]
     finally:
         vcf.close()
 
@@ -227,21 +239,28 @@ def _process_vectorized_batch(
     # Collect POP field in one go
     pop_mat = np.array([rec.format("POP") for rec in batch_recs], dtype="U")
 
-    # Vectorized mapping with normalization
+    # Vectorized mapping with normalization: (n_vars, n_samples, 2) codes
     codes_chunk = _map_pop_to_codes(pop_mat, ancestries)
+    # Diploid counts per ancestry: (n_vars, n_samples, n_anc) int8, -1 = missing
+    counts_chunk = _codes_to_counts(codes_chunk, n_anc)
 
     # Slice into smaller Dask chunks
     dask_chunks = []
     for start in range(0, n_vars, dask_chunk):
         end = min(start + dask_chunk, n_vars)
-        sub_chunk = codes_chunk[start:end]  # view slice
+        sub_chunk = counts_chunk[start:end]  # view slice
         dask_chunks.append(
             from_delayed(delayed(sub_chunk),
                          shape=sub_chunk.shape,
-                         dtype=np.uint8)
+                         dtype=np.int8)
         )
 
     return dask_chunks
+
+
+def _codes_to_counts(codes: np.ndarray, n_anc: int) -> np.ndarray:
+    """``(..., 2)`` haplotype codes -> ``(..., n_anc)`` int8 diploid counts."""
+    return counts_from_hap_codes(codes[..., 0], codes[..., 1], n_anc)
 
 
 def _compute_global_from_local(
@@ -250,16 +269,9 @@ def _compute_global_from_local(
     """
     Compute per-sample global ancestry proportions from a local ancestry array.
     """
-    n_anc = len(ancestries)
-
-    # Counts per ancestry
-    global_counts = [
-        (local_array == a).sum(axis=(0, 2))
-        for a in range(n_anc)
-    ]
-
-    # Stack and normalize using Dask
-    counts_da = da.stack(global_counts, axis=1)
+    # Sum diploid counts over loci, ignoring missing (-1) entries
+    valid = local_array >= 0
+    counts_da = da.where(valid, local_array, 0).astype(np.int64).sum(axis=0)  # (S, A)
     row_sums = counts_da.sum(axis=1, keepdims=True)
 
     fractions = da.where(
@@ -343,7 +355,7 @@ def _parse_pop_labels(vcf_file: str, max_records: int = 100) -> List[str]:
             for rec in vcf:
                 try:
                     pop = rec.format("POP")
-                except Exception as e:
+                except Exception:
                     continue
 
                 if pop is not None:

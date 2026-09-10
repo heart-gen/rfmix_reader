@@ -39,10 +39,18 @@ pip install rfmix-reader
   pip install rfmix-reader[docs]
   ```
 
-* **With testing tools** (`pytest`):
+* **With reference-panel conversion** (`bio2zarr`, for `prepare-reference`):
 
   ```bash
-  pip install rfmix-reader[tests]
+  pip install rfmix-reader[reference]
+  ```
+
+* **For development / running the tests** (clone the repository first):
+
+  ```bash
+  poetry install --with test --extras "viz io"
+  poetry run pytest            # fast suite (seconds)
+  poetry run pytest --run-slow # also the chr21 tests (needs git-LFS data)
   ```
 
 ### GPU Notes
@@ -95,9 +103,16 @@ of local ancestry analyses.
 from rfmix_reader import read_rfmix
 
 loci_df, g_anc, local_array = read_rfmix("two_pops/out/")
-# local_array.shape → (n_segments, n_samples, n_ancestries), dtype int32
-# Values: 0 = no alleles from ancestry k, 1 = one allele, 2 = both alleles
+# local_array.shape → (n_segments, n_samples, n_ancestries), dtype int8
+# Values: 0 = no alleles from ancestry k, 1 = one allele, 2 = both alleles,
+#         -1 = no ancestry call for that sample at that locus
 ```
+
+Axis 2 of `local_array` follows the population order of the RFMix header
+(`#Subpopulation order/codes`), and the ancestry columns of `g_anc` are
+returned in that same order, so `get_pops(g_anc)` always labels axis 2
+correctly. This holds for every reader (`read_rfmix`, `read_rfmix_fb`,
+`read_flare`, `read_simu`).
 
 To restrict to a single chromosome:
 
@@ -115,14 +130,21 @@ files, which must first be converted to compact binary format:
 ```python
 from rfmix_reader import read_rfmix_fb
 
-loci_df, g_anc, local_array = read_rfmix_fb(
+loci_df, g_anc, local_array, X_raw = read_rfmix_fb(
     "two_pops/out/",
     binary_dir="./binary_files",
-    generate_binary=True,  # convert .fb.tsv → .bin on first run
+    generate_binary=True,   # convert .fb.tsv → .bin on first run
+    return_original=True,   # also return the raw posteriors
 )
-# local_array.shape → (n_loci, n_samples, n_ancestries), dtype float32
-# Values: forward-backward posterior probabilities per ancestry per haplotype
+# local_array.shape → (n_loci, n_samples, n_ancestries), dtype int8
+#   hard calls: for each haplotype the ancestry with the highest posterior,
+#   summed to 0/1/2 (-1 if a haplotype carries no posterior mass)
+# X_raw.shape → (n_loci, n_samples * 2 * n_ancestries), dtype float32
+#   the forward-backward posteriors exactly as written by RFMix
 ```
+
+`create_binaries` raises (`FileNotFoundError`, `RuntimeError`, `OSError`)
+instead of printing when conversion fails.
 
 ---
 
@@ -473,28 +495,24 @@ from rfmix_reader import (
 
 # Recommended: read .msp.tsv (no binary conversion needed)
 loci_df, g_anc, admix = read_rfmix("two_pops/out/")
-plot_ancestry_by_chromosome(loci_df, admix, save_path="local.png")
-
-# When posteriors are needed (.fb.tsv path)
-loci_df, g_anc, admix = read_rfmix_fb("two_pops/out/")
-plot_global_ancestry(g_anc, save_path="rfmix_global.png")
-plot_ancestry_by_chromosome(loci_df, admix, save_path="rfmix_local.png")
+plot_global_ancestry(g_anc, save_path="rfmix_global")
+plot_ancestry_by_chromosome(g_anc, save_path="rfmix_by_chrom")
 
 # FLARE output directory (contains *.anc.vcf.gz + global.anc.gz)
 loci_df, g_anc, admix = read_flare("flare_runs/chr1/")
-plot_global_ancestry(g_anc, save_path="flare_global.png")
-plot_ancestry_by_chromosome(loci_df, admix, save_path="flare_local.png")
+plot_global_ancestry(g_anc, save_path="flare_global")
+plot_ancestry_by_chromosome(g_anc, save_path="flare_by_chrom")
 
 # Haptools simulations (after reheadering contigs)
 loci_df, g_anc, admix = read_simu("/path/to/simulations/")
-plot_global_ancestry(g_anc, save_path="simu_global.png")
-plot_ancestry_by_chromosome(loci_df, admix, save_path="simu_local.png")
+plot_global_ancestry(g_anc, save_path="simu_global")
+plot_ancestry_by_chromosome(g_anc, save_path="simu_by_chrom")
 ```
 
 `plot_global_ancestry` builds per-individual stacked bars of global
-ancestry. `plot_ancestry_by_chromosome` summarizes local ancestry along
-each chromosome. Both accept `save_path` and `save_multi_format` for
-exporting to PNG/PDF or interactive display.
+ancestry. `plot_ancestry_by_chromosome` summarizes the global ancestry
+table per chromosome. Both take a `save_path` *stem*; the figure is written
+as `<save_path>.png` and `<save_path>.pdf` via `save_multi_format`.
 
 ---
 

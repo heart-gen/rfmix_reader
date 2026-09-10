@@ -135,3 +135,32 @@ class TestCleanDataImpChunkAlignment:
         result = admix_I.compute()
         assert result.shape == (8, 2, 2)
         np.testing.assert_array_equal(result, np.ones((8, 2, 2), dtype=np.float32))
+
+
+# ---------------------------------------------------------------------------
+# End to end: reader output -> write_data -> parquet
+# ---------------------------------------------------------------------------
+
+def test_write_data_end_to_end(msp_dir, tmp_path):
+    pytest.importorskip("pyarrow")
+    from rfmix_reader.readers.read_msp import read_rfmix
+
+    loci, g_anc, admix = read_rfmix(str(msp_dir), verbose=False)
+    expected = admix.compute()  # (8, 3, 2) int8
+
+    wd.write_data(loci, g_anc, admix, outdir=str(tmp_path), prefix="la")
+
+    files = sorted(tmp_path.glob("la.*.parquet"))
+    assert [f.name for f in files] == ["la.chr1-0.parquet", "la.chr2-0.parquet"]
+
+    names = ["Sample_1_EUR", "Sample_1_AFR", "Sample_2_EUR", "Sample_2_AFR",
+             "Sample_3_EUR", "Sample_3_AFR"]
+    chr1 = pd.read_parquet(files[0])
+    assert list(chr1.columns) == ["chrom", "pos", "hap", *names]
+    assert chr1.shape[0] == 4
+    assert chr1["hap"].iloc[0] == "chr1_10000"
+    np.testing.assert_array_equal(chr1[names].to_numpy(), expected[:4].reshape(4, -1))
+
+    chr2 = pd.read_parquet(files[1])
+    assert chr2.shape[0] == 4 and not chr2[names].isna().any().any()
+    np.testing.assert_array_equal(chr2[names].to_numpy(), expected[4:].reshape(4, -1))

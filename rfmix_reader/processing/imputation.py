@@ -23,6 +23,16 @@ InterpMethod = Literal["linear", "nearest", "stepwise"]
 
 GPU_ENABLED: bool = _select_array_backend().__name__ == "cupy"
 
+
+def _sentinel_to_nan(batch) -> np.ndarray:
+    """Readers mark missing calls with ``-1`` (int8); the Zarr uses NaN."""
+    out = np.asarray(batch, dtype=np.float32)
+    if out.size and (out < 0).any():
+        out = out.copy()
+        out[out < 0] = np.nan
+    return out
+
+
 def _to_host(x):
     """Convert an array-module array back to a NumPy array on host."""
     if hasattr(x, "__cuda_array_interface__") and hasattr(x, "get"):
@@ -272,13 +282,13 @@ def _expand_array(
         d = dest_idx[start:end]
         batch_src = src_idx[start:end]
         if admix_np is not None:
-            z[d, :, :] = admix_np[batch_src]
+            z[d, :, :] = _sentinel_to_nan(admix_np[batch_src])
         else:
             # Use contiguous slice + local reindex to avoid Dask fancy indexing.
             # Use min/max so this is correct even if src_idx has repeated values.
             lo, hi = int(batch_src.min()), int(batch_src.max()) + 1
             slab = admix[lo:hi].compute()
-            z[d, :, :] = slab[batch_src - lo]
+            z[d, :, :] = _sentinel_to_nan(slab[batch_src - lo])
 
     _print_logger("Zarr array successfully populated!")
     return z
@@ -365,18 +375,55 @@ def interpolate_array(
     total_rows, _, _ = z.shape
     _print_logger(f"Interpolating data using method='{method}'!")
 
+    mod = _select_array_backend()
+    remaining = np.zeros((z.shape[1], z.shape[2]), dtype=bool)
     for start in tqdm(range(0, total_rows, chunk_size),
                       desc="Interpolating chunks", unit="chunk"):
         end = min(start + chunk_size, total_rows)
-        mod = _select_array_backend()
         chunk = mod.array(z[start:end, :, :], dtype=mod.float32)
         pos_chunk = None if pos is None else pos[start:end]
         if start == 0 and not mod.isnan(chunk).any():
             warnings.warn(
-                f"No NaNs detected in first chunk; interpolation may be unnecessary."
+                "No NaNs detected in first chunk; interpolation may be unnecessary."
             )
         interp_chunk = interpolate_block(chunk, method=method, pos=pos_chunk)
+        remaining |= _to_host(mod.isnan(interp_chunk).any(axis=0))
         z[start:end, :, :] = _to_host(interp_chunk)
+
+    # Gaps longer than a chunk cannot be filled chunk-locally: interpolate the
+    # affected (sample, ancestry) columns once more over the full locus axis.
+    if remaining.any():
+        _fill_remaining_gaps(z, remaining, method=method, pos=pos)
 
     _print_logger("Interpolation complete!")
     return z
+
+
+def _fill_remaining_gaps(
+    z, remaining: np.ndarray, *, method: InterpMethod, pos: Optional[np.ndarray],
+    sample_batch: int = 64,
+) -> None:
+    """
+    Second interpolation pass for columns that still contain NaN.
+
+    ``remaining`` is a boolean ``(samples, ancestries)`` mask.  Affected samples
+    are read in batches across *all* loci, interpolated, and written back.
+    Columns with no valid value at all are left as NaN with a warning.
+    """
+    mod = _select_array_backend()
+    samples = np.flatnonzero(remaining.any(axis=1))
+    _print_logger(
+        f"Filling gaps longer than one chunk for {samples.size} sample(s)."
+    )
+    unfilled = 0
+    for start in range(0, samples.size, sample_batch):
+        idx = samples[start:start + sample_batch]
+        block = mod.asarray(z.oindex[:, idx, :], dtype=mod.float32)
+        block = interpolate_block(block, method=method, pos=pos)
+        unfilled += int(_to_host(mod.isnan(block).any(axis=0)).sum())
+        z.oindex[:, idx, :] = _to_host(block)
+    if unfilled:
+        warnings.warn(
+            f"{unfilled} (sample, ancestry) column(s) have no observed value and "
+            "remain NaN after interpolation."
+        )

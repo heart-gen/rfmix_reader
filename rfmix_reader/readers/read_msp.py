@@ -23,32 +23,26 @@ import numpy as np
 import pandas as pd
 import dask.array as da
 from tqdm import tqdm
-from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Sequence
 
+from ._common import (
+    align_g_anc_columns,
+    check_pop_order_consistent,
+    counts_from_hap_codes,
+    maybe_report_gpu,
+    maybe_to_backend_frames,
+    pops_by_code,
+    read_rfmix_q,
+)
 from ..utils import (
-    _extract_chrom_from_path,
+    _normalize_chrom_label,
     _read_file,
     filter_file_maps_by_chrom,
-    set_gpu_environment,
+    get_prefixes,
 )
-
-try:
-    from torch.cuda import is_available as gpu_available
-except ModuleNotFoundError:
-    def gpu_available():
-        return False
-
-if gpu_available():
-    from cudf import DataFrame, concat, CategoricalDtype
-else:
-    from pandas import DataFrame, concat, CategoricalDtype
-
 
 __all__ = ["read_rfmix", "extract_locus_ancestry"]
 
-_MSP_SUFFIXES = ["msp.tsv", "msp.tsv.gz"]
-_Q_SUFFIXES = ["rfmix.Q", "rfmix.Q.gz"]
 _META_COLS = ["#chm", "spos", "epos", "sgpos", "egpos", "n snps"]
 
 
@@ -73,7 +67,7 @@ def _parse_pop_header(fn: str) -> Dict[str, int]:
     return {label: int(code) for label, code in pairs}
 
 
-def _read_msp_file(fn: str) -> Tuple[DataFrame, List[str], Dict[str, int]]:
+def _read_msp_file(fn: str) -> Tuple[pd.DataFrame, List[str], Dict[str, int]]:
     """
     Read a single .msp.tsv file.
 
@@ -93,10 +87,8 @@ def _read_msp_file(fn: str) -> Tuple[DataFrame, List[str], Dict[str, int]]:
         fn, sep="\t", comment=None, skiprows=1, header=0,
         compression="infer",
     )
-    # Rename the column that carries the '#chm' label (pandas strips '#')
-    segs.rename(columns={"#chm": "chrom", "spos": "spos", "epos": "epos"},
-                inplace=True)
-    segs["chrom"] = segs["chrom"].astype(CategoricalDtype())
+    segs.rename(columns={"#chm": "chrom"}, inplace=True)
+    segs["chrom"] = segs["chrom"].astype("category")
     segs["spos"] = segs["spos"].astype(np.int32)
     segs["epos"] = segs["epos"].astype(np.int32)
 
@@ -106,6 +98,10 @@ def _read_msp_file(fn: str) -> Tuple[DataFrame, List[str], Dict[str, int]]:
 
 
 def _sample_names_from_hap_cols(hap_cols: Sequence[str]) -> List[str]:
+    if len(hap_cols) % 2 != 0:
+        raise ValueError(
+            f"Expected an even number of haplotype columns, got {len(hap_cols)}."
+        )
     samples = []
     for i in range(0, len(hap_cols), 2):
         h0 = hap_cols[i]
@@ -123,14 +119,15 @@ def _segments_to_loci(
     hap_cols: List[str],
     pop_map: Dict[str, int],
     index_offset: int = 0,
-) -> Tuple[DataFrame, da.Array]:
+) -> Tuple[pd.DataFrame, da.Array]:
     """
     Convert segment rows to loci-level data and a dask ancestry array.
 
     The loci DataFrame has one row per segment (the segment start = reference
     locus).  The ancestry array has shape (n_segments, n_samples, n_ancestries)
     with hard integer counts (0/1/2) derived by summing the two haplotypes per
-    sample.
+    sample.  Axis 2 follows the population *codes* of the file header, i.e.
+    the order RFMix itself uses.
 
     Parameters
     ----------
@@ -148,36 +145,30 @@ def _segments_to_loci(
     loci_df : DataFrame
         Columns: chromosome, physical_position (= spos), i.
     local_array : dask.array.Array
-        Shape (n_segments, n_samples, n_ancestries), dtype int32.
+        Shape (n_segments, n_samples, n_ancestries), dtype int8.
     """
-    n_pops = len(pop_map)
-    if len(hap_cols) % 2 != 0:
-        raise ValueError(
-            f"Expected an even number of haplotype columns, got {len(hap_cols)}."
-        )
+    pops = pops_by_code(pop_map)
+    n_pops = len(pops)
     n_samples = len(_sample_names_from_hap_cols(hap_cols))
     n_segs = len(segs)
 
-    # Build the ancestry count array: shape (n_segs, n_samples, n_pops)
-    hap_data = segs[hap_cols].to_numpy(dtype=np.int8)  # (n_segs, 2*n_samples)
+    hap_data = segs[hap_cols].to_numpy(dtype=np.int16)  # (n_segs, 2*n_samples)
+    if hap_data.size and (hap_data.min() < 0 or hap_data.max() >= n_pops):
+        raise ValueError(
+            f"Ancestry codes must be in 0..{n_pops - 1} (populations {pops}); "
+            f"found values in [{hap_data.min()}, {hap_data.max()}]."
+        )
     hap0 = hap_data[:, 0::2]  # (n_segs, n_samples) — haplotype 0
     hap1 = hap_data[:, 1::2]  # (n_segs, n_samples) — haplotype 1
+    local_np = counts_from_hap_codes(hap0, hap1, n_pops)  # int8
 
-    # One-hot encode both haplotypes and sum → diploid ancestry counts per pop
-    eye = np.eye(n_pops, dtype=np.int8)
-    # eye[hap0] shape: (n_segs, n_samples, n_pops)
-    local_np = (eye[hap0] + eye[hap1]).astype(np.int32)
+    local_array = da.from_array(
+        local_np, chunks=(min(1024, max(n_segs, 1)), n_samples, n_pops)
+    )
 
-    # Sort populations alphabetically (matches read_rfmix / read_flare ordering)
-    sorted_pops = sorted(pop_map, key=pop_map.get)
-    pop_order = [pop_map[p] for p in sorted_pops]
-    local_np = local_np[:, :, pop_order]
-
-    local_array = da.from_array(local_np, chunks=(min(1024, n_segs), n_samples, n_pops))
-
-    loci_df = DataFrame({
+    loci_df = pd.DataFrame({
         "chromosome": pd.Categorical(segs["chrom"].astype(str)),
-        "physical_position": segs["spos"].astype(np.int32).values,
+        "physical_position": segs["spos"].astype(np.int32).to_numpy(),
         "i": np.arange(index_offset, index_offset + n_segs, dtype=np.int64),
     })
 
@@ -187,99 +178,19 @@ def _segments_to_loci(
 def _get_msp_prefixes(file_prefix: str, verbose: bool = True) -> List[Dict[str, str]]:
     """
     Find .msp.tsv (or .msp.tsv.gz) files under file_prefix and return a
-    list of per-chromosome file maps (same structure as get_prefixes).
+    list of per-chromosome file maps (see :func:`get_prefixes`).
     """
-    from ..utils import _clean_prefixes
-    from glob import glob
-    from os.path import join
-
-    fp = Path(file_prefix)
-    prefixes = []
-
-    # Accept both a path prefix ("/path/run_chr1" -> "/path/run_chr1.msp.tsv")
-    # and a complete MSP file path.
-    for sfx in _MSP_SUFFIXES:
-        suffix = f".{sfx}"
-        if str(fp).endswith(suffix) and fp.exists():
-            prefixes.append(str(fp)[:-len(suffix)])
-        elif Path(f"{fp}.{sfx}").exists():
-            prefixes.append(str(fp))
-    prefixes = list(dict.fromkeys(prefixes))
-
-    if not prefixes:
-        candidates = sorted([str(x) for x in fp.glob("*[chr]*")])
-        if not candidates:
-            candidates = sorted(glob(join(str(fp), "*")))
-        prefixes = sorted(_clean_prefixes(candidates))
-
-    fn = []
-    for pfx in prefixes:
-        filemap = {}
-        for sfx in _MSP_SUFFIXES:
-            candidate = f"{pfx}.{sfx}"
-            if Path(candidate).exists():
-                key = sfx.replace(".gz", "")
-                filemap[key] = candidate
-                break  # prefer plain over .gz
-        for sfx in _Q_SUFFIXES:
-            candidate = f"{pfx}.{sfx}"
-            if Path(candidate).exists():
-                filemap["rfmix.Q"] = candidate
-                break
-        if filemap:
-            fn.append(filemap)
-
-    if not fn:
+    try:
+        return get_prefixes(file_prefix, "msp", verbose)
+    except FileNotFoundError:
         raise FileNotFoundError(
             f"No .msp.tsv files found under prefix: {file_prefix}"
-        )
-
-    if len(prefixes) > 1 and verbose:
-        from os.path import basename
-        print(f"Multiple MSP file sets read in this order: "
-              f"{[basename(f) for f in prefixes]}")
-    return fn
+        ) from None
 
 
-
-def _read_Q_for_msp(fn: str) -> DataFrame:
-    """
-    Read an RFMix ``.rfmix.Q`` file next to MSP output.
-
-    Returns a DataFrame with columns ``sample_id``, one column per ancestry,
-    and ``chrom`` when the chromosome label can be inferred from the file name.
-    """
-    opener = gzip.open if fn.endswith(".gz") else open
-    with opener(fn, "rt") as fh:
-        fh.readline()
-        header_line = fh.readline().strip()
-    if not header_line.startswith("#"):
-        raise ValueError(
-            f"Could not parse Q header from '{fn}'. Expected second line to start with '#'."
-        )
-    header = header_line.lstrip("#").split()
-    if not header or header[0] != "sample":
-        raise ValueError(f"Could not parse sample column from Q header in '{fn}'.")
-
-    df = pd.read_csv(
-        fn,
-        sep=r"\s+",
-        comment="#",
-        header=None,
-        names=["sample_id", *header[1:]],
-        compression="infer",
-    )
-    chrom_label = _extract_chrom_from_path(fn)
-    if chrom_label is not None:
-        df["chrom"] = f"chr{chrom_label}"
-    return df
-
-
-def _norm_chrom(value: object) -> str:
-    text = str(value).strip()
-    if text.lower().startswith("chr"):
-        text = text[3:]
-    return text
+def _read_Q_for_msp(fn: str) -> pd.DataFrame:
+    """Read an RFMix ``.rfmix.Q`` file next to MSP output."""
+    return read_rfmix_q(fn, add_chrom=True)
 
 
 def extract_locus_ancestry(
@@ -305,7 +216,7 @@ def extract_locus_ancestry(
         return loci.copy()
 
     loci_work = loci.reset_index(drop=False).rename(columns={"index": "_locus_index"})
-    loci_work["_chrom_norm"] = loci_work[chrom_col].map(_norm_chrom)
+    loci_work["_chrom_norm"] = loci_work[chrom_col].map(lambda v: _normalize_chrom_label(str(v).strip()))
     loci_work["_pos_int"] = pd.to_numeric(loci_work[pos_col], errors="raise").astype(np.int64)
     target_chroms = set(loci_work["_chrom_norm"].astype(str))
 
@@ -315,15 +226,14 @@ def extract_locus_ancestry(
     first_sample_count: Optional[int] = None
 
     for filemap in _get_msp_prefixes(file_prefix, verbose=False):
-        segs, hap_cols, pop_map = _read_msp_file(filemap["msp.tsv"])
-        segs_pd = segs.to_pandas() if hasattr(segs, "to_pandas") else segs
-        seg_chroms = segs_pd["chrom"].map(_norm_chrom)
+        segs_pd, hap_cols, pop_map = _read_msp_file(filemap["msp.tsv"])
+        seg_chroms = segs_pd["chrom"].astype(str).map(lambda v: _normalize_chrom_label(v.strip()))
         common_chroms = sorted(target_chroms.intersection(set(seg_chroms.astype(str))))
         if not common_chroms:
             continue
 
         sample_names = _sample_names_from_hap_cols(hap_cols)
-        pop_labels = [pop for pop, _ in sorted(pop_map.items(), key=lambda item: item[1])]
+        pop_labels = pops_by_code(pop_map)
         if not first_pop_labels:
             first_pop_labels = pop_labels
         if samples is None:
@@ -440,11 +350,11 @@ def extract_locus_ancestry(
 
 def read_rfmix(
     file_prefix: str,
-    g_anc: Optional[DataFrame] = None,
+    g_anc: Optional[pd.DataFrame] = None,
     verbose: bool = True,
     chrom: Optional[str] = None,
     read_q: bool = True,
-) -> Tuple[DataFrame, Optional[DataFrame], da.Array]:
+) -> Tuple[pd.DataFrame, Optional[pd.DataFrame], da.Array]:
     """
     Read RFMix `.msp.tsv` files into a loci DataFrame and a Dask ancestry array.
 
@@ -461,11 +371,12 @@ def read_rfmix(
     Parameters
     ----------
     file_prefix : str
-        Directory or path prefix under which ``.msp.tsv`` files live.
+        Directory, file, or path prefix under which ``.msp.tsv`` files live.
     g_anc : DataFrame, optional
-        Pre-loaded global ancestry DataFrame (from :func:`read_rfmix_fb` or
-        similar).  When provided it is returned unchanged.  When :data:`None`
-        the second return value is :data:`None`.
+        Pre-loaded global ancestry DataFrame.  When provided its ancestry
+        columns are reordered to match ``local_array`` and it is returned.
+        When :data:`None` and ``read_q`` is false, the second return value is
+        :data:`None`.
     verbose : bool, default True
         Print progress information.
     chrom : str, optional
@@ -480,21 +391,20 @@ def read_rfmix(
         Columns: ``chromosome``, ``physical_position``, ``i``.
         One row per RFMix ancestry segment boundary.
     g_anc : DataFrame or None
-        Passed through unchanged, or :data:`None` if not supplied.
+        Global ancestry with ancestry columns in the same order as axis 2 of
+        ``local_array``, or :data:`None`.
     local_array : dask.array.Array
-        Shape ``(n_segments, n_samples, n_ancestries)``, dtype ``int32``.
-        Hard ancestry counts (0/1/2); populations are sorted alphabetically.
+        Shape ``(n_segments, n_samples, n_ancestries)``, dtype ``int8``.
+        Hard ancestry counts (0/1/2).  Axis 2 follows the population codes of
+        the ``.msp.tsv`` header (``#Subpopulation order/codes``), which is the
+        order RFMix uses everywhere.
 
     Notes
     -----
     Local ancestry is at **segment resolution** — each row is the start
     position of one RFMix ancestry segment.  Use :func:`interpolate_array`
     with ``method='stepwise'`` to expand segments onto a denser variant grid,
-    or use :func:`write_imputed` for direct variant-level output.
-
-    Trade-offs versus :func:`read_rfmix_fb` (`.fb.tsv`):
-    - **Pro**: ~2,000× smaller files; no binary conversion needed; loads in seconds.
-    - **Con**: Hard calls only — no posterior uncertainty information.
+    or :func:`extract_locus_ancestry` to query individual positions.
 
     Examples
     --------
@@ -502,8 +412,7 @@ def read_rfmix(
     >>> print(loci.shape, admix.shape)
     (1629, 3) (1629, 81, 2)
     """
-    if verbose and gpu_available():
-        set_gpu_environment()
+    maybe_report_gpu(verbose)
 
     fn = filter_file_maps_by_chrom(
         _get_msp_prefixes(file_prefix, verbose), chrom, kind="MSP"
@@ -513,35 +422,32 @@ def read_rfmix(
     results = _read_file(fn, lambda f: _read_msp_file(f["msp.tsv"]), pbar)
     pbar.close()
 
+    pops = check_pop_order_consistent(
+        [pops_by_code(pop_map) for _, _, pop_map in results], kind="MSP"
+    )
+
     if g_anc is None and read_q:
         q_maps = [f for f in fn if "rfmix.Q" in f]
         if q_maps:
             pbar = tqdm(desc="Reading Q files", total=len(q_maps), disable=not verbose)
             q_dfs = _read_file(q_maps, lambda f: _read_Q_for_msp(f["rfmix.Q"]), pbar)
             pbar.close()
-            g_anc = concat(q_dfs, axis=0, ignore_index=True)
+            g_anc = pd.concat(q_dfs, axis=0, ignore_index=True)
+
+    if g_anc is not None:
+        g_anc = align_g_anc_columns(g_anc, pops)
 
     index_offset = 0
     loci_dfs = []
     local_arrays = []
-
     for segs, hap_cols, pop_map in results:
-        segs_pd = segs.to_pandas() if hasattr(segs, "to_pandas") else segs
-        loci_df_i, local_i = _segments_to_loci(
-            segs_pd, hap_cols, pop_map, index_offset
-        )
+        loci_df_i, local_i = _segments_to_loci(segs, hap_cols, pop_map, index_offset)
         loci_dfs.append(loci_df_i)
         local_arrays.append(local_i)
-        index_offset += len(segs_pd)
+        index_offset += len(segs)
 
-    loci_df = concat(loci_dfs, axis=0, ignore_index=True)
+    loci_df = pd.concat(loci_dfs, axis=0, ignore_index=True)
     local_array = da.concatenate(local_arrays, axis=0)
 
+    loci_df, g_anc = maybe_to_backend_frames(loci_df, g_anc)
     return loci_df, g_anc, local_array
-
-
-# Expose helpers for tests and downstream code
-read_rfmix._parse_pop_header = _parse_pop_header
-read_rfmix._read_msp_file = _read_msp_file
-read_rfmix._segments_to_loci = _segments_to_loci
-read_rfmix.extract_locus_ancestry = extract_locus_ancestry

@@ -30,7 +30,7 @@ def _select_array_backend():
         return module
 
     _GPU_ARRAY_AVAILABLE = False
-    logger.warning(
+    logger.debug(
         "CuPy unavailable or failed to initialize; "
         "falling back to NumPy CPU backend."
     )
@@ -55,7 +55,7 @@ def _select_dataframe_backend():
         return module
 
     _GPU_DF_AVAILABLE = False
-    logger.warning(
+    logger.debug(
         "cuDF unavailable or failed to initialize; "
         "falling back to pandas CPU backend."
     )
@@ -80,7 +80,7 @@ def _select_dask_dataframe_backend() -> Tuple[object, bool]:
         return module, True
 
     _GPU_DASK_DF_AVAILABLE = False
-    logger.warning(
+    logger.debug(
         "dask_cudf unavailable or failed to initialize; "
         "falling back to dask.dataframe CPU backend."
     )

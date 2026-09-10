@@ -5,16 +5,14 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from typing import Tuple, Union, List, Optional, TYPE_CHECKING
 
-from ..io import admix_to_bed_individual
+from ..io.loci_bed import admix_to_bed_individual
 from ..utils import get_pops
-from ..backends import _configure_dask_backends, _select_array_backend
+from ..backends import _configure_dask_backends
 
 if TYPE_CHECKING:
     from dask.array import Array
+    from pandas import DataFrame
 
-
-def _get_array_backend():
-    return _select_array_backend()
 
 def plot_global_ancestry(
         g_anc: DataFrame, title: str = "Global Ancestry Proportions",
@@ -288,15 +286,15 @@ def _annotate_tagore(df: DataFrame, sample_cols: List[str], pops: List[str],
     colormap = plt.get_cmap(palette) # Can updated or user defined
     color_dict = {pop: mcolors.to_hex(colormap(i % 10)) for i, pop in enumerate(pops)}
     # Expand the DataFrame using the _expand_dataframe function
-    expanded_df = _expand_dataframe(df, sample_cols)
+    expanded_df = _expand_dataframe(df, sample_cols, pops)
     # Initialize columns for feature and size
     expanded_df["feature"] = 0; expanded_df["size"] = 1
     # Map the sample_cols column to colors using the color_dict
     expanded_df["color"] = expanded_df["sample_name"].map(color_dict)
     # Generate a repeating sequence of 1 and 2
-    cp = _get_array_backend()
-    repeating_sequence = cp.tile(cp.array([1, 2]),
-                                 int(cp.ceil(len(expanded_df) / 2)))[:len(expanded_df)]
+    import numpy as np
+    repeating_sequence = np.tile(np.array([1, 2]),
+                                 int(np.ceil(len(expanded_df) / 2)))[:len(expanded_df)]
     # Add the repeating sequence as a new column
     expanded_df['chrCopy'] = repeating_sequence
     # Drop the sample_cols column and rename columns for compatibility
@@ -304,7 +302,8 @@ def _annotate_tagore(df: DataFrame, sample_cols: List[str], pops: List[str],
                       .rename(columns={"chromosome": "#chr", "end": "stop"})
 
 
-def _expand_dataframe(df: DataFrame, sample_cols: List[str]) -> DataFrame:
+def _expand_dataframe(df: DataFrame, sample_cols: List[str],
+                      pops: Optional[List[str]] = None) -> DataFrame:
     """
     Expands a dataframe by duplicating rows based on a specified sample name
     column.
@@ -321,8 +320,10 @@ def _expand_dataframe(df: DataFrame, sample_cols: List[str]) -> DataFrame:
     Parameters:
     ----------
         df (DataFrame): The input dataframe to be expanded.
-        sample_name (str): The name of the column to be used for the expansion
-                           condition.
+        sample_cols (list of str): Columns ``<sample>_<pop>`` to expand.
+        pops (list of str, optional): Population labels; used to split the
+            ancestry label off the column name.  When omitted, the text after
+            the last underscore is used.
 
     Returns:
     -------
@@ -334,8 +335,15 @@ def _expand_dataframe(df: DataFrame, sample_cols: List[str]) -> DataFrame:
                          value_name="allele_count")
     # Filter non-zero alleles
     melted_df = melted_df[melted_df["allele_count"] > 0]
-    # Extract ancestry code from column
-    melted_df["sample_name"] = melted_df["sample_ids"].str.extract(r"_([A-Z]+)$")
+    # Extract ancestry label from the column name
+    if pops is not None and len(pops) > 0:
+        import re
+        alternatives = "|".join(re.escape(str(p)) for p in
+                                sorted(pops, key=len, reverse=True))
+        pattern = rf"_({alternatives})$"
+    else:
+        pattern = r"_([^_]+)$"
+    melted_df["sample_name"] = melted_df["sample_ids"].str.extract(pattern)
     # Repeat rows based on allele count
     melted_df = melted_df.loc[melted_df.index.repeat(melted_df['allele_count'])]\
                          .reset_index(drop=True)

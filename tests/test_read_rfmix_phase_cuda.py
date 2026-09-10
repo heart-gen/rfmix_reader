@@ -8,7 +8,15 @@ xr = pytest.importorskip("xarray")
 
 from rfmix_reader.io.prepare_reference import convert_vcf_to_zarr
 from rfmix_reader.processing.phase import phase_rfmix_chromosome_to_zarr
-from rfmix_reader.readers.read_rfmix import _read_Q_noi, gpu_available
+from rfmix_reader.readers.read_rfmix import _read_Q_noi
+
+
+def gpu_available() -> bool:
+    try:
+        from torch.cuda import is_available
+    except ImportError:
+        return False
+    return bool(is_available())
 
 
 @pytest.mark.skipif(

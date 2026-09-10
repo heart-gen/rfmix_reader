@@ -114,7 +114,7 @@ def test_create_binaries_wraps(tmp_path, monkeypatch):
     fbfile = tmp_path / "chr1.fb.tsv"
     fbfile.write_text("h\nh\n a b c d 1.0\n")
 
-    monkeypatch.setattr(utils, "_generate_binary_files", lambda fb, bd: None)
+    monkeypatch.setattr(utils, "_generate_binary_files", lambda fb, bd, **kw: None)
     utils.create_binaries(str(tmp_path), str(tmp_path / "out"))
     assert (tmp_path / "out").exists()
 
@@ -159,11 +159,92 @@ def test_create_binaries_conflicting_files(tmp_path, monkeypatch, capsys):
     (tmp_path / "chr1.fb.tsv.gz").write_text("gz")
 
     # Avoid calling the expensive converter
-    monkeypatch.setattr(utils, "_generate_binary_files", lambda fb, bd: None)
+    monkeypatch.setattr(utils, "_generate_binary_files", lambda fb, bd, **kw: None)
 
-    utils.create_binaries(str(tmp_path), str(tmp_path / "out"))
-    captured = capsys.readouterr().out
-    assert "Both compressed and uncompressed FB files" in captured
+    with pytest.raises(RuntimeError, match="Both compressed and uncompressed"):
+        utils.create_binaries(str(tmp_path), str(tmp_path / "out"))
+
+
+def test_create_binaries_missing_prefix_raises(tmp_path):
+    with pytest.raises(FileNotFoundError):
+        utils.create_binaries(str(tmp_path / "nothing_here"), str(tmp_path / "out"))
+
+
+def test_create_binaries_chrom_filter(tmp_path, monkeypatch):
+    for c in ("chr1", "chr2"):
+        (tmp_path / f"{c}.fb.tsv").write_text("h\nh\n")
+    seen = {}
+    monkeypatch.setattr(utils, "_generate_binary_files",
+                        lambda fb, bd, **kw: seen.setdefault("files", fb))
+    utils.create_binaries(str(tmp_path), str(tmp_path / "out"), chrom="2", verbose=False)
+    assert [str(f).endswith("chr2.fb.tsv") for f in seen["files"]] == [True]
+
+
+# ---------------------------------------------------------------------------
+# discovery
+# ---------------------------------------------------------------------------
+
+def _touch(tmp_path, *names):
+    for n in names:
+        (tmp_path / n).write_text("x")
+
+
+def test_get_prefixes_prefix_mode(tmp_path):
+    _touch(tmp_path, "run_chr1.fb.tsv", "run_chr1.rfmix.Q", "run_chr2.fb.tsv", "other_chr3.fb.tsv")
+    out = utils.get_prefixes(str(tmp_path / "run_"), mode="rfmix", verbose=False)
+    assert [Path(m["fb.tsv"]).name for m in out] == ["run_chr1.fb.tsv", "run_chr2.fb.tsv"]
+    assert "rfmix.Q" in out[0] and "rfmix.Q" not in out[1]
+
+    one = utils.get_prefixes(str(tmp_path / "run_chr1"), mode="rfmix", verbose=False)
+    assert len(one) == 1 and set(one[0]) == {"fb.tsv", "rfmix.Q"}
+
+    single_file = utils.get_prefixes(str(tmp_path / "run_chr2.fb.tsv"), mode="rfmix", verbose=False)
+    assert len(single_file) == 1
+
+
+def test_get_prefixes_dotted_and_no_chr_names(tmp_path):
+    _touch(tmp_path, "cohort.v2_chr1.fb.tsv", "xyz.fb.tsv", "abc.logs", "chr1.fb.tsv.tbi")
+    out = utils.get_prefixes(str(tmp_path), mode="rfmix", verbose=False)
+    assert sorted(Path(m["fb.tsv"]).name for m in out) == ["cohort.v2_chr1.fb.tsv", "xyz.fb.tsv"]
+
+
+def test_get_prefixes_numeric_chromosome_order(tmp_path):
+    _touch(tmp_path, "chr10.fb.tsv", "chr2.fb.tsv", "chr1.fb.tsv", "chrX.fb.tsv")
+    out = utils.get_prefixes(str(tmp_path), mode="rfmix", verbose=False)
+    assert [Path(m["fb.tsv"]).name for m in out] == [
+        "chr1.fb.tsv", "chr2.fb.tsv", "chr10.fb.tsv", "chrX.fb.tsv"]
+
+
+def test_get_prefixes_prefers_plain_over_gz(tmp_path):
+    _touch(tmp_path, "chr1.fb.tsv", "chr1.fb.tsv.gz", "chr2.fb.tsv.gz")
+    out = utils.get_prefixes(str(tmp_path), mode="rfmix", verbose=False)
+    assert Path(out[0]["fb.tsv"]).name == "chr1.fb.tsv"
+    assert Path(out[1]["fb.tsv"]).name == "chr2.fb.tsv.gz"
+
+
+def test_get_prefixes_msp_mode_requires_msp(tmp_path):
+    _touch(tmp_path, "chr1.rfmix.Q", "chr1.fb.tsv")
+    with pytest.raises(FileNotFoundError):
+        utils.get_prefixes(str(tmp_path), mode="msp", verbose=False)
+    _touch(tmp_path, "chr1.msp.tsv")
+    out = utils.get_prefixes(str(tmp_path), mode="msp", verbose=False)
+    assert set(out[0]) == {"msp.tsv", "rfmix.Q"}
+
+
+def test_get_prefixes_invalid_mode(tmp_path):
+    with pytest.raises(ValueError):
+        utils.get_prefixes(str(tmp_path), mode="nope")
+
+
+def test_clean_prefixes_dotted_names():
+    out = utils._clean_prefixes(["/x/cohort.v2_chr1.fb.tsv", "/x/cohort.v2_chr1.rfmix.Q"])
+    assert out == ["/x/cohort.v2_chr1"]
+
+
+def test_delete_files_or_directories_dir(tmp_path):
+    d = tmp_path / "d"; d.mkdir(); (d / "f").write_text("x")
+    utils.delete_files_or_directories([str(d)])
+    assert not d.exists()
 
 
 def test_set_gpu_environment_monkeypatched(monkeypatch, capsys):

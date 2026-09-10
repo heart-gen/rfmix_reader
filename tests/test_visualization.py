@@ -1,5 +1,4 @@
 import pytest
-from pathlib import Path
 
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
@@ -50,13 +49,23 @@ def test_expand_and_annotate_tagore(monkeypatch):
     })
     pops = ["AFR", "EUR"]
 
-    expanded = viz._expand_dataframe(df, ["S1_AFR", "S1_EUR"])
+    expanded = viz._expand_dataframe(df, ["S1_AFR", "S1_EUR"], pops)
     assert "sample_name" in expanded.columns
+    assert expanded["sample_name"].tolist() == ["AFR", "EUR"]
 
-    # Force NumPy backend for chrCopy
-    monkeypatch.setattr(viz, "cp", np)
     ann = viz._annotate_tagore(df, ["S1_AFR", "S1_EUR"], pops)
     assert "#chr" in ann.columns and "chrCopy" in ann.columns
+    assert ann["color"].notna().all()
+
+
+def test_expand_dataframe_lowercase_and_digit_pops():
+    """Population labels are matched literally, not with [A-Z]+."""
+    df = pd.DataFrame({
+        "chromosome": ["1"], "start": [0], "end": [50],
+        "S_1_pop1": [1], "S_1_Yri2": [1],
+    })
+    expanded = viz._expand_dataframe(df, ["S_1_pop1", "S_1_Yri2"], ["pop1", "Yri2"])
+    assert sorted(expanded["sample_name"]) == ["Yri2", "pop1"]
 
 
 def test_generate_tagore_bed(monkeypatch):
@@ -71,11 +80,23 @@ def test_generate_tagore_bed(monkeypatch):
     })
     monkeypatch.setattr(viz, "admix_to_bed_individual",
                         lambda loci, g, a, sn, cs, ms, v: df)
-    # Force NumPy backend
-    monkeypatch.setattr(viz, "cp", np)
     admix = np.zeros((1,1,1))
     out = viz.generate_tagore_bed(df, g_anc, admix, 0)
     assert "#chr" in out.columns
+
+
+def test_generate_tagore_bed_end_to_end(msp_dir):
+    from rfmix_reader.readers.read_msp import read_rfmix
+
+    loci, g_anc, admix = read_rfmix(str(msp_dir), verbose=False)
+    out = viz.generate_tagore_bed(loci, g_anc, admix, 0, min_segment=1, verbose=False)
+    for col in ("#chr", "start", "stop", "feature", "size", "color", "chrCopy"):
+        assert col in out.columns
+    # every row of the BED contributes allele_count rows; total = sum of counts
+    from rfmix_reader.io.loci_bed import admix_to_bed_individual
+    bed = admix_to_bed_individual(loci, g_anc, admix, 0, min_segment=1, verbose=False)
+    assert out.shape[0] == int(bed[["Sample_1_EUR", "Sample_1_AFR"]].to_numpy().sum())
+    assert set(out["chrCopy"]) <= {1, 2}
 
 
 def test_save_multi_format(tmp_path):

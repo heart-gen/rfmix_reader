@@ -78,6 +78,7 @@ def test_segments_to_loci_shape(msp_file):
 
     assert loci_df.shape == (2, 3)  # (n_segs, [chromosome, physical_position, i])
     assert local_array.shape == (2, 2, 2)  # (n_segs, n_samples, n_pops)
+    assert local_array.dtype == np.int8
 
 
 def test_segments_to_loci_ancestry_counts(msp_file):
@@ -87,7 +88,7 @@ def test_segments_to_loci_ancestry_counts(msp_file):
     Segment 0: Sample_1 (AN=0,1) → AFR=1,EUR=1;  Sample_2 (AN=1,1) → AFR=0,EUR=2
     Segment 1: Sample_1 (AN=1,0) → AFR=1,EUR=1;  Sample_2 (AN=0,1) → AFR=1,EUR=1
 
-    Populations sorted alphabetically: AFR=axis0, EUR=axis1.
+    Axis 2 follows the header codes: AFR=0 -> axis 0, EUR=1 -> axis 1.
     """
     segs, hap_cols, pop_map = _read_msp_file(msp_file)
     segs_pd = segs.to_pandas() if hasattr(segs, "to_pandas") else segs
@@ -137,7 +138,8 @@ def test_read_rfmix_passthrough_g_anc(tmp_path):
     dummy_g_anc = pd.DataFrame({"sample_id": ["S1"], "AFR": [0.5], "EUR": [0.5]})
     _, g_anc_out, _ = read_rfmix(str(tmp_path), g_anc=dummy_g_anc, verbose=False)
 
-    assert g_anc_out is dummy_g_anc
+    # Passed through (ancestry columns aligned to the file order, AFR then EUR)
+    pd.testing.assert_frame_equal(g_anc_out, dummy_g_anc)
 
 
 def test_get_msp_prefixes_accepts_path_prefix(tmp_path):
@@ -219,3 +221,65 @@ def test_extract_locus_ancestry_sample_level_subset(tmp_path):
     assert out.loc[0, "sample_id"] == "Sample_2"
     assert out.loc[0, "AFR_copies"] == 1
     assert out.loc[0, "EUR_copies"] == 1
+
+
+# ---------------------------------------------------------------------------
+# population order == header codes == g_anc columns
+# ---------------------------------------------------------------------------
+
+_MSP_EUR_FIRST = _MSP_CONTENT.replace("AFR=0\tEUR=1", "EUR=0\tAFR=1")
+
+
+def test_segments_to_loci_pop_order_is_code_order(tmp_path):
+    fn = tmp_path / "chr1.msp.tsv"
+    fn.write_text(_MSP_EUR_FIRST)
+    segs, hap_cols, pop_map = _read_msp_file(str(fn))
+    assert pop_map == {"EUR": 0, "AFR": 1}
+    _, local_array = _segments_to_loci(segs, hap_cols, pop_map)
+    result = local_array.compute()
+    # Segment 0, Sample_1 codes (0, 1) -> EUR=1, AFR=1 ; Sample_2 (1, 1) -> EUR=0, AFR=2
+    np.testing.assert_array_equal(result[0, 1, :], [0, 2])
+    assert result.dtype == np.int8
+
+
+def test_read_rfmix_g_anc_matches_axis(tmp_path):
+    (tmp_path / "chr1.msp.tsv").write_text(_MSP_EUR_FIRST)
+    (tmp_path / "chr1.rfmix.Q").write_text(_Q_CONTENT)   # header: AFR EUR
+
+    from rfmix_reader.utils import get_pops
+    _, g_anc, local_array = read_rfmix(str(tmp_path), verbose=False)
+    assert list(get_pops(g_anc)) == ["EUR", "AFR"]
+    assert list(g_anc.columns) == ["sample_id", "EUR", "AFR", "chrom"]
+    assert g_anc.loc[0, "AFR"] == pytest.approx(0.5)
+    assert g_anc.loc[1, "EUR"] == pytest.approx(0.75)
+
+
+def test_read_rfmix_inconsistent_pop_order_raises(tmp_path):
+    (tmp_path / "chr1.msp.tsv").write_text(_MSP_CONTENT)
+    (tmp_path / "chr2.msp.tsv").write_text(_MSP_EUR_FIRST.replace("chr1", "chr2"))
+    with pytest.raises(ValueError, match="differs"):
+        read_rfmix(str(tmp_path), verbose=False)
+
+
+def test_read_rfmix_bad_code_raises(tmp_path):
+    (tmp_path / "chr1.msp.tsv").write_text(_MSP_CONTENT.replace("\t0\t1\t1\t1\n", "\t0\t1\t1\t7\n"))
+    with pytest.raises(ValueError, match="codes must be"):
+        read_rfmix(str(tmp_path), verbose=False)
+
+
+def test_read_rfmix_fixture_two_chromosomes(msp_dir):
+    from rfmix_reader.utils import get_pops
+    loci_df, g_anc, local_array = read_rfmix(str(msp_dir), verbose=False)
+    assert loci_df.shape == (8, 3)
+    assert loci_df["chromosome"].astype(str).tolist() == ["chr1"] * 4 + ["chr2"] * 4
+    assert loci_df["i"].tolist() == list(range(8))
+    assert local_array.shape == (8, 3, 2) and local_array.dtype == np.int8
+    assert list(get_pops(g_anc)) == ["EUR", "AFR"]
+    assert g_anc["chrom"].tolist() == ["chr1"] * 3 + ["chr2"] * 3
+    # chr1 segment 0: S1 EUR/EUR, S2 EUR/AFR, S3 AFR/AFR
+    np.testing.assert_array_equal(local_array.compute()[0], [[2, 0], [1, 1], [0, 2]])
+
+
+def test_read_rfmix_prefix_mode(msp_dir):
+    loci_df, _, local_array = read_rfmix(str(msp_dir / "chr2"), verbose=False)
+    assert loci_df.shape[0] == 4 and local_array.shape[0] == 4

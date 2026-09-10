@@ -174,3 +174,6 @@ data/samples_id2
 *.bin
 ref_zarr/
 *zarr
+
+# cuFile driver log
+cufile.log

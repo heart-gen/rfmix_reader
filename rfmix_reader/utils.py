@@ -1,22 +1,20 @@
 from __future__ import annotations
 
-import gzip
+import shutil
 from tqdm import tqdm
-from glob import glob
-from os import makedirs
+from os import makedirs, remove
 from pathlib import Path
 from re import search as rsearch
-from numpy import float32, array
-from typing import Callable, List, Optional
+from numpy import float32
+from typing import Any, Callable, Dict, List, Optional, Sequence
 from multiprocessing import Pool, cpu_count
-from subprocess import run, CalledProcessError
-from os.path import basename, dirname, join, exists
+from os.path import basename, join, exists, isdir
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from pandas import DataFrame
 
-def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List[str]:
+def _read_file(fn: Sequence[Any], read_func: Callable, pbar=None) -> List[Any]:
     """
     Apply a reader function across multiple input files.
 
@@ -35,7 +33,7 @@ def _read_file(fn: List[str], read_func: Callable, pbar=None) -> List[str]:
     list
         List of objects returned by `read_func`, one per file.
     """
-    data = [];
+    data = []
     for file_name in fn:
         data.append(read_func(file_name))
         if pbar:
@@ -166,7 +164,11 @@ def set_gpu_environment():
       Total memory: 8.00 GB
       CUDA capability: 8.6
     """
-    from torch.cuda import device_count, get_device_properties
+    try:
+        from torch.cuda import device_count, get_device_properties
+    except ImportError:
+        print("PyTorch is not installed; GPU information is unavailable.")
+        return
     num_gpus = device_count()
     if num_gpus == 0:
         print("No GPUs available.")
@@ -179,137 +181,146 @@ def set_gpu_environment():
             print(f"  CUDA capability: {gpu_properties.major}.{gpu_properties.minor}")
 
 
-def _clean_prefixes(prefixes: list[str]):
+_MODE_SUFFIXES: Dict[str, List[str]] = {
+    "rfmix": ["fb.tsv", "fb.tsv.gz", "rfmix.Q", "rfmix.Q.gz"],
+    "msp": ["msp.tsv", "msp.tsv.gz", "rfmix.Q", "rfmix.Q.gz"],
+    "flare": ["anc.vcf.gz", "global.anc.gz"],
+}
+_ALL_SUFFIXES: List[str] = sorted(
+    {sfx for sfxs in _MODE_SUFFIXES.values() for sfx in sfxs}, key=len, reverse=True
+)
+
+
+def _suffix_key(sfx: str) -> str:
+    """Normalised file-map key for a suffix (``fb.tsv.gz`` -> ``fb.tsv``)."""
+    return sfx[:-3] if sfx.endswith(".gz") else sfx
+
+
+def _strip_known_suffix(path: str, suffixes: Sequence[str]) -> Optional[str]:
+    """Return ``path`` without its (longest) known suffix, or ``None``."""
+    for sfx in sorted(suffixes, key=len, reverse=True):
+        if path.endswith("." + sfx):
+            return path[: -len(sfx) - 1]
+    return None
+
+
+def _chrom_sort_key(prefix: str):
+    """Sort prefixes by numeric chromosome first (chr2 before chr10), then name."""
+    label = _extract_chrom_from_path(prefix)
+    if label is None:
+        return (2, 0, prefix)
+    if label.isdigit():
+        return (0, int(label), prefix)
+    return (1, 0, label + prefix)
+
+
+def _clean_prefixes(prefixes: Sequence[str], suffixes: Optional[Sequence[str]] = None) -> List[str]:
     """
-    Clean and filter a list of file prefixes.
+    Reduce a list of file paths to unique, sorted path prefixes.
+
+    Each path is stripped of its (longest) known output suffix, e.g.
+    ``/out/cohort.v2_chr1.fb.tsv.gz`` -> ``/out/cohort.v2_chr1``.  Paths that
+    do not end in a known suffix (logs, indexes, ...) are dropped.
 
     Parameters
     ----------
-    prefixes (list): A list of file prefixes (paths).
-
-    Returns
-    -------
-    list: A list of unique, cleaned file prefixes without the file extensions.
-
-    Notes
-    -----
-    - The function removes any prefixes that end with ".logs".
-    - It also removes any duplicate prefixes after cleaning.
-
-    Dependencies
-    ------------
-    - os.path.dirname: For extracting the directory name from file prefix
-    - os.path.basename: For extracting the base name from file prefix
-    - os.path.join: For joining file names
+    prefixes : sequence of str
+        File paths.
+    suffixes : sequence of str, optional
+        Suffixes to recognise.  Default: every suffix of every mode.
     """
-    cleaned_prefixes = []
-    for prefix in prefixes:
-        # Split the prefix into directory and base name
-        dir_path = dirname(prefix)
-        base_name = basename(prefix)
-        # Remove the file extensions from the base name
-        base = base_name.split(".")[0]
-        # Use regex to find patterns starting with "chr" or "_chr".
-        # [a-zA-Z0-9]+ covers autosomes (chr1-22) and sex/MT chromosomes
-        # (chrX, chrY, chrM) — unlike \d+ which silently drops non-numeric labels.
-        m = rsearch(r'(_chr|chr)([a-zA-Z0-9]+)', base)
-        # If a match is found, construct the cleaned prefix
-        if m:
-            cleaned_prefix = join(dir_path, base)
-            cleaned_prefixes.append(cleaned_prefix)
-
-    # Remove duplicate prefixes
-    return list(set(cleaned_prefixes))
+    suffixes = list(suffixes) if suffixes else _ALL_SUFFIXES
+    cleaned = []
+    for path in prefixes:
+        stem = _strip_known_suffix(str(path), suffixes)
+        if stem is not None:
+            cleaned.append(stem)
+    return sorted(dict.fromkeys(cleaned), key=_chrom_sort_key)
 
 
-def get_prefixes(file_prefix: str, mode: str = "rfmix", verbose: bool = True):
+def _discover_prefixes(file_prefix: str, suffixes: Sequence[str]) -> List[str]:
     """
-    Retrieve and clean file prefixes for specified file types.
+    Find output-file prefixes for ``file_prefix``.
 
-    This function searches for files with a given prefix, cleans
-    the prefixes, and constructs a list of dictionaries mapping
-    specific file types to their corresponding file paths.
+    ``file_prefix`` may be a directory (every file inside is considered), a
+    complete file path, or a path prefix (``/out/run_`` matches
+    ``/out/run_chr1.fb.tsv``, ``/out/run_chr2.fb.tsv``, ...).
+    """
+    p = Path(file_prefix)
+    if p.is_dir():
+        candidates = [str(x) for x in p.iterdir() if x.is_file()]
+    elif p.is_file():
+        candidates = [str(p)]
+    else:
+        candidates = [str(x) for x in p.parent.glob(p.name + "*") if x.is_file()]
+    return _clean_prefixes(candidates, suffixes)
+
+
+def _build_file_maps(prefixes: Sequence[str], suffixes: Sequence[str]) -> List[Dict[str, str]]:
+    """Map each prefix to ``{normalised suffix: existing path}``; plain files win over ``.gz``."""
+    fn = []
+    for pfx in prefixes:
+        filemap: Dict[str, str] = {}
+        for sfx in suffixes:
+            key = _suffix_key(sfx)
+            if key in filemap:
+                continue
+            candidate = f"{pfx}.{sfx}"
+            if exists(candidate):
+                filemap[key] = candidate
+        if filemap:
+            fn.append(filemap)
+    return fn
+
+
+def get_prefixes(file_prefix: str, mode: str = "rfmix", verbose: bool = True) -> List[Dict[str, str]]:
+    """
+    Locate RFMix / FLARE output files and group them per chromosome.
 
     Parameters
     ----------
     file_prefix : str
-        The prefix used to identify relevant files. This can be
-        a directory or a common prefix for the files.
-
-    mode : {"rfmix", "flare"}
-        The expected output type.
-        - "rfmix" expects files with suffixes: ["fb.tsv", "fb.tsv.gz", "rfmix.Q"].
-        - "flare" expects files with suffixes: ["anc.vcf.gz", "global.anc.gz"].
-
+        A directory containing the outputs, a single output file, or a common
+        path prefix of the outputs (``"/out/run_"``).
+    mode : {"rfmix", "msp", "flare"}
+        - ``"rfmix"``: ``<prefix>.fb.tsv[.gz]`` and ``<prefix>.rfmix.Q[.gz]``
+        - ``"msp"``:   ``<prefix>.msp.tsv[.gz]`` and ``<prefix>.rfmix.Q[.gz]``
+        - ``"flare"``: ``<prefix>.anc.vcf.gz`` and ``<prefix>.global.anc.gz``
     verbose : bool, optional
-        :const:`True` for progress information; :const:`False` otherwise.
-        Default:`True`.
+        Print the order in which multiple file sets are read.
 
     Returns
     -------
-    list of dict:
-        A list of dictionaries where each dictionary maps file
-        types to their corresponding file paths.
+    list of dict
+        One dict per prefix mapping the normalised suffix (``"fb.tsv"``,
+        ``"rfmix.Q"``, ``"msp.tsv"``, ``"anc.vcf"``, ``"global.anc"``) to the
+        existing file path.  Only prefixes that have the primary file
+        (first suffix of the mode) are returned.  Sorted by chromosome.
 
     Raises
     ------
     FileNotFoundError
-        If no valid files matching the given prefix and mode are found.
-
-    Notes
-    -----
-    - Uses `_clean_prefixes` helper to normalize and deduplicate prefixes.
-    - Assumes RFMix outputs follow the convention `<prefix>.fb.tsv` and
-      `<prefix>.rfmix.Q`.
-    - Assumes FLARE outputs follow `<prefix>.anc.vcf.gz` and
-      `<prefix>.global.anc.gz`.
+        If no primary files are found.
+    ValueError
+        If ``mode`` is unknown.
     """
-    # Define suffix sets based on mode
-    mode_suffixes = {
-        "rfmix": ["fb.tsv", "fb.tsv.gz", "rfmix.Q"],
-        "flare": ["anc.vcf.gz", "global.anc.gz"]
-    }
-    file_prefix = Path(file_prefix)  # normalize
-    if mode not in mode_suffixes:
-        raise ValueError(f"Invalid mode: {mode}. Choose from {list(mode_suffixes.keys())}.")
+    if mode not in _MODE_SUFFIXES:
+        raise ValueError(
+            f"Invalid mode: {mode}. Choose from {list(_MODE_SUFFIXES.keys())}."
+        )
+    suffixes = _MODE_SUFFIXES[mode]
+    primary = _suffix_key(suffixes[0])
 
-    try:
-        # Identify candidate files: "chr" or "_chr"
-        file_candidates = sorted(
-            [str(x) for x in file_prefix.glob("*[chr]*")]
+    prefixes = _discover_prefixes(file_prefix, suffixes)
+    fn = [m for m in _build_file_maps(prefixes, suffixes) if primary in m]
+    if not fn:
+        raise FileNotFoundError(
+            f"No valid {mode.upper()} files found for prefix: {file_prefix}"
         )
 
-        # If only one candidate, broaden the search
-        if len(file_candidates) == 1:
-            file_prefixes = sorted(glob(join(file_prefix, "*")))
-            if not file_prefixes:
-                raise FileNotFoundError()
-
-        # Normalize prefixes
-        file_prefixes = sorted(_clean_prefixes(file_candidates))
-
-        # Construct prefix-to-file mapping
-        fn = []
-        for fp in file_prefixes:
-            filemap = {}
-            for sfx in mode_suffixes[mode]:
-                candidate = f"{fp}.{sfx}"
-                if Path(candidate).exists():
-                    filemap[sfx.replace(".gz", "")] = candidate
-            if filemap:
-                fn.append(filemap)
-
-        if not fn:
-            raise FileNotFoundError()
-
-        # Verbose output if multiple prefixes
-        if len(file_prefixes) > 1 and verbose:
-            msg = f"Multiple {mode.upper()} file sets read in this order:"
-            print(f"{msg} {[basename(f) for f in file_prefixes]}")
-
-    except FileNotFoundError:
-        raise FileNotFoundError(f"No valid {mode.upper()} files found for prefix: {file_prefix}")
-
+    if len(fn) > 1 and verbose:
+        names = [basename(m[primary]) for m in fn]
+        print(f"Multiple {mode.upper()} file sets read in this order: {names}")
     return fn
 
 
@@ -416,7 +427,7 @@ def _process_file(args):
     _text_to_binary(file_path, output_file)
 
 
-def _generate_binary_files(fb_files, binary_dir):
+def _generate_binary_files(fb_files, binary_dir, verbose: bool = True):
     """
     Convert multiple FB (Fullband) files to binary format using parallel processing.
 
@@ -460,63 +471,52 @@ def _generate_binary_files(fb_files, binary_dir):
     - Prints a message indicating the start of the conversion process.
     - Displays a progress bar during the conversion process.
     """
-    print("Converting fb files to binary!")
+    if verbose:
+        print("Converting fb files to binary!")
     # Determine the number of CPU cores to use
     num_cores = min(cpu_count(), len(fb_files))
     # Create a list of arguments for each file
     args_list = [(file_path, binary_dir) for file_path in fb_files]
+    if num_cores <= 1:
+        # Single file (or single core): convert in-process; no worker pool.
+        for args in tqdm(args_list, total=len(fb_files), disable=not verbose):
+            _process_file(args)
+        return
     with Pool(num_cores) as pool:
         list(tqdm(pool.imap(_process_file, args_list),
-                  total=len(fb_files)))
+                  total=len(fb_files), disable=not verbose))
 
 
 def delete_files_or_directories(path_patterns):
     """
-    Deletes the specified files or directories using the 'rm -rf' command.
-
-    This function takes a list of path patterns, finds all matching files
-    or directories, and deletes them using the 'rm -rf' command. It prints
-    a message for each deleted path and handles errors gracefully.
+    Delete files or directories matching the given glob patterns.
 
     Parameters
     ----------
-    path_patterns (list of str): A list of file or directory path
-                                 patterns to delete. These patterns
-                                 can include wildcards.
-
-    Returns
-    -------
-    None
-
-    Example
-    -------
-    delete_files_or_directories(['/tmp/test_dir/*', '/tmp/old_files/*.log'])
+    path_patterns : list of str
+        Glob patterns (``recursive=True``, so ``**`` is honoured).
 
     Notes
     -----
-    - This function uses the 'glob' module to find matching paths
-      and the 'subprocess' module to execute the 'rm -rf' command.
-    - Ensure that the paths provided are correct and that you have
-      the necessary permissions to delete the specified files or
-      directories.
-    - Use this function with caution as it will permanently delete
-      the specified files or directories.
-    - Deletes files or directories that match the specified patterns.
-    - Prints messages indicating the deletion status of each path.
-    - Prints error messages if a path cannot be deleted.
+    Directories are removed recursively.  A message is printed for each
+    deleted path; errors are reported and do not stop the remaining
+    deletions.  Use with care.
     """
+    from glob import glob
+
     for pattern in path_patterns:
         match_paths = glob(pattern, recursive=True)
+        if not match_paths:
+            print(f"Path does not exist: {pattern}")
         for path in match_paths:
-            if exists(path):
-                try:
-                    # Use subprocess to call 'rm -rf' on the path
-                    run(['rm', '-rf', path], check=True)
-                    print(f"Deleted: {path}")
-                except CalledProcessError as e:
-                    print(f"Error deleting {path}: {e}")
-            else:
-                print(f"Path does not exist: {path}")
+            try:
+                if isdir(path) and not Path(path).is_symlink():
+                    shutil.rmtree(path)
+                else:
+                    remove(path)
+                print(f"Deleted: {path}")
+            except OSError as e:
+                print(f"Error deleting {path}: {e}")
 
 
 def get_pops(g_anc: DataFrame):
@@ -586,84 +586,52 @@ def get_sample_names(g_anc: DataFrame):
 
 
 def create_binaries(
-        file_prefix: str, binary_dir: str = "./binary_files"
+        file_prefix: str, binary_dir: str = "./binary_files",
+        chrom: Optional[str] = None, verbose: bool = True,
 ):
     """
-    Create binary files from fullband (FB) TSV files.
-
-    This function identifies FB TSV files based on a given prefix, creates a directory
-    for binary files if it doesn't exist, and converts the identified TSV files to binary format.
+    Convert RFMix ``.fb.tsv`` files into the raw float32 binaries used by
+    :func:`read_rfmix_fb`.
 
     Parameters
     ----------
-    file_prefix (str):
-        The prefix used to identify the relevant FB TSV files.
-    binary_dir (str, optional):
-        The directory where the binary files will be stored.
-        Defaults to "./binary_files".
-
-    Returns
-    -------
-    None
+    file_prefix : str
+        Directory, file, or path prefix identifying the ``.fb.tsv`` files
+        (see :func:`get_prefixes`).
+    binary_dir : str, optional
+        Output directory, created if needed.  Default ``"./binary_files"``.
+    chrom : str, optional
+        Only convert the file for this chromosome.
+    verbose : bool, optional
+        Print progress.
 
     Raises
     ------
-    FileNotFoundError: If no files matching the given prefix are found.
-    PermissionError: If there are insufficient permissions to create
-                     the binary directory.
-    IOError: If there's an error during the file conversion process.
-    RuntimeError: If both ``.fb.tsv`` and ``.fb.tsv.gz`` forms of the same
-                  file are found in the same directory, which would cause
-                  ambiguous prefix resolution.
-
-    Example
-    -------
-    create_binaries("data_", "./output_binaries")
-
-    Notes
-    -----
-    - This function relies on helper functions `get_prefixes` and
-      `_generate_binary_files`.
-    - Ensure that the necessary permissions are available to create
-      directories and files.
-    - Creates a directory for binary files if it doesn't exist.
-    - Converts identified FB TSV files to binary format.
-    - Prints messages about the creation process.
-
-    Dependencies
-    ------------
-    - get_prefixes: Function to get file prefixes.
-    - _generate_binary_files: Function to convert TSV files to binary format.
-    - os.makedirs: For creating directories.
+    FileNotFoundError
+        If no ``.fb.tsv`` files are found.
+    RuntimeError
+        If both ``<prefix>.fb.tsv`` and ``<prefix>.fb.tsv.gz`` exist, which
+        makes the binary name ambiguous.
+    OSError
+        On permission or I/O errors.
     """
-    try:
-        fn = get_prefixes(file_prefix, "rfmix", False)
-        if not fn:
-            raise FileNotFoundError(f"No files found with prefix: {file_prefix}")
+    fn = filter_file_maps_by_chrom(
+        get_prefixes(file_prefix, "rfmix", False), chrom, kind="RFMix"
+    )
 
-        fb_files = []
-        for f in fn:
-            fb_path = f["fb.tsv"]  # normalized key, may be plain or gzipped file
-            prefix = fb_path.replace(".fb.tsv.gz", "").replace(".fb.tsv", "")
+    fb_files = []
+    for f in fn:
+        fb_path = f["fb.tsv"]  # normalized key, may be plain or gzipped file
+        prefix = fb_path.replace(".fb.tsv.gz", "").replace(".fb.tsv", "")
+        if Path(f"{prefix}.fb.tsv").exists() and Path(f"{prefix}.fb.tsv.gz").exists():
+            raise RuntimeError(
+                f"Both compressed and uncompressed FB files found for prefix {prefix}"
+            )
+        fb_files.append(fb_path)
 
-            has_plain = Path(f"{prefix}.fb.tsv").exists()
-            has_gzip  = Path(f"{prefix}.fb.tsv.gz").exists()
-            if has_plain and has_gzip:
-                raise RuntimeError(
-                    f"Both compressed and uncompressed FB files found for prefix {prefix}"
-                )
-            fb_files.append(fb_path)
-
-        makedirs(binary_dir, exist_ok=True)
+    makedirs(binary_dir, exist_ok=True)
+    if verbose:
         print(f"Created binary files at: {binary_dir}")
-        _generate_binary_files(fb_files, binary_dir)
+    _generate_binary_files(fb_files, binary_dir, verbose=verbose)
+    if verbose:
         print(f"Successfully converted {len(fb_files)} files to binary format.")
-
-    except FileNotFoundError as e:
-        print(f"Error: {e}")
-    except PermissionError:
-        print(f"Error: Insufficient permissions to create directory: {binary_dir}")
-    except IOError as e:
-        print(f"Error during file conversion: {e}")
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")

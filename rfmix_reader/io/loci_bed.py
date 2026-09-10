@@ -5,7 +5,8 @@ from numpy import ndarray, full
 from multiprocessing import cpu_count
 from typing import List, Union, Tuple, TYPE_CHECKING
 
-from ..utils import get_pops, get_sample_names
+from ..utils import get_pops
+from ._layout import sample_id_list, to_2d
 from ..backends import (
     _configure_dask_backends,
     _select_array_backend,
@@ -14,6 +15,7 @@ from ..backends import (
 
 if TYPE_CHECKING:
     from dask.array import Array
+    from pandas import DataFrame
     import dask.dataframe as dd
 
 
@@ -47,8 +49,9 @@ def admix_to_bed_individual(
         sample IDs and population names.
 
     admix : Array
-        A Dask Array containing admixture proportions. The shape should be
-        compatible with the number of loci and populations.
+        Local ancestry array ``(loci, samples, ancestries)`` from any reader
+        (a 2-D sample-major ``(loci, samples * ancestries)`` array is also
+        accepted).
 
     sample_num : int
         Zero-based integer index of the sample to extract from ``g_anc``.
@@ -92,19 +95,14 @@ def admix_to_bed_individual(
     """
     _configure_dask_backends()
 
-    # Column annotations
-    pops = get_pops(g_anc)
-    sample_ids = get_sample_names(g_anc)
-    if sample_num < 0 or sample_num >= len(sample_ids):
-        raise IndexError(
-            f"sample_num {sample_num} is out of range "
-            f"[0, {len(sample_ids) - 1}]"
-        )
-    col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
-    sample_name = f"{sample_ids[sample_num]}"
+    # Column annotations; select the requested sample -> (loci, ancestries)
+    pops = list(get_pops(g_anc))
+    sample_ids = sample_id_list(g_anc)
+    matrix, col_names = to_2d(admix, g_anc, sample_idx=sample_num)
+    sample_name = sample_ids[sample_num]
 
     # Generate BED dataframe
-    ddf = _generate_bed(loci, admix, pops, col_names, sample_name, verbose,
+    ddf = _generate_bed(loci, matrix, pops, col_names, sample_name, verbose,
                         chunk_size, min_segment)
     return ddf.compute()
 
@@ -162,11 +160,15 @@ def _generate_bed(
     from dask.array import from_array
 
     # Check if the DataFrame and Dask array have the same number of rows
-    assert df.shape[0] == dask_matrix.shape[0], "DataFrame and Dask array must have the same number of rows"
+    if df.shape[0] != dask_matrix.shape[0]:
+        raise ValueError(
+            f"loci has {df.shape[0]} rows but admix has {dask_matrix.shape[0]}."
+        )
 
-    # Convert the DataFrame to a Dask DataFrame
-    parts = cpu_count()
-    ncols = dask_matrix.shape[1]
+    # Convert the DataFrame to a Dask DataFrame.  Never create more partitions
+    # than there are rows / chunk_size: empty partitions break dask indexing.
+    n_rows = int(df.shape[0])
+    parts = max(1, min(cpu_count(), -(-n_rows // max(int(chunk_size), 1))))
 
     df_mod = _get_dataframe_backend()
     use_gpu = df_mod.__name__ == "cudf"
@@ -186,11 +188,14 @@ def _generate_bed(
 
     # Subset for chromosome
     results = []
-    chromosomes = ddf["chromosome"].drop_duplicates().compute()
-    for chrom in tqdm(sorted(chromosomes), desc="Processing chromosomes",
+    chrom_counts = ddf["chromosome"].value_counts().compute()
+    chromosomes = [c for c in chrom_counts.index if chrom_counts[c] > 0]
+    for chrom in tqdm(sorted(chromosomes, key=str), desc="Processing chromosomes",
                       disable=not verbose):
         chrom_group = ddf[ddf['chromosome'] == chrom]
-        chrom_group = chrom_group.repartition(npartitions=parts)
+        n_chrom = int(chrom_counts[chrom])
+        chrom_parts = max(1, min(parts, -(-n_chrom // max(int(chunk_size), 1))))
+        chrom_group = chrom_group.repartition(npartitions=chrom_parts)
         results.append(_process_chromosome(chrom_group, sample_name, pops,
                                            chunk_size, min_segment))
 
@@ -287,7 +292,6 @@ def _process_chromosome(
                                                   data_matrix, change_indices,
                                                   len(pops))
     cnames = ['chromosome', 'start', 'end'] + sample_cols
-    import dask.dataframe as dd
     df_numeric = dd.from_dask_array(numeric_data, columns=cnames[1:])
     return df_numeric.assign(chromosome=chrom_val)[cnames]
 
@@ -323,7 +327,6 @@ def _find_intervals(data_matrix: Array, chunk_size: int,
     change_points = set([0])  # Always include start point
     # Process data in chunks with overlap to handle boundaries
     overlap = min_segment_length + 1
-    last_state = None
     for chunk_idx in range(n_chunks):
         # Calculate chunk boundaries
         start_idx = chunk_idx * chunk_size
@@ -351,8 +354,6 @@ def _find_intervals(data_matrix: Array, chunk_size: int,
                 if is_stable_change:
                     global_pos = start_idx + pos
                     change_points.add(global_pos)
-        # Save last state for next chunk comparison
-        last_state = tuple(chunk[-1])
     # Add final position
     change_points.add(n_positions - 1)
     return sorted(change_points)
