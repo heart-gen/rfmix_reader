@@ -42,3 +42,36 @@ def test_chr21_fb_counts_are_consistent(tmp_path, chr21_lfs):
     # and per haplotype, at most one population carries the mass
     b4 = X_raw[1000:1200].compute().reshape(200, -1, 2, 2)
     assert np.isin(b4.sum(axis=-1), [0.0, 1.0]).all()
+
+
+@pytest.mark.slow
+def test_chr21_fb_convert_matches_legacy(tmp_path, chr21_lfs):
+    """One streaming pass into Zarr; counts equal the legacy .bin path."""
+    import time
+
+    from rfmix_reader import open_local_ancestry, open_rfmix
+
+    t0 = time.time()
+    ds = open_rfmix(str(chr21_lfs), source="fb", cache_dir=tmp_path / "cache", verbose=False)
+    convert_s = time.time() - t0
+    assert (tmp_path / "cache" / "chr21.zarr").is_dir()
+
+    t0 = time.time()
+    lazy = open_local_ancestry(tmp_path / "cache")
+    open_s = time.time() - t0
+    assert open_s < 2.0, f"reopen took {open_s:.2f}s"
+    assert lazy.sizes["variant"] == ds.sizes["variant"] and lazy.la.n_samples == 500
+    assert lazy.la.ancestries == ["AFR", "EUR"]
+
+    legacy_loci, legacy_g, legacy_counts = read_rfmix_fb(
+        str(chr21_lfs), binary_dir=str(tmp_path / "bin"), generate_binary=True,
+        verbose=False, chunk=Chunk(nsamples=None, nloci=20_000),
+    )
+    np.testing.assert_array_equal(lazy.la.counts.values, legacy_counts.compute())
+    assert lazy.variant_position.values.tolist() == legacy_loci["physical_position"].tolist()
+    np.testing.assert_allclose(lazy.la.global_ancestry[["AFR", "EUR"]].to_numpy(),
+                               legacy_g[["AFR", "EUR"]].to_numpy(), atol=1e-5)
+
+    store_bytes = sum(p.stat().st_size for p in (tmp_path / "cache").rglob("*") if p.is_file())
+    print(f"\nchr21 fb -> zarr: convert {convert_s:.1f}s, reopen {open_s:.3f}s, "
+          f"store {store_bytes / 1e6:.1f} MB")

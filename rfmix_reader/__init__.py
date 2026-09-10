@@ -14,6 +14,7 @@ except PackageNotFoundError:
 # Public API
 __all__ = [
     "Chunk",
+    "open_rfmix", "open_flare", "open_simu", "open_local_ancestry", "convert",
     "read_fb", "read_simu", "read_rfmix", "read_rfmix_fb", "read_flare",
     "extract_locus_ancestry",
     "write_data",
@@ -32,6 +33,11 @@ __all__ = [
 # Map public names for lazy loading
 _lazy = {
     "Chunk": (".io.chunk", "Chunk"),
+    "open_rfmix": (".core.api", "open_rfmix"),
+    "open_flare": (".core.api", "open_flare"),
+    "open_simu": (".core.api", "open_simu"),
+    "open_local_ancestry": (".core.api", "open_local_ancestry"),
+    "convert": (".core.api", "convert"),
     "read_fb": (".readers.fb_read", "read_fb"),
     "read_simu": (".readers.read_simu", "read_simu"),
     "read_rfmix": (".readers.read_msp", "read_rfmix"),
@@ -80,6 +86,7 @@ def __dir__():
 # Make type checkers happy without importing heavy deps at runtime
 if TYPE_CHECKING:
     from .io.chunk import Chunk
+    from .core.api import convert, open_flare, open_local_ancestry, open_rfmix, open_simu
     from .processing.constants import CHROM_SIZES, COORDINATES
     from .io.errors import BinaryFileNotFoundError
     from .readers.fb_read import read_fb
