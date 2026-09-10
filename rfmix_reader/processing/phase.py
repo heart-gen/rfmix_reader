@@ -102,12 +102,18 @@ class PhasingConfig:
         If both references mismatch a window by more than this fraction of
         sites, the window is treated as uninformative (no strong evidence to
         flip).
+    posterior_margin : float, default 0.2
+        gnomix method only.  A window whose mean orientation score (see
+        :func:`gnomix_switch_mask`) has magnitude below this value is treated
+        as uninformative and inherits the state of the previous window.
+        Scores range from -2 (clearly swapped) to +2 (clearly in phase).
     verbose : bool, default False
         If True, prints basic diagnostics per sample / region.
     """
     window_size: int = 50
     min_block_len: int = 20
     max_mismatch_frac: float = 0.5
+    posterior_margin: float = 0.2
     verbose: bool = False
 
 
@@ -990,273 +996,446 @@ def phase_admix_sample_from_zarr_with_index(
     return admix_corr
 
 
+def gnomix_switch_mask_sample(
+    hap0: np.ndarray, hap1: np.ndarray, post0: Optional[np.ndarray],
+    post1: Optional[np.ndarray], config: Optional[PhasingConfig] = None,
+) -> np.ndarray:
+    """
+    gnomix-style switch-error detection for one sample (one chromosome).
+
+    Parameters
+    ----------
+    hap0, hap1 : (L,) int
+        Ancestry codes of the two haplotypes (``-1`` = missing).
+    post0, post1 : (L, A) float or None
+        Per-haplotype ancestry posteriors.  ``None`` uses one-hot codes (the
+        hard-call variant).
+    config : PhasingConfig
+
+    Returns
+    -------
+    swapped : (L,) bool
+        ``True`` where the two haplotypes are in the opposite orientation to
+        the start of their heterozygous block and must be exchanged.
+
+    Notes
+    -----
+    Heterozygous blocks are maximal runs where the two haplotypes carry
+    different ancestries and the unordered pair ``{a, b}`` is constant; blocks
+    shorter than ``config.min_block_len`` loci are left alone.  Within a block
+    with start orientation ``(a, b)`` every locus gets the score
+    ``(p0[a] + p1[b]) - (p0[b] + p1[a])``; the mean over windows of
+    ``config.window_size`` loci is positive when the current orientation
+    matches the block start and negative after a switch error.  Windows with
+    ``|mean| < config.posterior_margin`` are uninformative and inherit the
+    previous window's state.  Swapping every window in the "switched" state
+    is equivalent to gnomix's successive tail flips at each change point.
+    """
+    config = config or PhasingConfig()
+    hap0 = np.asarray(hap0).astype(np.int64)
+    hap1 = np.asarray(hap1).astype(np.int64)
+    L = hap0.shape[0]
+    swapped = np.zeros(L, dtype=bool)
+    if L == 0:
+        return swapped
+
+    valid = (hap0 >= 0) & (hap1 >= 0)
+    het = valid & (hap0 != hap1)
+    if not het.any():
+        return swapped
+    n_anc = int(max(hap0.max(), hap1.max())) + 1
+    if post0 is None or post1 is None:
+        eye = np.eye(n_anc, dtype=np.float32)
+        post0 = eye[np.clip(hap0, 0, n_anc - 1)]
+        post1 = eye[np.clip(hap1, 0, n_anc - 1)]
+    post0 = np.asarray(post0, dtype=np.float32)
+    post1 = np.asarray(post1, dtype=np.float32)
+    n_anc = post0.shape[1]
+
+    lo = np.minimum(hap0, hap1)
+    hi = np.maximum(hap0, hap1)
+    key = np.where(het, lo * n_anc + hi, -1)
+    boundaries = np.flatnonzero(key[1:] != key[:-1]) + 1
+    starts = np.concatenate([[0], boundaries])
+    stops = np.concatenate([boundaries, [L]])
+
+    W = int(config.window_size)
+    for s0, s1 in zip(starts, stops):
+        if key[s0] < 0 or (s1 - s0) < config.min_block_len:
+            continue
+        a, b = int(hap0[s0]), int(hap1[s0])
+        score = (post0[s0:s1, a] + post1[s0:s1, b]) - (post0[s0:s1, b] + post1[s0:s1, a])
+        n = s1 - s0
+        n_win = -(-n // W)
+        padded = np.full(n_win * W, np.nan, dtype=np.float32)
+        padded[:n] = score
+        means = np.nanmean(padded.reshape(n_win, W), axis=1)
+        informative = np.abs(means) >= config.posterior_margin
+        state = np.zeros(n_win, dtype=bool)
+        current = False
+        for w in range(n_win):
+            if informative[w]:
+                current = bool(means[w] < 0)
+            state[w] = current
+        swapped[s0:s1] = np.repeat(state, W)[:n]
+    return swapped
+
+
+def _swap_block(hap_block: np.ndarray, post_block: Optional[np.ndarray],
+                config: PhasingConfig) -> np.ndarray:
+    """map_blocks kernel: (L, s, 2) codes [+ (L, s, 2, A) posteriors] -> (L, s) bool."""
+    hap_block = np.asarray(hap_block)
+    out = np.zeros(hap_block.shape[:2], dtype=bool)
+    for j in range(hap_block.shape[1]):
+        p0 = p1 = None
+        if post_block is not None:
+            p0 = np.asarray(post_block[:, j, 0, :])
+            p1 = np.asarray(post_block[:, j, 1, :])
+        out[:, j] = gnomix_switch_mask_sample(hap_block[:, j, 0], hap_block[:, j, 1], p0, p1, config)
+    return out
+
+
+def gnomix_switch_mask(hap, posterior=None, *, config: Optional[PhasingConfig] = None) -> "DaskArray":
+    """
+    Lazy ``(L, S)`` boolean mask of loci whose haplotypes must be exchanged,
+    computed per sample from ``(L, S, 2)`` codes and optional ``(L, S, 2, A)``
+    posteriors with :func:`gnomix_switch_mask_sample`.
+    """
+    import dask.array as da
+
+    config = config or PhasingConfig()
+    hap = da.asarray(hap)
+    L = hap.shape[0]
+    hap1 = hap.rechunk((L, 1, 2))
+    if posterior is None:
+        return da.blockwise(
+            _swap_block, "ls", hap1, "lsp", None, None, config, None,
+            dtype=bool, concatenate=True,
+        )
+    post = da.asarray(posterior).rechunk((L, 1, 2, posterior.shape[3]))
+    return da.blockwise(
+        _swap_block, "ls", hap1, "lsp", post, "lspa", config, None,
+        dtype=bool, concatenate=True,
+    )
+
+
+def _apply_swaps(hap, swapped, posterior=None):
+    """Exchange the two haplotypes (codes and posteriors) where ``swapped``."""
+    import dask.array as da
+
+    hap = da.asarray(hap)
+    # align the (one sample per block) mask with the data's chunking so the
+    # result keeps the data's block structure
+    swapped = da.asarray(swapped).rechunk((hap.chunks[0], hap.chunks[1]))
+    codes = da.where(swapped[:, :, None], hap[:, :, ::-1], hap).astype(np.int8)
+    if posterior is None:
+        return codes, None
+    post = da.asarray(posterior)
+    post_c = da.where(swapped[:, :, None, None], post[:, :, ::-1, :], post).astype(np.float32)
+    return codes, post_c
+
+
+def phase_haplotypes(
+    hap: "DaskArray | np.ndarray", positions: Optional[np.ndarray] = None,
+    chrom: Optional[str] = None, ref_zarr_root: Optional[str] = None,
+    sample_annot_path: Optional[str] = None, config: Optional[PhasingConfig] = None,
+    groups: Optional[list[str]] = None, hap_index_in_zarr: int = 0,
+    refs: Optional[np.ndarray] = None, *, method: str = "gnomix",
+    posterior=None,
+) -> "DaskArray":
+    """
+    Phase-correct ``(L, S, 2)`` haplotype ancestry codes for every sample.
+
+    Parameters
+    ----------
+    method : {"gnomix", "reference"}
+        ``"gnomix"`` (default) detects switch errors from the two haplotypes'
+        own ancestry posteriors (``posterior``, ``(L, S, 2, A)``; one-hot codes
+        when absent) — no reference panel needed.  ``"reference"`` is the
+        previous implementation that matches ancestry labels against
+        reference-panel *allele* codes (``ref_zarr_root``/``sample_annot_path``
+        required); it is kept for comparison only, see the note.
+    posterior : array, optional
+        Per-haplotype posteriors for ``method="gnomix"``.
+
+    .. note::
+       The ``"reference"`` matcher compares ancestry labels against allele codes
+       (see :func:`build_reference_haplotypes_from_zarr`), which is only
+       meaningful when the two code spaces coincide.  Prefer ``"gnomix"``.
+
+    Returns
+    -------
+    dask.array.Array, int8, ``(L, S, 2)``
+    """
+    import dask.array as da
+
+    config = config or PhasingConfig()
+    hap = da.asarray(hap)
+    if hap.ndim != 3 or hap.shape[2] != 2:
+        raise ValueError(f"hap must be (L, S, 2); got {hap.shape}.")
+    L, n_samples, _ = hap.shape
+
+    if method == "gnomix":
+        swapped = gnomix_switch_mask(hap, posterior, config=config)
+        codes, _ = _apply_swaps(hap, swapped, None)
+        return codes
+    if method != "reference":
+        raise ValueError("method must be 'gnomix' or 'reference'.")
+
+    if positions is None:
+        raise ValueError("positions are required for method='reference'.")
+    positions = np.asarray(positions, dtype=np.int64)
+    if positions.shape[0] != L:
+        raise ValueError("positions must have length L.")
+    if refs is None:
+        if ref_zarr_root is None or sample_annot_path is None or chrom is None:
+            raise ValueError("ref_zarr_root, sample_annot_path and chrom are required "
+                             "for method='reference'.")
+        refs, group_labels, _stats = build_reference_haplotypes_from_zarr(
+            zarr_root=ref_zarr_root, annot_path=sample_annot_path, chrom=chrom,
+            positions=positions, groups=groups, hap_index_in_zarr=hap_index_in_zarr,
+        )
+        if config.verbose:
+            logger.info("[phase_haplotypes] Using groups: %s", ", ".join(group_labels))
+    refs = _to_numpy_array(refs)
+    if refs.shape[1] != L:
+        raise ValueError("Reference haplotypes do not match the number of loci.")
+
+    def _phase_block(block: np.ndarray) -> np.ndarray:
+        block = np.asarray(block)
+        out = np.empty_like(block, dtype=np.int8)
+        for s in range(block.shape[1]):
+            h0, h1 = phase_local_ancestry_sample(block[:, s, 0], block[:, s, 1], refs, config)
+            out[:, s, 0] = h0
+            out[:, s, 1] = h1
+        return out
+
+    per_sample = hap.rechunk((L, 1, 2))
+    return da.map_blocks(_phase_block, per_sample, dtype=np.int8, chunks=per_sample.chunks)
+
+
+def phase_dataset(
+    ds: "xr.Dataset", ref_zarr_root: Optional[str] = None,
+    sample_annot_path: Optional[str] = None, *, method: str = "gnomix",
+    config: Optional[PhasingConfig] = None, groups: Optional[list[str]] = None,
+    hap_index_in_zarr: int = 0,
+) -> "xr.Dataset":
+    """
+    Phase-correct a local-ancestry Dataset (one chromosome).
+
+    Returns a new Dataset whose ``haplotype_ancestry`` (and ``posterior``, when
+    present) carry the corrected orientation, plus a boolean
+    ``phase_swapped (variant, sample)`` variable marking the exchanged loci.
+
+    Parameters
+    ----------
+    method : {"gnomix", "reference"}
+        See :func:`phase_haplotypes`.  ``"gnomix"`` uses ``ds.la.posterior``
+        when the Dataset has posteriors (``open_rfmix(source="fb",
+        keep_posteriors=True)``) and one-hot codes otherwise.
+    """
+    from ..core import schema as S
+
+    chroms = list(dict.fromkeys(str(c) for c in ds[S.CHROMOSOME].values))
+    if len(chroms) != 1:
+        raise ValueError(
+            f"phase_dataset expects a single chromosome; got {chroms}. "
+            "Use ds.la.sel_region(chrom) first."
+        )
+    config = config or PhasingConfig()
+    hap = ds[S.HAPLOTYPE_ANCESTRY].data
+    post = ds[S.POSTERIOR].data if S.POSTERIOR in ds else None
+
+    if method == "gnomix":
+        import dask.array as da
+        swapped = gnomix_switch_mask(hap, post, config=config)
+        swapped = swapped.rechunk((da.asarray(hap).chunks[0], da.asarray(hap).chunks[1]))
+        codes, post_c = _apply_swaps(hap, swapped, post)
+    elif method == "reference":
+        positions = np.asarray(ds[S.VARIANT_POSITION].values, dtype=np.int64)
+        codes = phase_haplotypes(
+            hap, positions, chroms[0], ref_zarr_root, sample_annot_path, config=config,
+            groups=groups, hap_index_in_zarr=hap_index_in_zarr, method="reference",
+        )
+        swapped = (codes[:, :, 0] != hap[:, :, 0]) & (hap[:, :, 0] >= 0)
+        post_c = _apply_swaps(hap, swapped, post)[1] if post is not None else None
+    else:
+        raise ValueError("method must be 'gnomix' or 'reference'.")
+
+    new_vars = {S.HAPLOTYPE_ANCESTRY: ((S.VARIANT, S.SAMPLE, S.PLOIDY), codes),
+                "phase_swapped": ((S.VARIANT, S.SAMPLE), swapped)}
+    if post_c is not None:
+        new_vars[S.POSTERIOR] = ((S.VARIANT, S.SAMPLE, S.PLOIDY, S.ANCESTRY), post_c)
+    out = ds.assign(new_vars)
+    out.attrs = dict(ds.attrs)
+    out.attrs["phased"] = True
+    out.attrs["phasing_method"] = method
+    return out
+
+
 def phase_admix_dask_with_index(
-    admix: DaskArray,  # (L, S, A) summed counts
-    X_raw: DaskArray | np.ndarray,  # (L, n_cols) raw RFMix matrix
+    admix: "DaskArray",  # (L, S, A) summed counts
+    X_raw: "DaskArray | np.ndarray",  # (L, n_cols) raw RFMix matrix
     positions: np.ndarray,  # (L,)
     chrom: str, ref_zarr_root: str, sample_annot_path: str,
     config: PhasingConfig, groups: Optional[list[str]] = None,
     hap_index_in_zarr: int = 0,
-) -> DaskArray:
+) -> "DaskArray":
     """
-    Phase-correct all samples in a ``(L, S, A)`` admix Dask array.
+    Deprecated: phase-correct from the raw RFMix matrix and return **counts**.
 
-    Rechunks so each block covers one sample, then applies
-    :func:`phase_admix_sample_from_zarr_with_index` via ``map_blocks``. Reference
-    haplotypes are constructed once and reused across all samples.
-
-    Returns
-    -------
-    admix_corr : (L, S, A) dask.array.Array
-        Phase-corrected local ancestry counts.
+    Diploid counts are invariant to haplotype flips, so this function's output
+    equals its ``admix`` input; it is kept only for backwards compatibility.
+    Use :func:`phase_haplotypes` / :func:`phase_dataset` to obtain the
+    corrected haplotype codes.
     """
+    import warnings
     import dask.array as da
 
+    warnings.warn(
+        "phase_admix_dask_with_index returns summed counts, which do not change "
+        "under phasing; use phase_haplotypes / phase_dataset for haplotype codes.",
+        DeprecationWarning, stacklevel=2,
+    )
     if not isinstance(admix, da.Array):
         raise TypeError("admix must be a dask.array.Array")
-
-    if isinstance(X_raw, da.Array):
-        n_loci, n_cols = X_raw.shape
-        X_raw = X_raw.rechunk((n_loci, min(64, n_cols)))
-
     n_loci, n_samples, n_anc = admix.shape
-    admix_single_sample = admix.rechunk((n_loci, 1, n_anc))
-    positions = np.asarray(positions, dtype=np.int64)
-
-    refs, group_labels, _match_stats = build_reference_haplotypes_from_zarr(
-        zarr_root=ref_zarr_root,
-        annot_path=sample_annot_path,
-        chrom=chrom,
-        positions=positions,
-        groups=groups,
-        hap_index_in_zarr=hap_index_in_zarr,
+    X = da.asarray(X_raw).rechunk((min(n_loci, 20_000), n_samples * 2 * n_anc))
+    codes = da.map_blocks(
+        lambda b: _codes_from_posterior_block(b, n_samples, n_anc), X, dtype=np.int8,
+        new_axis=2, chunks=(X.chunks[0], (n_samples,), (2,)),
+    )
+    phased = phase_haplotypes(codes, positions, chrom, ref_zarr_root, sample_annot_path,
+                              config=config, groups=groups, hap_index_in_zarr=hap_index_in_zarr,
+                              method="reference")
+    return da.map_blocks(
+        lambda b: _combine_block(b, n_anc), phased, dtype=np.int8,
+        chunks=(phased.chunks[0], phased.chunks[1], (n_anc,)),
     )
 
-    if config.verbose:
-        logger.info(
-            "[phase_admix_dask_with_index] Using groups: %s",
-            ", ".join(group_labels),
-        )
 
-    def _phase_block(admix_block: np.ndarray, block_info=None) -> np.ndarray:
-        """Phase a single Dask block."""
-        admix_block = _to_numpy_array(admix_block)
-        info = block_info[0]
-        chunk_loc = info["chunk-location"]
-        sample_block_idx = chunk_loc[1]
+def _codes_from_posterior_block(block: np.ndarray, n_samples: int, n_anc: int) -> np.ndarray:
+    b4 = np.asarray(block).reshape(block.shape[0], n_samples, 2, n_anc)
+    codes = b4.argmax(axis=-1).astype(np.int8)
+    codes[~(b4 > 0).any(axis=-1)] = -1
+    return codes
 
-        block_sample_size = admix_block.shape[1]
-        sample_start = sample_block_idx * block_sample_size
-        sample_stop = sample_start + block_sample_size
 
-        sample_indices = range(sample_start, sample_stop)
-        phased_block = np.empty_like(admix_block, dtype=np.int8)
-        for offset, sample_idx in enumerate(sample_indices):
-            phased_block[:, offset, :] = phase_admix_sample_from_zarr_with_index(
-                admix_sample=admix_block[:, offset, :], X_raw=X_raw,
-                sample_idx=sample_idx, n_samples=n_samples, positions=positions,
-                chrom=chrom, ref_zarr_root=ref_zarr_root,
-                sample_annot_path=sample_annot_path, config=config, refs=refs,
-                groups=groups, hap_index_in_zarr=hap_index_in_zarr,
-            )
+def _combine_block(block: np.ndarray, n_anc: int) -> np.ndarray:
+    from ..readers._common import counts_from_hap_codes
 
-        return phased_block
-
-    phased = da.map_blocks(
-        _phase_block, admix_single_sample, dtype=np.int8,
-        chunks=admix_single_sample.chunks,
-    )
-
-    return phased
+    return counts_from_hap_codes(block[..., 0], block[..., 1], n_anc)
 
 
 def phase_rfmix_chromosome_to_zarr(
-    file_prefix: str, ref_zarr_root: str, sample_annot_path: str,
+    file_prefix: str, ref_zarr_root: Optional[str], sample_annot_path: Optional[str],
     output_path: str, *, chrom: Optional[str] = None,
     groups: Optional[list[str]] = None,
     config: Optional[PhasingConfig] = None,
     hap_index_in_zarr: int = 0,
-    binary_dir: str = "./binary_files",
-    generate_binary: bool = False,
+    method: str = "gnomix",
+    source: str = "fb",
+    keep_posteriors: bool = True,
+    cache_dir: Optional[str] = None,
     verbose: bool = True,
+    binary_dir: Optional[str] = None,
+    generate_binary: Optional[bool] = None,
 ) -> xr.Dataset:
     """
-    Phase local ancestry for a single chromosome and write to a Zarr store.
+    Phase local ancestry for a single chromosome and write a Zarr store.
 
-    This is a convenience wrapper around :func:`read_rfmix` and
-    :func:`phase_admix_dask_with_index` that keeps processing per chromosome and
-    serializes the phased local ancestry as an :class:`xarray.Dataset` with
-    coordinates for positions, samples, ancestries, and chromosome labels.
+    The store follows :mod:`rfmix_reader.core.schema` (``haplotype_ancestry``
+    holds the corrected codes) and can be reopened with
+    :func:`rfmix_reader.open_local_ancestry`.
 
     Parameters
     ----------
     file_prefix
-        Prefix pointing to the RFMix outputs (``*.fb.tsv`` / ``*.rfmix.Q``).
-    ref_zarr_root
-        Path to a reference VCF-Zarr store (or directory of per-chromosome
-        stores).
-    sample_annot_path
-        Two-column TSV mapping ``sample_id`` to reference group label.
+        RFMix outputs (directory, file or prefix).
+    ref_zarr_root, sample_annot_path
+        Reference VCF-Zarr store(s) and the ``sample_id``/``group`` table;
+        only used (and required) by ``method="reference"``.
     output_path
-        Destination Zarr store to write.
+        Destination Zarr store.
+    method
+        ``"gnomix"`` (default, posterior-based) or ``"reference"``.
+    keep_posteriors
+        ``source="fb"`` only: read the posteriors so the gnomix method can
+        use them (recommended).
     chrom
-        Optional chromosome label to restrict which files are read.
-    groups
-        Optional subset of reference groups to include.
-    config
-        Optional :class:`PhasingConfig` instance controlling phasing
-        parameters. Defaults to :class:`PhasingConfig()`.
-    hap_index_in_zarr
-        Which haplotype to read from the reference VCF-Zarr store (``0`` or
-        ``1``).
-    binary_dir
-        Directory containing RFMix binary caches.
-    generate_binary
-        If :data:`True`, generate the binary caches prior to reading.
-    verbose
-        Control progress reporting when invoking :func:`read_rfmix`.
-
-    Returns
-    -------
-    xarray.Dataset
-        Dataset containing a ``local_ancestry`` variable with dimensions
-        ``(variant, sample, ancestry)`` written to ``output_path``.
+        Chromosome to phase; required when ``file_prefix`` holds several.
+    source
+        ``"fb"`` (default) or ``"msp"``.
+    cache_dir
+        Optional cache for the unphased Dataset (see :func:`open_rfmix`).
+    binary_dir, generate_binary
+        Ignored; kept for backwards compatibility with the ``.bin`` workflow.
     """
-    from ..readers.read_rfmix import read_rfmix_fb
+    from ..core.api import open_rfmix
 
+    if binary_dir is not None or generate_binary is not None:
+        logger.warning("binary_dir/generate_binary are ignored; the Dataset reader streams "
+                       "the source directly (use cache_dir to persist it).")
     config = config or PhasingConfig()
+    logger.info("[phase_rfmix_chromosome_to_zarr] Starting phasing for chrom=%s into %s",
+                chrom if chrom is not None else "all", output_path)
 
-    logger.info(
-        "[phase_rfmix_chromosome_to_zarr] Starting phasing for chrom=%s into %s",
-        chrom if chrom is not None else "all",
-        output_path,
-    )
+    ds = open_rfmix(file_prefix, source=source, chrom=chrom, cache_dir=cache_dir,
+                    keep_posteriors=(keep_posteriors and source == "fb"), verbose=verbose)
+    chroms = ds.la.chromosomes
+    if len(chroms) != 1:
+        raise ValueError("Phasing per chromosome expects a single chromosome in the input.")
+    logger.info("[phase_rfmix_chromosome_to_zarr] Loaded %d variants across %d samples",
+                ds.la.n_variants, ds.la.n_samples)
 
-    loci_df, g_anc, admix, X_raw = read_rfmix_fb(
-        file_prefix,
-        binary_dir=binary_dir,
-        generate_binary=generate_binary,
-        verbose=verbose,
-        return_original=True,
-        chrom=chrom,
-    )
+    phased = phase_dataset(ds, ref_zarr_root, sample_annot_path, method=method, config=config,
+                           groups=groups, hap_index_in_zarr=hap_index_in_zarr)
+    logger.info("[phase_rfmix_chromosome_to_zarr] Writing phased data to %s", output_path)
+    _write_schema_zarr(phased, output_path)
+    return phased
 
-    loci_df = _to_pandas_dataframe(loci_df)
-    g_anc = _to_pandas_dataframe(g_anc)
 
-    chrom_labels = loci_df["chromosome"].astype(str).unique()
-    if len(chrom_labels) != 1:
-        raise ValueError(
-            "Phasing per chromosome expects a single chromosome in the input."
-        )
-
-    chrom_label = str(chrom_labels[0])
-    positions = _series_to_array(loci_df["physical_position"])
-
-    pops = g_anc.drop(["sample_id", "chrom"], axis=1).columns.values
-    sample_ids = g_anc["sample_id"].tolist()
-
-    logger.info(
-        "[phase_rfmix_chromosome_to_zarr] Loaded %d variants across %d samples",
-        positions.size,
-        len(sample_ids),
-    )
-
-    phased = phase_admix_dask_with_index(
-        admix=admix,
-        X_raw=X_raw,
-        positions=positions,
-        chrom=chrom_label,
-        ref_zarr_root=ref_zarr_root,
-        sample_annot_path=sample_annot_path,
-        config=config,
-        groups=groups,
-        hap_index_in_zarr=hap_index_in_zarr,
-    )
-
-    dataset = xr.Dataset(
-        {
-            "local_ancestry": xr.DataArray(
-                phased,
-                dims=("variant", "sample", "ancestry"),
-                coords={
-                    "variant_position": ("variant", positions),
-                    "chromosome": ("variant", loci_df["chromosome"].astype(str)),
-                    "sample_id": ("sample", sample_ids),
-                    "ancestry": ("ancestry", pops),
-                },
-                name="local_ancestry",
-            )
-        }
-    )
-
-    logger.info(
-        "[phase_rfmix_chromosome_to_zarr] Writing phased data to %s", output_path
-    )
-    dataset.to_zarr(output_path, mode="w")
-    return dataset
+def _write_schema_zarr(ds: xr.Dataset, output_path: str) -> None:
+    """Write a schema Dataset with ``to_zarr`` (string coords as variable-length UTF-8)."""
+    out = ds.copy()
+    for name in list(out.coords) + list(out.data_vars):
+        var = out[name]
+        var.encoding.pop("chunks", None)
+        var.encoding.pop("preferred_chunks", None)
+        if var.dtype.kind in ("U", "O"):
+            values = np.array([str(v) for v in np.asarray(var.values).tolist()], dtype=object)
+            out = out.assign_coords({name: (var.dims, values)}) if name in out.coords \
+                else out.assign({name: (var.dims, values)})
+    out.to_zarr(output_path, mode="w", consolidated=False)
 
 
 def merge_phased_zarrs(
     chrom_zarr_paths: List[str], output_path: str, *, sort: bool = True
 ) -> xr.Dataset:
     """
-    Merge per-chromosome phased Zarr outputs along the variant axis.
+    Merge per-chromosome phased Zarr stores (schema Datasets) along ``variant``.
 
     Parameters
     ----------
     chrom_zarr_paths
-        List of paths to per-chromosome phased Zarr stores generated by
-        :func:`phase_rfmix_chromosome_to_zarr`.
+        Stores written by :func:`phase_rfmix_chromosome_to_zarr`.
     output_path
-        Destination Zarr store for the merged dataset.
+        Destination Zarr store for the merged Dataset.
     sort
-        If :data:`True`, sort by ``chromosome`` then ``variant_position`` after
-        concatenation.
-
-    Returns
-    -------
-    xarray.Dataset
-        Combined dataset written to ``output_path``.
+        Sort the stores by chromosome before concatenating.
     """
-    logger.info(
-        "[merge_phased_zarrs] Opening %d per-chromosome Zarr stores",
-        len(chrom_zarr_paths),
-    )
+    from ..core import schema as S
+    from ..core.zarr_io import open_store
+    from ..utils import _chrom_sort_key
 
-    datasets = [xr.open_zarr(Path(p)) for p in chrom_zarr_paths]
-
-    if not datasets:
+    if not chrom_zarr_paths:
         raise ValueError("No Zarr paths provided for merging.")
-
-    sample_ids = [tuple(ds.sample_id.values.tolist()) for ds in datasets]
-    if len(set(sample_ids)) != 1:
-        raise ValueError("Sample sets differ across per-chromosome Zarr stores.")
-
-    ancestry_labels = [tuple(ds.ancestry.values.tolist()) for ds in datasets]
-    if len(set(ancestry_labels)) != 1:
-        raise ValueError("Ancestry labels differ across per-chromosome Zarr stores.")
-
-    combined = xr.concat(datasets, dim="variant")
+    logger.info("[merge_phased_zarrs] Opening %d per-chromosome Zarr stores", len(chrom_zarr_paths))
+    paths = [Path(p) for p in chrom_zarr_paths]
     if sort:
-        combined = combined.sortby(["chromosome", "variant_position"])
-
-    for v in combined.variables:
-        var = combined[v]
-        var.encoding.pop("chunks", None)
-        if var.dtype == object:
-            combined[v] = var.astype("S50")
-
-    # Ensure string coordinates are encoded consistently when writing to Zarr.
-    for coord in ("chromosome", "sample_id", "ancestry"):
-        if coord in combined.coords:
-            combined = combined.assign_coords({coord: combined[coord].astype(str)})
-
-    logger.info(
-        "[merge_phased_zarrs] Writing merged dataset with %d variants to %s",
-        combined.sizes.get("variant", 0),
-        output_path,
-    )
-    combined = combined.chunk({"variant": 50000})
-    combined.to_zarr(output_path, mode="w")
+        paths = sorted(paths, key=lambda p: _chrom_sort_key(p.stem))
+    combined = S.concat_datasets([open_store(p) for p in paths])
+    logger.info("[merge_phased_zarrs] Writing merged dataset with %d variants to %s",
+                combined.sizes.get(S.VARIANT, 0), output_path)
+    _write_schema_zarr(combined, output_path)
     return combined

@@ -126,6 +126,49 @@ class LocalAncestryAccessor:
             mask &= pos <= int(end)
         return self._ds.isel({S.VARIANT: np.flatnonzero(mask)})
 
+    # ------------------------------------------------------------ operations
+    def to_bed(self, sample, *, min_segment: int = 1) -> pd.DataFrame:
+        """Constant-ancestry intervals for one sample (see :func:`ops.bed.to_bed`)."""
+        from ..ops.bed import to_bed
+
+        return to_bed(self._ds, sample, min_segment=min_segment)
+
+    def to_tagore(self, sample, *, palette: str = "tab10", min_segment: int = 1) -> pd.DataFrame:
+        """TAGORE-annotated BED for one sample (see :func:`ops.tagore.to_tagore`)."""
+        from ..ops.tagore import to_tagore
+
+        return to_tagore(self._ds, sample, palette=palette, min_segment=min_segment)
+
+    def at_positions(self, loci: pd.DataFrame, **kwargs) -> pd.DataFrame:
+        """Ancestry at listed positions (see :func:`ops.positions.at_positions`)."""
+        from ..ops.positions import at_positions
+
+        return at_positions(self._ds, loci, **kwargs)
+
+    def to_parquet(self, outdir, **kwargs):
+        """Stream counts to Parquet per chromosome (see :func:`ops.parquet.to_parquet`)."""
+        from ..ops.parquet import to_parquet
+
+        return to_parquet(self._ds, outdir, **kwargs)
+
+    def interpolate(self, variants: pd.DataFrame, zarr_outdir, **kwargs) -> xr.DataArray:
+        """Interpolate onto a variant grid (see :func:`ops.interpolate.interpolate`)."""
+        from ..ops.interpolate import interpolate
+
+        return interpolate(self._ds, variants, zarr_outdir, **kwargs)
+
+    def phase(self, ref_zarr_root: Optional[str] = None, sample_annot_path: Optional[str] = None,
+              **kwargs) -> xr.Dataset:
+        """
+        Phase-correct haplotype codes (see :func:`processing.phase.phase_dataset`).
+
+        The default ``method="gnomix"`` needs no reference panel; it uses
+        ``ds.la.posterior`` when present.
+        """
+        from ..processing.phase import phase_dataset
+
+        return phase_dataset(self._ds, ref_zarr_root, sample_annot_path, **kwargs)
+
     # ---------------------------------------------------------------- legacy
     def to_legacy(self) -> Tuple[pd.DataFrame, Optional[pd.DataFrame], "da.Array"]:
         """

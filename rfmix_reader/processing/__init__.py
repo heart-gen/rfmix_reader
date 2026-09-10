@@ -16,6 +16,9 @@ __all__ = [
     "phase_admix_dask_with_index",
     "phase_rfmix_chromosome_to_zarr",
     "merge_phased_zarrs",
+    "phase_dataset",
+    "phase_haplotypes",
+    "gnomix_switch_mask",
 ]
 
 _lazy = {
@@ -24,6 +27,9 @@ _lazy = {
     "phase_admix_dask_with_index": (".phase", "phase_admix_dask_with_index"),
     "phase_rfmix_chromosome_to_zarr": (".phase", "phase_rfmix_chromosome_to_zarr"),
     "merge_phased_zarrs": (".phase", "merge_phased_zarrs"),
+    "phase_dataset": (".phase", "phase_dataset"),
+    "phase_haplotypes": (".phase", "phase_haplotypes"),
+    "gnomix_switch_mask": (".phase", "gnomix_switch_mask"),
 }
 
 
