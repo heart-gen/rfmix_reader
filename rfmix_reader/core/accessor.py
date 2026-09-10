@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from ..readers._common import counts_from_hap_codes
+from .codes import counts_from_hap_codes
 from . import schema as S
 
 if TYPE_CHECKING:
@@ -114,10 +114,10 @@ class LocalAncestryAccessor:
     def sel_region(self, chrom: str, start: Optional[int] = None,
                    end: Optional[int] = None) -> xr.Dataset:
         """Variants on ``chrom`` with ``start <= position <= end`` (inclusive)."""
-        from ..utils import _normalize_chrom_label
+        from ..formats.common import normalize_chrom_label
 
-        target = _normalize_chrom_label(str(chrom))
-        labels = np.array([_normalize_chrom_label(str(c)) for c in self._ds[S.CHROMOSOME].values])
+        target = normalize_chrom_label(str(chrom))
+        labels = np.array([normalize_chrom_label(str(c)) for c in self._ds[S.CHROMOSOME].values])
         mask = labels == target
         pos = self._ds[S.VARIANT_POSITION].values
         if start is not None:

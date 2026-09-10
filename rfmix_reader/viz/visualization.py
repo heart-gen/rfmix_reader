@@ -5,12 +5,9 @@ import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
 from typing import Tuple, Union, List, Optional, TYPE_CHECKING
 
-from ..io.loci_bed import admix_to_bed_individual
-from ..utils import get_pops
 from ..backends import _configure_dask_backends
 
 if TYPE_CHECKING:
-    from dask.array import Array
     from pandas import DataFrame
 
 
@@ -46,7 +43,7 @@ def plot_global_ancestry(
     sort_by : Optional[str], optional
         Ancestry column name to sort individuals by (default: None)
 
-    **kwargs : dict
+    \*\*kwargs : dict
         Additional arguments passed to save_multi_format()
 
     Example:
@@ -140,7 +137,7 @@ def plot_ancestry_by_chromosome(
         Base filename for saving plots (without extension). If None, shows
         interactive plot. (default: "chromosome_summary")
 
-    **kwargs : dict
+    \*\*kwargs : dict
         Additional arguments passed to save_multi_format()
 
     Example:
@@ -166,61 +163,6 @@ def plot_ancestry_by_chromosome(
         plt.show()
 
 
-def generate_tagore_bed(
-        loci: DataFrame, g_anc: DataFrame, admix: Array, sample_num: int,
-        palette: str = "tab10", chunk_size: int = 10_000, min_segment: int = 3,
-        verbose: bool = True
-) -> DataFrame:
-    """
-    Generate a BED (Browser Extensible Data) file formatted for TAGORE
-    visualization.
-
-    This function processes genomic data and creates a BED file suitable for
-    visualization with TAGORE (https://github.com/jordanlab/tagore).
-
-    Parameters:
-    -----------
-    loci : DataFrame
-        A DataFrame containing genomic loci information.
-    g_anc : DataFrame
-        A DataFrame containing recombination fraction quantiles.
-    admix : dask.Array
-        An array of admixture proportions.
-    sample_num : int
-        The sample number to process.
-    palette : str, optional
-        Colormap name (matplotlib colormap) Default: 'tab10'.
-    chunk_size : int, optional
-        Size of chunks to process at once (default=10_000).
-        Adjust based on available memory.
-    min_segment : int, optional
-        Minimum length of a segment to consider it a true change (default=3).
-    verbose : bool, optional
-        If True, print progress information. Defaults to True.
-
-    Returns:
-    --------
-    DataFrame: A DataFrame in BED format, annotated and ready for TAGORE
-               visualization.
-
-    Note:
-    -----
-        This function relies on several helper functions:
-        - admix_to_bed_individual: Converts admixture data to BED format for a
-                                   specific individual.
-        - _string_to_int: Converts specific columns in the BED DataFrame to
-                          integer type (interal function).
-        - _annotate_tagore: Adds annotation columns required for TAGORE
-                            visualization (internal function).
-    """
-    _configure_dask_backends()
-    pops = get_pops(g_anc)
-    bed = admix_to_bed_individual(loci, g_anc, admix, sample_num,
-                                  chunk_size, min_segment, verbose)
-    sample_cols = bed.columns[3:]
-    return _annotate_tagore(bed, sample_cols, pops, palette)
-
-
 def save_multi_format(filename: str, formats: Tuple[str, ...] = ('png', 'pdf'),
                       **kwargs) -> None:
     """
@@ -234,7 +176,7 @@ def save_multi_format(filename: str, formats: Tuple[str, ...] = ('png', 'pdf'),
     formats : Tuple[str, ...], optional
         File extensions to save (default: ('png', 'pdf'))
 
-    **kwargs : dict
+    \*\*kwargs : dict
         Additional arguments passed to plt.savefig()
     """
     for fmt in formats:
@@ -318,7 +260,7 @@ def _expand_dataframe(df: DataFrame, sample_cols: List[str],
     sample name column.
 
     Parameters:
-    ----------
+    -----------
         df (DataFrame): The input dataframe to be expanded.
         sample_cols (list of str): Columns ``<sample>_<pop>`` to expand.
         pops (list of str, optional): Population labels; used to split the
@@ -326,7 +268,7 @@ def _expand_dataframe(df: DataFrame, sample_cols: List[str],
             the last underscore is used.
 
     Returns:
-    -------
+    --------
         DataFrame: The expanded and sorted dataframe.
     """
     # Convert to long format

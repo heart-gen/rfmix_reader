@@ -13,7 +13,6 @@ __all__ = [
     "COORDINATES",
     "PhasingConfig",
     "interpolate_array",
-    "phase_admix_dask_with_index",
     "phase_rfmix_chromosome_to_zarr",
     "merge_phased_zarrs",
     "phase_dataset",
@@ -24,7 +23,6 @@ __all__ = [
 _lazy = {
     "interpolate_array": (".imputation", "interpolate_array"),
     "PhasingConfig": (".phase", "PhasingConfig"),
-    "phase_admix_dask_with_index": (".phase", "phase_admix_dask_with_index"),
     "phase_rfmix_chromosome_to_zarr": (".phase", "phase_rfmix_chromosome_to_zarr"),
     "merge_phased_zarrs": (".phase", "merge_phased_zarrs"),
     "phase_dataset": (".phase", "phase_dataset"),

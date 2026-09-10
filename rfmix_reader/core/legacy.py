@@ -1,53 +1,18 @@
 """
-Bridges between the legacy ``(loci_df, g_anc, local_array)`` triple and the
-Dataset, plus the deprecation helper used by the old public names.
+Build a Dataset from the pre-1.0 ``(loci_df, g_anc, local_array)`` triple.
 """
 from __future__ import annotations
 
-import warnings
 from typing import Optional
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
-from ..readers._common import MISSING
 from . import schema as S
+from .codes import codes_from_counts
 
-__all__ = ["codes_from_counts", "from_legacy", "deprecated"]
-
-
-def deprecated(old: str, new: str, extra: str = "") -> None:
-    """Emit the standard ``DeprecationWarning`` for a legacy entry point."""
-    warnings.warn(
-        f"{old} is deprecated and will be removed in rfmix_reader 1.0; use {new} instead."
-        + (f" {extra}" if extra else ""),
-        DeprecationWarning, stacklevel=3,
-    )
-
-
-def codes_from_counts(counts) -> np.ndarray:
-    """
-    ``(..., A)`` diploid counts (0/1/2, ``-1`` missing) -> ``(..., 2)`` int8
-    haplotype codes.  The phase is unknown, so the lower ancestry index is
-    assigned to haplotype 0 (deterministic).  Float inputs are rounded.
-    """
-    c = np.asarray(counts)
-    if c.dtype.kind == "f":
-        c = np.where(np.isnan(c), -1, np.rint(c)).astype(np.int16)
-    else:
-        c = c.astype(np.int16, copy=False)
-    missing = (c < 0).any(axis=-1)
-    c = np.clip(c, 0, 2)
-    cum = np.cumsum(c, axis=-1)
-    hap0 = np.argmax(cum >= 1, axis=-1)
-    hap1 = np.argmax(cum >= 2, axis=-1)
-    total = c.sum(axis=-1)
-    codes = np.stack([hap0, hap1], axis=-1).astype(np.int8)
-    bad = missing | (total != 2)
-    if bad.any():
-        codes[bad] = MISSING
-    return codes
+__all__ = ["from_legacy", "codes_from_counts"]
 
 
 def from_legacy(
@@ -80,8 +45,7 @@ def from_legacy(
         raise ValueError(f"loci_df has {len(loci_df)} rows but admix has {L} loci.")
 
     if g_anc is not None:
-        from ..utils import get_pops
-        from ..io._layout import sample_id_list
+        from ..formats.common import get_pops, sample_id_list
 
         samples = sample_id_list(g_anc)
         pops = [str(p) for p in get_pops(g_anc)]

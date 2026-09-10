@@ -68,37 +68,6 @@ def test_expand_dataframe_lowercase_and_digit_pops():
     assert sorted(expanded["sample_name"]) == ["Yri2", "pop1"]
 
 
-def test_generate_tagore_bed(monkeypatch):
-    df = pd.DataFrame({
-        "chromosome": ["1"],
-        "start": [0],
-        "end": [100],
-        "S1_AFR": [1],
-    })
-    g_anc = pd.DataFrame({
-        "sample_id": ["S1"], "chrom": ["1"], "AFR": [1.0]
-    })
-    monkeypatch.setattr(viz, "admix_to_bed_individual",
-                        lambda loci, g, a, sn, cs, ms, v: df)
-    admix = np.zeros((1,1,1))
-    out = viz.generate_tagore_bed(df, g_anc, admix, 0)
-    assert "#chr" in out.columns
-
-
-def test_generate_tagore_bed_end_to_end(msp_dir):
-    from rfmix_reader.readers.read_msp import read_rfmix
-
-    loci, g_anc, admix = read_rfmix(str(msp_dir), verbose=False)
-    out = viz.generate_tagore_bed(loci, g_anc, admix, 0, min_segment=1, verbose=False)
-    for col in ("#chr", "start", "stop", "feature", "size", "color", "chrCopy"):
-        assert col in out.columns
-    # every row of the BED contributes allele_count rows; total = sum of counts
-    from rfmix_reader.io.loci_bed import admix_to_bed_individual
-    bed = admix_to_bed_individual(loci, g_anc, admix, 0, min_segment=1, verbose=False)
-    assert out.shape[0] == int(bed[["Sample_1_EUR", "Sample_1_AFR"]].to_numpy().sum())
-    assert set(out["chrCopy"]) <= {1, 2}
-
-
 def test_save_multi_format(tmp_path):
     fn = tmp_path / "fig"
     plt.figure()

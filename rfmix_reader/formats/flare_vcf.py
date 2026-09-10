@@ -6,12 +6,70 @@ from typing import Dict, Iterator, Optional
 import numpy as np
 from cyvcf2 import VCF
 
-from ..readers._common import align_g_anc_columns, pops_by_code
-from ..readers.read_flare import _parse_ancestry_header
+from re import search
+
+import pandas as pd
+
+from .common import align_g_anc_columns, pops_by_code
 from .base import Chunk, Header, chrom_label_from_path, codes_from_pairs
 from .global_ancestry import frame_to_array, read_flare_global
 
 FORMAT = "flare"
+
+
+def _parse_ancestry_header(vcf_file: str) -> Dict[str, int]:
+    """
+    Parse ancestry population index from the VCF header.
+
+    Looks for a line starting with '##ANCESTRY=' formatted like:
+    '##ANCESTRY=<EUR=0,AFR=1>'
+
+    Returns
+    -------
+    dict
+        Mapping from ancestry label (e.g., 'EUR') to integer index (e.g., 0).
+    """
+    vcf = VCF(vcf_file)
+    try:
+        ancestries: Dict[str, int] = {}
+        for hline in vcf.raw_header.splitlines():
+            if hline.startswith("##ANCESTRY="):
+                m = search(r"<(.+)>", hline)
+                if m:
+                    for pair in m.group(1).split(","):
+                        label, idx = pair.split("=")
+                        ancestries[label.strip()] = int(idx)
+                break
+    finally:
+        vcf.close()
+    if not ancestries:
+        raise ValueError(f"No '##ANCESTRY=<...>' header line found in {vcf_file}")
+    return ancestries
+
+
+def _read_anc_noi(fn: str) -> pd.DataFrame:
+    """
+    Read a FLARE ``.global.anc.gz`` table without the ``chrom`` column.
+
+    Format (tab separated, one header line)::
+
+        SAMPLE  EUR  AFR
+        Sample_1  0.7  0.3
+    """
+    try:
+        df = pd.read_csv(fn, sep="\t", compression="infer")
+    except FileNotFoundError:
+        raise FileNotFoundError(f"File '{fn}' not found.")
+    except Exception as e:
+        raise OSError(f"Error reading file {fn}: {e}") from e
+    if df.shape[1] < 2:
+        raise ValueError(f"Global ancestry file '{fn}' has no ancestry columns.")
+
+    df = df.rename(columns={df.columns[0]: "sample_id"})
+    df["sample_id"] = df["sample_id"].astype(str)
+    for col in df.columns[1:]:
+        df[col] = df[col].astype(np.float32)
+    return df
 
 
 def discover(path: str, chrom: Optional[str] = None):

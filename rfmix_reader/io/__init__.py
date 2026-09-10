@@ -1,26 +1,11 @@
-"""I/O utilities and helpers for rfmix_reader.
-
-Names are loaded lazily so that importing the light-weight pieces (``Chunk``,
-``BinaryFileNotFoundError``) does not pull in zarr, pyarrow or xarray.
-"""
-
+"""Reference-panel conversion helpers (``prepare-reference``)."""
 from __future__ import annotations
 
-from .chunk import Chunk
-from .errors import BinaryFileNotFoundError
-
-__all__ = [
-    "Chunk",
-    "BinaryFileNotFoundError",
-    "admix_to_bed_individual",
-    "write_data",
-    "write_imputed",
-]
+__all__ = ["convert_vcf_to_zarr", "convert_vcfs_to_zarr"]
 
 _lazy = {
-    "admix_to_bed_individual": (".loci_bed", "admix_to_bed_individual"),
-    "write_data": (".write_data", "write_data"),
-    "write_imputed": (".write_data", "write_imputed"),
+    "convert_vcf_to_zarr": (".prepare_reference", "convert_vcf_to_zarr"),
+    "convert_vcfs_to_zarr": (".prepare_reference", "convert_vcfs_to_zarr"),
 }
 
 
@@ -34,7 +19,3 @@ def __getattr__(name: str):
         globals()[name] = obj
         return obj
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
-
-def __dir__():
-    return sorted(list(globals().keys()) + __all__)

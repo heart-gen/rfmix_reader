@@ -3,90 +3,60 @@ Regression checks on the real chr21 RFMix output (git-LFS).  Run with
 
     pytest --run-slow tests/test_chr21_slow.py
 """
+import time
+
 import numpy as np
+import pandas as pd
 import pytest
 
-from rfmix_reader.readers.read_rfmix import read_rfmix_fb  # legacy .bin path
-from rfmix_reader.io import Chunk
-from rfmix_reader.utils import get_pops
+from rfmix_reader import open_local_ancestry, open_rfmix
+from rfmix_reader.processing.phase import PhasingConfig
+
+
+@pytest.fixture(scope="module")
+def chr21_ds(tmp_path_factory, chr21_lfs):
+    """chr21 .fb.tsv converted once (with posteriors) into a module-scoped cache."""
+    cache = tmp_path_factory.mktemp("cache")
+    t0 = time.time()
+    ds = open_rfmix(str(chr21_lfs), source="fb", keep_posteriors=True, cache_dir=cache, verbose=False)
+    print(f"\nchr21 fb -> zarr (with posteriors): {time.time() - t0:.1f}s")
+    return ds, cache
 
 
 @pytest.mark.slow
-def test_chr21_fb_counts_are_consistent(tmp_path, chr21_lfs):
-    """Every locus/sample must carry exactly two haplotype calls (A0 + A1)."""
-    loci_df, g_anc, admix, X_raw = read_rfmix_fb(
-        str(chr21_lfs), binary_dir=str(tmp_path / "bin"), generate_binary=True,
-        verbose=False, return_original=True, chunk=Chunk(nsamples=100, nloci=20_000),
-    )
-    assert list(get_pops(g_anc)) == ["AFR", "EUR"]
-    assert admix.dtype == np.int8 and X_raw.dtype == np.float32
-    assert admix.shape == (loci_df.shape[0], g_anc.shape[0], 2)
-    assert X_raw.chunks[1] == (400, 400, 400, 400, 400)  # whole samples per block
+def test_chr21_fb_counts_are_consistent(chr21_ds, chr21_lfs):
+    """Counts equal the posterior argmax; sentinel rows are the all-zero haplotypes."""
+    ds, cache = chr21_ds
+    assert ds.la.ancestries == ["AFR", "EUR"] and ds.la.n_samples == 500
+    q = pd.read_csv(chr21_lfs / "chr21.rfmix.Q", sep="\t", skiprows=1)
+    np.testing.assert_allclose(ds.la.global_ancestry[["AFR", "EUR"]].to_numpy(),
+                               q[["AFR", "EUR"]].to_numpy(), atol=1e-5)
 
-    counts = admix.compute()
+    counts = ds.la.counts.values
     valid = counts[:, :, 0] >= 0
     assert (counts[valid].sum(axis=1) == 2).all()
-    # Sentinel rows are exactly the sample/loci where RFMix wrote an all-zero
-    # haplotype (this file has ~0.7% of them).
-    assert 0 < (~valid).mean() < 0.05
+    assert 0 < (~valid).mean() < 0.05       # ~0.7% all-zero haplotypes in this file
+
+    post = ds.la.posterior[1000:1200].values
+    assert set(np.unique(post).tolist()) <= {0.0, 1.0}
+    assert np.isin(post.sum(axis=-1), [0.0, 1.0]).all()
     rows = np.flatnonzero(~valid.all(axis=1))[:3]
     for r in rows:
-        b4 = X_raw[r].compute().reshape(-1, 2, 2)
-        no_mass = ~(b4 > 0).any(axis=-1)          # (samples, 2 haps)
+        no_mass = ~(ds.la.posterior[r].values > 0).any(axis=-1)
         np.testing.assert_array_equal(~valid[r], no_mass.any(axis=1))
 
-    # This file stores hard 0/1 posteriors; the raw matrix must be exactly that
-    # for a random block that crosses a column-chunk boundary.
-    block = X_raw[1000:1200, 300:500].compute()
-    assert set(np.unique(block).tolist()) <= {0.0, 1.0}
-    # and per haplotype, at most one population carries the mass
-    b4 = X_raw[1000:1200].compute().reshape(200, -1, 2, 2)
-    assert np.isin(b4.sum(axis=-1), [0.0, 1.0]).all()
+    t0 = time.time()
+    lazy = open_local_ancestry(cache)
+    assert time.time() - t0 < 2.0
+    assert lazy.sizes["variant"] == ds.sizes["variant"]
+    store_bytes = sum(p.stat().st_size for p in cache.rglob("*") if p.is_file())
+    print(f"chr21 store with posteriors: {store_bytes / 1e6:.1f} MB")
 
 
 @pytest.mark.slow
-def test_chr21_fb_convert_matches_legacy(tmp_path, chr21_lfs):
-    """One streaming pass into Zarr; counts equal the legacy .bin path."""
-    import time
-
-    from rfmix_reader import open_local_ancestry, open_rfmix
-
-    t0 = time.time()
-    ds = open_rfmix(str(chr21_lfs), source="fb", cache_dir=tmp_path / "cache", verbose=False)
-    convert_s = time.time() - t0
-    assert (tmp_path / "cache" / "chr21.zarr").is_dir()
-
-    t0 = time.time()
-    lazy = open_local_ancestry(tmp_path / "cache")
-    open_s = time.time() - t0
-    assert open_s < 2.0, f"reopen took {open_s:.2f}s"
-    assert lazy.sizes["variant"] == ds.sizes["variant"] and lazy.la.n_samples == 500
-    assert lazy.la.ancestries == ["AFR", "EUR"]
-
-    legacy_loci, legacy_g, legacy_counts = read_rfmix_fb(
-        str(chr21_lfs), binary_dir=str(tmp_path / "bin"), generate_binary=True,
-        verbose=False, chunk=Chunk(nsamples=None, nloci=20_000),
-    )
-    np.testing.assert_array_equal(lazy.la.counts.values, legacy_counts.compute())
-    assert lazy.variant_position.values.tolist() == legacy_loci["physical_position"].tolist()
-    np.testing.assert_allclose(lazy.la.global_ancestry[["AFR", "EUR"]].to_numpy(),
-                               legacy_g[["AFR", "EUR"]].to_numpy(), atol=1e-5)
-
-    store_bytes = sum(p.stat().st_size for p in (tmp_path / "cache").rglob("*") if p.is_file())
-    print(f"\nchr21 fb -> zarr: convert {convert_s:.1f}s, reopen {open_s:.3f}s, "
-          f"store {store_bytes / 1e6:.1f} MB")
-
-
-@pytest.mark.slow
-def test_chr21_gnomix_phasing_on_posteriors(tmp_path, chr21_lfs):
+def test_chr21_gnomix_phasing_on_posteriors(chr21_ds):
     """gnomix-style phasing of the whole chromosome from the RFMix posteriors."""
-    import time
-
-    from rfmix_reader import open_rfmix
-    from rfmix_reader.processing.phase import PhasingConfig
-
-    ds = open_rfmix(str(chr21_lfs), source="fb", keep_posteriors=True,
-                    cache_dir=tmp_path / "cache", verbose=False)
+    ds, _ = chr21_ds
     t0 = time.time()
     phased = ds.la.phase(config=PhasingConfig(window_size=50, min_block_len=20))
     swapped = phased["phase_swapped"].values
@@ -94,5 +64,22 @@ def test_chr21_gnomix_phasing_on_posteriors(tmp_path, chr21_lfs):
     assert swapped.shape == (ds.la.n_variants, 500)
     np.testing.assert_array_equal(phased.la.counts.values, ds.la.counts.values)
     frac = swapped.mean()
-    print(f"\nchr21 gnomix phasing: {phase_s:.1f}s, {frac:.2%} of sample-loci exchanged")
+    print(f"chr21 gnomix phasing: {phase_s:.1f}s, {frac:.2%} of sample-loci exchanged")
     assert 0 <= frac < 0.5
+
+
+@pytest.mark.slow
+def test_chr21_ops_scale(chr21_ds, tmp_path):
+    """BED, position queries and Parquet export on a whole chromosome."""
+    ds, _ = chr21_ds
+    t0 = time.time()
+    bed = ds.la.to_bed("Sample_2", min_segment=3)      # Sample_2 is admixed (AFR 0.80 / EUR 0.20)
+    assert len(bed) > 1 and (bed["end"] >= bed["start"]).all()
+    assert bed["Sample_2_AFR"].nunique() > 1
+    assert len(ds.la.to_bed("Sample_1")) == 1           # Sample_1 is AFR/AFR everywhere
+    q = pd.DataFrame({"chrom": ["chr21"] * 3, "pos": [5030578, 20_000_000, 46_000_000]})
+    hit = ds.la.at_positions(q, method="nearest")
+    assert hit["matched"].all() and hit["n_haplotypes"].max() <= 1000
+    files = ds.la.to_parquet(tmp_path, prefix="la", rows_per_file=50_000)
+    assert len(files) == 4
+    print(f"chr21 bed/positions/parquet: {time.time() - t0:.1f}s")

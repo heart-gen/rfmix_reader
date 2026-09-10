@@ -16,7 +16,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from ..readers._common import MISSING
+from ..core.codes import MISSING
 
 __all__ = ["Header", "Chunk", "MISSING", "codes_from_pairs", "chrom_label_from_path"]
 
@@ -74,7 +74,7 @@ def codes_from_pairs(hap0, hap1, n_anc: int) -> np.ndarray:
 
 def chrom_label_from_path(path: str) -> Optional[str]:
     """``"chr21"`` from ``.../run_chr21.fb.tsv``; ``None`` if not inferable."""
-    from ..utils import _extract_chrom_from_path
+    from .common import extract_chrom_from_path
 
-    label = _extract_chrom_from_path(str(path))
+    label = extract_chrom_from_path(str(path))
     return None if label is None else f"chr{label}"

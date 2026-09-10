@@ -13,12 +13,28 @@ from typing import Dict, Iterator, List, Optional
 import numpy as np
 import pandas as pd
 
-from ..readers._common import MISSING, align_g_anc_columns
-from ..readers.read_rfmix import _read_fb_pops
+from ..core.codes import MISSING
+from .common import align_g_anc_columns
 from .base import Chunk, Header, chrom_label_from_path
 from .global_ancestry import frame_to_array, read_rfmix_q
 
 FORMAT = "fb"
+
+
+def _read_fb_pops(fn: str) -> List[str]:
+    """Population labels, in file order, from the first line of a ``.fb.tsv``."""
+    opener = gzip.open if fn.endswith(".gz") else open
+    with opener(fn, "rt") as fh:
+        line = fh.readline().strip()
+    if not line.startswith("#reference_panel_population"):
+        raise ValueError(
+            f"Unexpected first line in '{fn}'. Expected "
+            "'#reference_panel_population:\\tPOP1\\tPOP2 ...'."
+        )
+    pops = line.split(":", 1)[1].split()
+    if not pops:
+        raise ValueError(f"No populations listed in the header of '{fn}'.")
+    return pops
 _META_COLS = 4
 
 

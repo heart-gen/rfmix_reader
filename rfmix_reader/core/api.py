@@ -199,14 +199,14 @@ def open_local_ancestry(cache_dir, chrom: Optional[str] = None) -> xr.Dataset:
     Stores are concatenated along ``variant`` in chromosome order.
     """
     from . import accessor  # noqa: F401
-    from ..utils import _chrom_sort_key, _normalize_chrom_label
+    from ..formats.common import chrom_sort_key, normalize_chrom_label
 
     cache_dir = Path(cache_dir)
     stores = sorted((p for p in cache_dir.glob("*.zarr") if p.is_dir()),
-                    key=lambda p: _chrom_sort_key(p.stem))
+                    key=lambda p: chrom_sort_key(p.stem))
     if chrom is not None:
-        target = _normalize_chrom_label(str(chrom))
-        stores = [p for p in stores if _normalize_chrom_label(p.stem) == target]
+        target = normalize_chrom_label(str(chrom))
+        stores = [p for p in stores if normalize_chrom_label(p.stem) == target]
     if not stores:
         raise FileNotFoundError(f"No Zarr stores found in {cache_dir}"
                                 + (f" for chromosome '{chrom}'" if chrom else "") + ".")

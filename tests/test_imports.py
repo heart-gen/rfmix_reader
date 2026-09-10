@@ -1,15 +1,19 @@
 """
-Import hygiene: the readers must import quietly, without torch, and without
-the heavy optional dependencies of the processing / io layers.
+Import hygiene: the core imports quietly, without torch, and the removed
+pre-1.0 names raise a helpful error.
 """
 import subprocess
 import sys
 
-READER_MODULES = [
-    "rfmix_reader.readers.read_msp",
-    "rfmix_reader.readers.read_rfmix",
-    "rfmix_reader.readers.read_flare",
-    "rfmix_reader.readers.read_simu",
+import pytest
+
+MODULES = [
+    "rfmix_reader",
+    "rfmix_reader.core",
+    "rfmix_reader.formats",
+    "rfmix_reader.ops",
+    "rfmix_reader.processing.phase",
+    "rfmix_reader.cli.main",
 ]
 
 
@@ -20,29 +24,30 @@ def _run(code: str) -> subprocess.CompletedProcess:
     )
 
 
-def test_readers_import_silently():
-    code = "import " + ", ".join(READER_MODULES)
-    proc = _run(code)
+def test_modules_import_silently():
+    proc = _run("import " + ", ".join(MODULES))
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "", proc.stdout
     assert "Warning" not in proc.stderr, proc.stderr
 
 
-def test_readers_import_without_torch():
+def test_modules_import_without_torch_or_cupy():
     code = (
-        "import sys; sys.modules['torch'] = None; sys.modules['torch.cuda'] = None\n"
-        "import " + ", ".join(READER_MODULES)
+        "import sys\n"
+        "for m in ('torch', 'torch.cuda', 'cupy', 'cudf'): sys.modules[m] = None\n"
+        "import " + ", ".join(MODULES) + "\n"
+        "from rfmix_reader.backends import use_gpu, describe_gpus\n"
+        "assert use_gpu() is False and describe_gpus() == []\n"
     )
     proc = _run(code)
     assert proc.returncode == 0, proc.stderr
 
 
-def test_fb_reader_imports_without_zarr_xarray():
+def test_top_level_import_is_light():
     code = (
-        "import sys; sys.modules['zarr'] = None; sys.modules['xarray'] = None\n"
-        "import rfmix_reader.readers.read_rfmix, rfmix_reader.readers.read_msp\n"
-        "import rfmix_reader.io\n"
-        "from rfmix_reader.io import Chunk, BinaryFileNotFoundError\n"
+        "import sys, rfmix_reader\n"
+        "heavy = [m for m in ('xarray', 'zarr', 'dask', 'cyvcf2', 'matplotlib') if m in sys.modules]\n"
+        "assert not heavy, heavy\n"
     )
     proc = _run(code)
     assert proc.returncode == 0, proc.stderr
@@ -61,3 +66,11 @@ def test_prepare_reference_import_without_bio2zarr():
     )
     proc = _run(code)
     assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.parametrize("name", ["read_rfmix", "read_rfmix_fb", "write_data", "create_binaries", "Chunk"])
+def test_removed_names_point_to_replacement(name):
+    import rfmix_reader
+
+    with pytest.raises(AttributeError, match="removed in 1.0"):
+        getattr(rfmix_reader, name)
