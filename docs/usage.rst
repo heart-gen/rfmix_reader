@@ -58,7 +58,10 @@ The Dataset
    ds.la.posterior              # None unless keep_posteriors=True
    ds.la.global_ancestry        # DataFrame: sample_id, <ancestries>, chrom
    ds.la.samples, ds.la.ancestries, ds.la.chromosomes
+   ds.la.sel_chrom("chr21")                                  # contiguous slice, still lazy
    ds.la.sel_region("chr21", 15_000_000, 20_000_000)
+   ds.la.locus_index("chr21", positions)                     # segment/variant index per position, -1 = none
+   ds.la.counts_at("chr21", positions, method="nearest", tolerance=5_000)
    loci_df, g_anc, local_array = ds.la.to_legacy()   # the legacy (0.5) triple
 
 Operations
@@ -83,6 +86,11 @@ Operations
 
 ``at_positions`` uses the ``[variant_position, segment_end]`` interval of each
 source variant (``stepwise``) or the closest variant (``nearest``).
+``locus_index`` returns the same lookup as plain indices along ``variant``
+(``-1`` when no segment covers the position, or beyond ``tolerance`` bp for
+``nearest``); on ``ds.la.sel_chrom(chrom)`` they index that chromosome's
+array directly, which is the access pattern for per-gene QTL windows: hold one
+chromosome of counts in memory and slice it per gene.
 ``to_parquet`` writes ``<prefix>.<chrom>-<k>.parquet`` files with ``chrom``,
 ``pos``, ``hap`` and one int8 ``<sample>_<ancestry>`` column per pair
 (sample-major), one dask block at a time.  ``interpolate`` builds a

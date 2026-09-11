@@ -8,7 +8,7 @@ from rfmix_reader.core.legacy import codes_from_counts, from_legacy
 from rfmix_reader.ops.bed import run_boundaries, to_bed
 from rfmix_reader.ops.interpolate import build_variant_grid, interpolate
 from rfmix_reader.ops.parquet import to_parquet
-from rfmix_reader.ops.positions import at_positions
+from rfmix_reader.ops.positions import at_positions, chromosome_index, counts_at, locus_index
 
 
 # ------------------------------------------------------------------ helpers
@@ -187,3 +187,67 @@ def test_ops_on_cached_dataset(msp_dir, tmp_path):
     out = interpolate(ds, loci, tmp_path / "z", method="stepwise")
     assert out.sizes["variant"] == 10 and out.chromosome.values.tolist()[:5] == ["chr1"] * 5
     assert ds.la.to_legacy()[0]["chromosome"].astype(str).tolist() == mem.la.to_legacy()[0]["chromosome"].astype(str).tolist()
+
+
+# ------------------------------------------------------- chromosome / locus index
+def test_sel_chrom_and_chromosome_index(msp_dir):
+    ds = open_rfmix(str(msp_dir), verbose=False)
+    np.testing.assert_array_equal(chromosome_index(ds, "chr1"), [0, 1, 2, 3])
+    np.testing.assert_array_equal(chromosome_index(ds, "2"), [4, 5, 6, 7])       # label normalised
+    sub = ds.la.sel_chrom("chr2")
+    assert sub.sizes["variant"] == 4 and set(sub.chromosome.values) == {"chr2"}
+    np.testing.assert_array_equal(sub.la.counts.values, ds.la.counts.values[4:8])
+    with pytest.raises(KeyError, match="chr9"):
+        ds.la.sel_chrom("chr9")
+
+    # non-contiguous / unsorted layouts still resolve, in position order
+    shuffled = ds.isel(variant=[5, 0, 4, 2, 1, 3, 7, 6])
+    np.testing.assert_array_equal(shuffled.la.sel_chrom("chr1").variant_position.values,
+                                  ds.la.sel_chrom("chr1").variant_position.values)
+    np.testing.assert_array_equal(shuffled.la.counts_at("chr2", [20000, 60000]),
+                                  ds.la.counts_at("chr2", [20000, 60000]))
+
+
+def test_sel_region_is_a_slice_and_matches_mask(msp_dir):
+    ds = open_rfmix(str(msp_dir), verbose=False)
+    sub = ds.la.sel_region("chr1", 50000, 129999)
+    assert sub.variant_position.values.tolist() == [50000, 90000]
+    assert ds.la.sel_region("chr1", 200000, 300000).sizes["variant"] == 0
+    assert ds.la.sel_region("chr9").sizes["variant"] == 0
+    pos = ds.variant_position.values
+    chrom = ds.chromosome.values
+    rng = np.random.default_rng(1)
+    for _ in range(20):
+        a, b = sorted(rng.integers(0, 200000, 2))
+        mask = (chrom == "chr1") & (pos >= a) & (pos <= b)
+        np.testing.assert_array_equal(ds.la.sel_region("chr1", a, b).variant_position.values, pos[mask])
+
+
+def test_locus_index_stepwise_and_nearest(msp_dir):
+    ds = open_rfmix(str(msp_dir), verbose=False)     # chr1 segments start 10000/50000/90000/130000, 40 kb each
+    q = [10000, 49999, 50000, 200000, 5000]
+    np.testing.assert_array_equal(ds.la.locus_index("chr1", q), [0, 0, 1, -1, -1])
+    np.testing.assert_array_equal(ds.la.locus_index("chr1", q, method="nearest"), [0, 1, 1, 3, 0])
+    np.testing.assert_array_equal(ds.la.locus_index("chr1", q, method="nearest", tolerance=1000),
+                                  [0, 1, 1, -1, -1])
+    np.testing.assert_array_equal(ds.la.locus_index("chr9", q), [-1] * 5)
+    # global on the whole Dataset, local on the chromosome subset
+    assert ds.la.locus_index("chr2", [20000]).tolist() == [4]
+    assert ds.la.sel_chrom("chr2").la.locus_index("chr2", [20000]).tolist() == [0]
+    with pytest.raises(ValueError):
+        locus_index(ds, "chr1", q, method="linear")
+
+
+def test_counts_at_matches_at_positions(msp_dir):
+    ds = open_rfmix(str(msp_dir), verbose=False)
+    q = [10000, 200000, 130000]
+    out = counts_at(ds, "chr1", q)
+    assert out.shape == (3, 3, 2) and out.dtype == np.int8
+    np.testing.assert_array_equal(out[0], ds.la.counts.values[0])
+    np.testing.assert_array_equal(out[2], ds.la.counts.values[3])
+    assert (out[1] == -1).all()
+    ref = at_positions(ds, pd.DataFrame({"chrom": ["chr1"] * 3, "pos": q}), aggregate=False)
+    got = out.reshape(-1, 2).astype(float)
+    got[got < 0] = np.nan
+    np.testing.assert_array_equal(np.nan_to_num(ref[["EUR_copies", "AFR_copies"]].to_numpy(), nan=-9),
+                                  np.nan_to_num(got, nan=-9))
