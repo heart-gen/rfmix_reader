@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
 - `ds.la.sel_chrom(chrom)`, `ds.la.locus_index(chrom, positions, method,
   tolerance)` and `ds.la.counts_at(...)` (also in `ops.positions`): the
   per-chromosome, index-based access that QTL mapping needs (one chromosome
