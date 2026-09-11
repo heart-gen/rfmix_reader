@@ -39,12 +39,16 @@ def counts_from_hap_codes(hap0, hap1, n_anc: int) -> np.ndarray:
     if hap0.shape != hap1.shape:
         raise ValueError("hap0 and hap1 must have the same shape.")
 
-    h0 = hap0.astype(np.int64, copy=False)
-    h1 = hap1.astype(np.int64, copy=False)
-    valid = (h0 >= 0) & (h0 < n_anc) & (h1 >= 0) & (h1 < n_anc)
+    # Stay in the input dtype (int8 from the cache): no int64 upcast, no clip
+    # copies.  Per 10k x 500 block this is ~30 MB of temporaries instead of
+    # ~250 MB, which matters because dask keeps one block per thread in flight.
+    valid = (hap0 >= 0) & (hap0 < n_anc) & (hap1 >= 0) & (hap1 < n_anc)
+    i0 = np.where(valid, hap0, 0)
+    i1 = np.where(valid, hap1, 0)
 
     eye = np.eye(n_anc, dtype=np.int8)
-    out = eye[np.clip(h0, 0, n_anc - 1)] + eye[np.clip(h1, 0, n_anc - 1)]
+    out = eye[i0]
+    out += eye[i1]
     if not valid.all():
         out[~valid] = MISSING
     return out
