@@ -1,6 +1,15 @@
 # Changelog
 
 ## Unreleased
+- haptools parser: regions are pulled in worker processes (cyvcf2 decodes the
+  ``POP`` field under the GIL, so threads gave no speed-up), the label to
+  code mapping is one vectorised comparison per ancestry pair instead of a
+  per-element string pipeline, and at most ``2 * n_threads`` regions are in
+  flight. chr21 of a 1M-variant simulation: 122 s / 1.5 GB -> 21 s / 0.5 GB,
+  identical output.
+- ``import rfmix_reader.formats`` before ``rfmix_reader.core`` no longer
+  raises a circular-import error (``get_parser`` moved to
+  ``formats.discover``; ``formats.base`` no longer imports the core package).
 - `counts_from_hap_codes` (and therefore `ds.la.counts`) works in the input
   dtype instead of upcasting to int64: about 4x less temporary memory per
   dask block, so materialising a whole chromosome of counts from the cache
