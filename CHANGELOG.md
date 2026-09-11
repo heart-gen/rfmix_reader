@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+- `counts_from_hap_codes` (and therefore `ds.la.counts`) works in the input
+  dtype instead of upcasting to int64: about 4x less temporary memory per
+  dask block, so materialising a whole chromosome of counts from the cache
+  peaks well below the legacy reader.
+
 ## 0.6.0
 
 Release candidate for 1.0: the rebuild is complete but the version stays
