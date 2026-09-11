@@ -7,7 +7,10 @@ sorted labels from the ``.bp`` file (or the first records of the VCF).
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+import multiprocessing as mp
+from collections import deque
+from concurrent.futures import BrokenExecutor, Executor, ProcessPoolExecutor, ThreadPoolExecutor
+from itertools import islice
 from typing import Dict, Iterator, Optional
 
 import numpy as np
@@ -226,31 +229,89 @@ def scan(filemap: Dict[str, str], n_threads: int = 4, **_) -> Header:
     )
 
 
+def _pair_table(ancestries) -> Dict[str, Tuple[int, int]]:
+    """Canonical ``"A,B"`` POP strings -> ``(code_a, code_b)`` for every ordered pair."""
+    labels = [str(a) for a in ancestries]
+    return {f"{a},{b}": (i, j) for i, a in enumerate(labels) for j, b in enumerate(labels)}
+
+
+def _codes_from_pop_matrix(pop_mat: np.ndarray, ancestries: np.ndarray,
+                           pairs: Dict[str, Tuple[int, int]]) -> np.ndarray:
+    """
+    ``(n, S)`` unicode ``"A,B"`` matrix -> ``(n, S, 2)`` int8 codes (``-1`` unknown).
+
+    One vectorised equality test per ordered ancestry pair (A^2 tests, each a
+    memcmp over the matrix) replaces the per-element partition / strip / upper
+    pipeline; only elements that match no canonical pair (odd spacing or case)
+    go through the slow normalising path.
+    """
+    codes = np.full(pop_mat.shape + (2,), -1, dtype=np.int8)
+    matched = np.zeros(pop_mat.shape, dtype=bool)
+    for label, pair in pairs.items():
+        m = pop_mat == label
+        if m.any():
+            codes[m] = pair
+            matched |= m
+    if not matched.all():
+        rest = ~matched
+        slow = _map_pop_to_codes(pop_mat[rest][:, None], ancestries)[:, 0].astype(np.int16)
+        codes[rest] = np.where(slow == POP_MISSING, -1, slow).astype(np.int8)
+    return codes
+
+
+def _pull_region(fn: str, chrom: str, start: int, end: int, ancestries: Tuple[str, ...],
+                 n_samples: int, vcf_threads: int):
+    """Codes for one tabix region: ``(positions int32, codes int8 (n, S, 2))`` or ``None``."""
+    anc = np.asarray(ancestries, dtype="U")
+    pairs = _pair_table(anc)
+    vcf = VCF(fn)
+    try:
+        if vcf_threads and hasattr(vcf, "set_threads"):
+            vcf.set_threads(vcf_threads)
+        positions, pops = [], []
+        for r in vcf(f"{chrom}:{start}-{end}"):
+            p = r.format("POP")
+            if p is None:
+                p = np.full(n_samples, "", dtype="U1")
+            positions.append(r.POS)
+            pops.append(p)
+    finally:
+        vcf.close()
+    if not positions:
+        return None
+    pop_mat = np.stack(pops)                       # (n, S) unicode, decoded once by cyvcf2
+    codes = _codes_from_pop_matrix(pop_mat, anc, pairs)
+    return np.asarray(positions, dtype=np.int32), codes
+
+
+def _region_pool(workers: int) -> Executor:
+    """
+    Executor for the region pulls.
+
+    Worker *processes* only with the ``fork`` start method, which does not
+    re-import the caller's ``__main__`` (so an unguarded script that calls
+    ``open_simu`` at top level cannot spawn itself recursively), and never
+    from a daemonic process (which may not have children) or with a single
+    worker.  Everything else runs the pulls in threads.
+    """
+    if workers <= 1 or mp.current_process().daemon or "fork" not in mp.get_all_start_methods():
+        return ThreadPoolExecutor(max_workers=workers)
+    return ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork"))
+
+
 def iter_chunks(filemap: Dict[str, str], header: Header, chunk_rows: int = 10_000,
                 region_bp: int = 1_000_000, n_threads: int = 4, **_) -> Iterator[Chunk]:
     fn = filemap["vcf"]
     chrom = header.extra["record_chrom"]
     chrom_len = header.extra["chrom_len"]
-    ancestries = np.asarray(header.ancestries, dtype="U")
+    ancestries = tuple(str(a) for a in header.ancestries)
+    n_samples = len(header.samples)
 
-    def pull(start: int):
-        vcf = VCF(fn)
-        try:
-            if n_threads and hasattr(vcf, "set_threads"):
-                vcf.set_threads(n_threads)
-            end = min(start + region_bp - 1, chrom_len)
-            recs = list(vcf(f"{chrom}:{start}-{end}"))
-            if not recs:
-                return None
-            positions = np.fromiter((r.POS for r in recs), dtype=np.int32, count=len(recs))
-            pop_mat = np.array([r.format("POP") for r in recs], dtype="U")
-        finally:
-            vcf.close()
-        codes = _map_pop_to_codes(pop_mat, ancestries).astype(np.int16)
-        codes = np.where(codes == int(POP_MISSING), -1, codes)  # 255 -> -1
-        return positions, codes.astype(np.int8)
+    def submit(pool, start: int):
+        end = min(start + region_bp - 1, chrom_len)
+        return pool.submit(_pull_region, fn, chrom, start, end, ancestries, n_samples, 1)
 
-    starts = range(1, chrom_len + 1, region_bp)
+    starts = iter(range(1, chrom_len + 1, region_bp))
     pending_pos, pending_codes = [], []
     n_pending = 0
 
@@ -266,9 +327,26 @@ def iter_chunks(filemap: Dict[str, str], header: Header, chunk_rows: int = 10_00
             pending_codes = [rest_codes] if len(rest_codes) else []
             n_pending = len(rest_pos)
 
-    with ThreadPoolExecutor(max_workers=max(1, n_threads)) as pool:
-        futures = [pool.submit(pull, s) for s in starts]
-        for fut in futures:                     # genomic order
+    # cyvcf2 decodes the POP FORMAT field per record under the GIL, so regions
+    # are pulled in worker processes where that is safe (see _region_pool);
+    # at most 2 x n_threads regions are in flight, consumed in genomic order.
+    workers = max(1, n_threads)
+    pool = _region_pool(workers)
+    try:
+        futures = deque(submit(pool, s) for s in islice(starts, 2 * workers))
+        if futures:
+            futures[0].result()                               # surfaces a broken pool early
+    except (BrokenExecutor, OSError, RuntimeError, AssertionError, ValueError):
+        pool.shutdown(wait=False, cancel_futures=True)
+        pool = ThreadPoolExecutor(max_workers=workers)
+        starts = iter(range(1, chrom_len + 1, region_bp))
+        futures = deque(submit(pool, s) for s in islice(starts, 2 * workers))
+    with pool:
+        while futures:
+            fut = futures.popleft()
+            nxt = next(starts, None)
+            if nxt is not None:
+                futures.append(submit(pool, nxt))
             result = fut.result()
             if result is None:
                 continue

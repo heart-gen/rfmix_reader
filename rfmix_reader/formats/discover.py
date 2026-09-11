@@ -5,7 +5,7 @@ from typing import Dict, List, Optional
 
 from .common import filter_file_maps_by_chrom, get_prefixes
 
-__all__ = ["discover", "FORMATS"]
+__all__ = ["discover", "FORMATS", "get_parser", "primary_file"]
 
 FORMATS = ("msp", "fb", "flare", "haptools")
 
@@ -37,3 +37,20 @@ def discover(path: str, fmt: str, chrom: Optional[str] = None) -> List[Dict[str,
 
         return [{"vcf": f} for f in _get_vcf_files(path, chrom=chrom)]
     raise ValueError(f"Unknown format {fmt!r}; choose from {FORMATS}.")
+
+
+_MODULES = {
+    "msp": ".rfmix_msp",
+    "fb": ".rfmix_fb",
+    "flare": ".flare_vcf",
+    "haptools": ".haptools_vcf",
+}
+
+
+def get_parser(fmt: str):
+    """Parser module for ``fmt`` (``msp``, ``fb``, ``flare`` or ``haptools``)."""
+    from importlib import import_module
+
+    if fmt not in _MODULES:
+        raise ValueError(f"Unknown format {fmt!r}; choose from {FORMATS}.")
+    return import_module(_MODULES[fmt], __package__)

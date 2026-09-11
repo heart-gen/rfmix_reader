@@ -15,7 +15,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import xarray as xr
 
-from ..formats import discover, get_parser, primary_file
+from ..formats.discover import discover, get_parser, primary_file
 from ..formats.base import Header, chrom_label_from_path
 from . import schema as S
 from .zarr_io import open_store, store_path, write_store

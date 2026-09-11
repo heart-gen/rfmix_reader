@@ -74,3 +74,17 @@ def test_removed_names_point_to_replacement(name):
 
     with pytest.raises(AttributeError, match="removed in 0.6"):
         getattr(rfmix_reader, name)
+
+
+@pytest.mark.parametrize("first", ["rfmix_reader.formats", "rfmix_reader.formats.base",
+                                   "rfmix_reader.formats.haptools_vcf", "rfmix_reader.core.codes",
+                                   "rfmix_reader.core"])
+def test_any_package_can_be_imported_first(first):
+    """formats.base imports core.codes and core.api imports formats: no cycle either way."""
+    proc = _run(
+        f"import {first}\n"
+        "from rfmix_reader.formats.base import MISSING\n"
+        "from rfmix_reader.core import open_rfmix, write_store, MISSING as M\n"
+        "assert MISSING == M == -1\n"
+    )
+    assert proc.returncode == 0, proc.stderr
