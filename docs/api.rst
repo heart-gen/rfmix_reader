@@ -37,6 +37,9 @@ Operations
 
    rfmix_reader.ops.bed.to_bed
    rfmix_reader.ops.positions.at_positions
+   rfmix_reader.ops.positions.locus_index
+   rfmix_reader.ops.positions.counts_at
+   rfmix_reader.ops.positions.chromosome_index
    rfmix_reader.ops.parquet.to_parquet
    rfmix_reader.ops.interpolate.interpolate
    rfmix_reader.ops.interpolate.build_variant_grid

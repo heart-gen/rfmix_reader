@@ -1,6 +1,12 @@
 # Changelog
 
 ## Unreleased
+- `ds.la.sel_chrom(chrom)`, `ds.la.locus_index(chrom, positions, method,
+  tolerance)` and `ds.la.counts_at(...)` (also in `ops.positions`): the
+  per-chromosome, index-based access that QTL mapping needs (one chromosome
+  of counts in memory, a segment index per SNP). `sel_region` is now a
+  contiguous slice found by binary search instead of a boolean mask
+  (a 2 Mb window of an 876k-variant chromosome: ~1 s -> ~0.13 s).
 - haptools parser: regions are pulled in worker processes (cyvcf2 decodes the
   ``POP`` field under the GIL, so threads gave no speed-up), the label to
   code mapping is one vectorised comparison per ancestry pair instead of a

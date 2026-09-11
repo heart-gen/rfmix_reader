@@ -31,6 +31,28 @@ class LocalAncestryAccessor:
 
     def __init__(self, ds: xr.Dataset):
         self._ds = ds
+        self._runs: Optional[List[Tuple[str, int, int, bool]]] = None
+
+    def _chromosome_runs(self) -> List[Tuple[str, int, int, bool]]:
+        """
+        Contiguous runs of the ``chromosome`` coordinate, computed once per
+        Dataset: ``(normalised label, start, stop, positions sorted)``.
+        """
+        if self._runs is None:
+            from ..formats.common import normalize_chrom_label
+
+            raw = np.asarray(self._ds[S.CHROMOSOME].values)
+            runs: List[Tuple[str, int, int, bool]] = []
+            if raw.size:
+                change = np.flatnonzero(raw[1:] != raw[:-1]) + 1
+                starts = np.concatenate([[0], change])
+                stops = np.concatenate([change, [raw.size]])
+                pos = np.asarray(self._ds[S.VARIANT_POSITION].values)
+                for a, b in zip(starts, stops):
+                    ordered = bool((np.diff(pos[a:b]) >= 0).all()) if b - a > 1 else True
+                    runs.append((normalize_chrom_label(str(raw[a])), int(a), int(b), ordered))
+            self._runs = runs
+        return self._runs
 
     # ------------------------------------------------------------------ meta
     @property
@@ -111,20 +133,45 @@ class LocalAncestryAccessor:
         return pd.concat(frames, ignore_index=True)
 
     # ------------------------------------------------------------- selection
+    def sel_chrom(self, chrom: str) -> xr.Dataset:
+        """All variants of ``chrom`` in position order (``KeyError`` if absent)."""
+        from ..ops.positions import chromosome_index
+
+        idx = chromosome_index(self._ds, chrom)
+        if idx.size and idx[-1] - idx[0] + 1 == idx.size:
+            return self._ds.isel({S.VARIANT: slice(int(idx[0]), int(idx[-1]) + 1)})
+        return self._ds.isel({S.VARIANT: idx})
+
     def sel_region(self, chrom: str, start: Optional[int] = None,
                    end: Optional[int] = None) -> xr.Dataset:
-        """Variants on ``chrom`` with ``start <= position <= end`` (inclusive)."""
-        from ..formats.common import normalize_chrom_label
+        """
+        Variants on ``chrom`` with ``start <= position <= end`` (inclusive);
+        empty when the chromosome is absent.  A contiguous slice of the
+        chromosome (binary search on the sorted positions), so only the
+        touched Zarr chunks are read afterwards.
+        """
+        try:
+            sub = self.sel_chrom(chrom)
+        except KeyError:
+            return self._ds.isel({S.VARIANT: slice(0, 0)})
+        pos = np.asarray(sub[S.VARIANT_POSITION].values, dtype=np.int64)
+        lo = 0 if start is None else int(np.searchsorted(pos, int(start), side="left"))
+        hi = pos.size if end is None else int(np.searchsorted(pos, int(end), side="right"))
+        return sub.isel({S.VARIANT: slice(lo, hi)})
 
-        target = normalize_chrom_label(str(chrom))
-        labels = np.array([normalize_chrom_label(str(c)) for c in self._ds[S.CHROMOSOME].values])
-        mask = labels == target
-        pos = self._ds[S.VARIANT_POSITION].values
-        if start is not None:
-            mask &= pos >= int(start)
-        if end is not None:
-            mask &= pos <= int(end)
-        return self._ds.isel({S.VARIANT: np.flatnonzero(mask)})
+    def locus_index(self, chrom: str, positions, *, method: str = "stepwise",
+                    tolerance: Optional[int] = None) -> np.ndarray:
+        """Variant index covering each position (see :func:`ops.positions.locus_index`)."""
+        from ..ops.positions import locus_index
+
+        return locus_index(self._ds, chrom, positions, method=method, tolerance=tolerance)
+
+    def counts_at(self, chrom: str, positions, *, method: str = "stepwise",
+                  tolerance: Optional[int] = None) -> np.ndarray:
+        """``(n, sample, ancestry)`` int8 counts at positions (see :func:`ops.positions.counts_at`)."""
+        from ..ops.positions import counts_at
+
+        return counts_at(self._ds, chrom, positions, method=method, tolerance=tolerance)
 
     # ------------------------------------------------------------ operations
     def to_bed(self, sample, *, min_segment: int = 1) -> pd.DataFrame:

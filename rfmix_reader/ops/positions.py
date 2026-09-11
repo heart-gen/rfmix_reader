@@ -10,10 +10,11 @@ import xarray as xr
 from ..core import schema as S
 from ..formats.common import normalize_chrom_label
 
-__all__ = ["at_positions"]
+__all__ = ["at_positions", "chromosome_index", "locus_index", "counts_at"]
 
 
-def _locate(starts: np.ndarray, ends: np.ndarray, query: np.ndarray, method: str):
+def _locate(starts: np.ndarray, ends: np.ndarray, query: np.ndarray, method: str,
+            tolerance: Optional[int] = None):
     """Index of the source variant for each query position (``-1`` = none)."""
     if starts.size == 0:
         return np.full(query.shape, -1, dtype=np.int64)
@@ -27,8 +28,85 @@ def _locate(starts: np.ndarray, ends: np.ndarray, query: np.ndarray, method: str
         right = np.clip(k + 1, 0, starts.size - 1)
         d_left = np.abs(query - starts[left])
         d_right = np.abs(starts[right] - query)
-        return np.where(d_left <= d_right, left, right)
+        hit = np.where(d_left <= d_right, left, right)
+        if tolerance is not None:
+            hit = np.where(np.minimum(d_left, d_right) <= int(tolerance), hit, -1)
+        return hit
     raise ValueError("method must be 'stepwise' or 'nearest'.")
+
+
+def chromosome_index(ds: xr.Dataset, chrom: str) -> np.ndarray:
+    """
+    Global variant indices of ``chrom`` in ``ds``, ordered by position.
+
+    Variants of one chromosome are contiguous and sorted in every Dataset the
+    readers and the cache produce, in which case this is an ``arange`` slice
+    found from the cached chromosome runs (no scan); otherwise the (sorted)
+    positions are gathered explicitly.  Raises ``KeyError`` when the
+    chromosome is absent.
+    """
+    target = normalize_chrom_label(str(chrom))
+    runs = [(a, b, ordered) for label, a, b, ordered in ds.la._chromosome_runs() if label == target]
+    if not runs:
+        raise KeyError(f"Chromosome {chrom!r} not in the Dataset "
+                       f"(available: {ds.la.chromosomes}).")
+    if len(runs) == 1 and runs[0][2]:
+        return np.arange(runs[0][0], runs[0][1])
+    hits = np.concatenate([np.arange(a, b) for a, b, _ in runs])
+    pos = np.asarray(ds[S.VARIANT_POSITION].values, dtype=np.int64)[hits]
+    return hits[np.argsort(pos, kind="stable")]
+
+
+def locus_index(ds: xr.Dataset, chrom: str, positions, *, method: str = "stepwise",
+                tolerance: Optional[int] = None) -> np.ndarray:
+    """
+    Index of the Dataset variant that covers each of ``positions`` on ``chrom``.
+
+    Parameters
+    ----------
+    positions : array-like of int
+        Base-pair positions (any order; the result keeps that order).
+    method : {"stepwise", "nearest"}
+        ``stepwise``: the segment/variant whose ``[variant_position,
+        segment_end]`` interval contains the position (exact for ``.msp.tsv``
+        segments); ``nearest``: the closest variant, optionally within
+        ``tolerance`` bp.
+    tolerance : int, optional
+        For ``nearest`` only; matches farther than this become ``-1``.
+
+    Returns
+    -------
+    np.ndarray of int64, same length as ``positions``
+        Indices along the ``variant`` dimension of ``ds`` (``-1`` = no match).
+        On ``ds.la.sel_chrom(chrom)`` they are therefore indices *within* the
+        chromosome, which is what a per-chromosome array wants.
+    """
+    query = np.asarray(positions, dtype=np.int64).ravel()
+    try:
+        order = chromosome_index(ds, chrom)
+    except KeyError:
+        return np.full(query.shape, -1, dtype=np.int64)
+    starts = np.asarray(ds[S.VARIANT_POSITION].values, dtype=np.int64)[order]
+    ends = (np.asarray(ds[S.SEGMENT_END].values, dtype=np.int64)[order]
+            if S.SEGMENT_END in ds.coords else starts)
+    k = _locate(starts, ends, query, method, tolerance)
+    return np.where(k >= 0, order[np.clip(k, 0, None)], -1)
+
+
+def counts_at(ds: xr.Dataset, chrom: str, positions, *, method: str = "stepwise",
+              tolerance: Optional[int] = None) -> np.ndarray:
+    """
+    ``(len(positions), sample, ancestry)`` int8 diploid counts at ``positions``
+    on ``chrom`` (see :func:`locus_index`); rows without a match are ``-1``.
+    Only the Zarr chunks that hold the matched variants are read.
+    """
+    idx = locus_index(ds, chrom, positions, method=method, tolerance=tolerance)
+    out = np.full((idx.size, ds.sizes[S.SAMPLE], ds.sizes[S.ANCESTRY]), -1, dtype=np.int8)
+    matched = idx >= 0
+    if matched.any():
+        uniq, inverse = np.unique(idx[matched], return_inverse=True)
+        out[matched] = np.asarray(ds.la.counts.isel({S.VARIANT: uniq}).values)[inverse]
+    return out
 
 
 def at_positions(

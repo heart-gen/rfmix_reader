@@ -103,7 +103,7 @@ every `open_*` call does):
 | `ds.la.counts` / `.haplotypes` / `.posterior` | lazy DataArrays (posterior may be `None`) |
 | `ds.la.global_ancestry` | long DataFrame (`sample_id`, ancestries, `chrom`) |
 | `ds.la.samples`, `.ancestries`, `.chromosomes`, `.n_variants`, `.n_samples` | labels / sizes |
-| `ds.la.sel_region("chr21", start, end)` | Dataset subset |
+| `ds.la.sel_chrom("chr21")`, `ds.la.sel_region("chr21", start, end)` | contiguous Dataset slices (binary search on the sorted positions) |
 | `ds.la.to_legacy()` | the legacy (0.5 and earlier) `(loci_df, g_anc, local_array)` triple |
 
 ## Operations
@@ -113,6 +113,8 @@ All operations are lazy or streaming; `sample` is an index or a sample ID.
 | Operation | Result |
 |---|---|
 | `ds.la.at_positions(loci_df, method="stepwise"\|"nearest", samples=None, aggregate=True)` | ancestry at listed `chrom`/`pos` (haplotype counts and fractions, or per-sample copies with `aggregate=False`) |
+| `ds.la.locus_index(chrom, positions, method="stepwise"\|"nearest", tolerance=None)` | index of the variant/segment covering each position (`-1` = none) |
+| `ds.la.counts_at(chrom, positions, ...)` | `(n, sample, ancestry)` int8 counts at those positions |
 | `ds.la.to_bed(sample, min_segment=1)` | constant-ancestry intervals for one sample |
 | `ds.la.to_tagore(sample, palette="tab10")` | the BED annotated for TAGORE; plot with `plot_local_ancestry_tagore` |
 | `ds.la.to_parquet(outdir, prefix=..., rows_per_file=...)` | `<prefix>.<chrom>-<k>.parquet` (`chrom`, `pos`, `hap`, then `<sample>_<ancestry>` int8 columns), one dask block at a time |
@@ -125,6 +127,12 @@ import pandas as pd
 loci = pd.DataFrame({"chrom": ["chr21", "chr21"], "pos": [15_000_000, 30_000_000]})
 ds.la.at_positions(loci)                       # AFR_haplotypes, AFR_fraction, ...
 ds.la.at_positions(loci, samples=["NA19700"], aggregate=False)
+
+# QTL-style access: one chromosome in memory, then index by genotype position
+chrom = ds.la.sel_chrom("chr21")                        # contiguous slice, still lazy
+counts = chrom.la.counts.values                          # (variants, samples, ancestries) int8
+idx = chrom.la.locus_index("chr21", genotype_positions)  # segment per SNP, -1 = uncovered
+H = counts[idx[idx >= 0]]
 
 bed = ds.la.to_bed("NA19700", min_segment=3)
 ds.la.to_parquet("out/", prefix="la", rows_per_file=100_000)
