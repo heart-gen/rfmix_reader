@@ -16,7 +16,9 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-__all__ = ["Header", "Chunk", "codes_from_pairs", "chrom_label_from_path"]
+from ..core.codes import MISSING
+
+__all__ = ["Header", "Chunk", "MISSING", "codes_from_pairs", "chrom_label_from_path"]
 
 
 @dataclass
@@ -66,8 +68,6 @@ def codes_from_pairs(hap0, hap1, n_anc: int) -> np.ndarray:
     bad = (out < 0) | (out >= n_anc)
     out = out.astype(np.int8)
     if bad.any():
-        from ..core.codes import MISSING  # local: formats.base must not import the core package
-
         out[bad] = MISSING
     return out
 

@@ -7,8 +7,9 @@ sorted labels from the ``.bp`` file (or the first records of the VCF).
 """
 from __future__ import annotations
 
+import multiprocessing as mp
 from collections import deque
-from concurrent.futures import BrokenExecutor, ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import BrokenExecutor, Executor, ProcessPoolExecutor, ThreadPoolExecutor
 from itertools import islice
 from typing import Dict, Iterator, Optional
 
@@ -283,6 +284,21 @@ def _pull_region(fn: str, chrom: str, start: int, end: int, ancestries: Tuple[st
     return np.asarray(positions, dtype=np.int32), codes
 
 
+def _region_pool(workers: int) -> Executor:
+    """
+    Executor for the region pulls.
+
+    Worker *processes* only with the ``fork`` start method, which does not
+    re-import the caller's ``__main__`` (so an unguarded script that calls
+    ``open_simu`` at top level cannot spawn itself recursively), and never
+    from a daemonic process (which may not have children) or with a single
+    worker.  Everything else runs the pulls in threads.
+    """
+    if workers <= 1 or mp.current_process().daemon or "fork" not in mp.get_all_start_methods():
+        return ThreadPoolExecutor(max_workers=workers)
+    return ProcessPoolExecutor(max_workers=workers, mp_context=mp.get_context("fork"))
+
+
 def iter_chunks(filemap: Dict[str, str], header: Header, chunk_rows: int = 10_000,
                 region_bp: int = 1_000_000, n_threads: int = 4, **_) -> Iterator[Chunk]:
     fn = filemap["vcf"]
@@ -312,17 +328,16 @@ def iter_chunks(filemap: Dict[str, str], header: Header, chunk_rows: int = 10_00
             n_pending = len(rest_pos)
 
     # cyvcf2 decodes the POP FORMAT field per record under the GIL, so regions
-    # are pulled in worker *processes* (threads gave no speed-up); at most
-    # 2 x n_threads regions are in flight and results are consumed in genomic
-    # order.  Falls back to threads where processes cannot be started.
+    # are pulled in worker processes where that is safe (see _region_pool);
+    # at most 2 x n_threads regions are in flight, consumed in genomic order.
     workers = max(1, n_threads)
-    pool_cls = ProcessPoolExecutor if workers > 1 else ThreadPoolExecutor
+    pool = _region_pool(workers)
     try:
-        pool = pool_cls(max_workers=workers)
         futures = deque(submit(pool, s) for s in islice(starts, 2 * workers))
         if futures:
             futures[0].result()                               # surfaces a broken pool early
-    except (BrokenExecutor, OSError, RuntimeError):
+    except (BrokenExecutor, OSError, RuntimeError, AssertionError, ValueError):
+        pool.shutdown(wait=False, cancel_futures=True)
         pool = ThreadPoolExecutor(max_workers=workers)
         starts = iter(range(1, chrom_len + 1, region_bp))
         futures = deque(submit(pool, s) for s in islice(starts, 2 * workers))

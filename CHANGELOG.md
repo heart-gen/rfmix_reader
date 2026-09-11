@@ -6,10 +6,12 @@
   code mapping is one vectorised comparison per ancestry pair instead of a
   per-element string pipeline, and at most ``2 * n_threads`` regions are in
   flight. chr21 of a 1M-variant simulation: 122 s / 1.5 GB -> 21 s / 0.5 GB,
-  identical output.
+  identical output. Worker processes use the ``fork`` start method (never
+  re-imports the caller's ``__main__``) and are skipped inside daemonic
+  processes or where fork is unavailable (threads are used instead).
 - ``import rfmix_reader.formats`` before ``rfmix_reader.core`` no longer
-  raises a circular-import error (``get_parser`` moved to
-  ``formats.discover``; ``formats.base`` no longer imports the core package).
+  raises a circular-import error: ``rfmix_reader.core`` resolves its reader
+  and Zarr-store exports lazily, ``get_parser`` lives in ``formats.discover``.
 - `counts_from_hap_codes` (and therefore `ds.la.counts`) works in the input
   dtype instead of upcasting to int64: about 4x less temporary memory per
   dask block, so materialising a whole chromosome of counts from the cache

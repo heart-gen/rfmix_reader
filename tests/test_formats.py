@@ -169,3 +169,53 @@ def test_haptools_parser_unknown_label_is_missing(simu_dir, tmp_path):
     header.ancestries = ["CEU", "YRI"]      # NAT is now unknown
     _, _, _, _, codes, _ = _collect(parser, filemap, header, chunk_rows=10)
     assert codes[0, 2, 0] == -1              # Sample_3 hap1 = NAT
+
+
+def test_haptools_region_pool_selection(monkeypatch):
+    """Processes only with fork and a non-daemonic parent; threads otherwise."""
+    import multiprocessing as mp
+    from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+
+    from rfmix_reader.formats.haptools_vcf import _region_pool
+
+    with _region_pool(1) as pool:
+        assert isinstance(pool, ThreadPoolExecutor)
+    if "fork" in mp.get_all_start_methods():
+        with _region_pool(2) as pool:
+            assert isinstance(pool, ProcessPoolExecutor)
+
+    class _Daemon:
+        daemon = True
+
+    monkeypatch.setattr(mp, "current_process", lambda: _Daemon())
+    with _region_pool(2) as pool:
+        assert isinstance(pool, ThreadPoolExecutor)
+
+
+def test_haptools_from_unguarded_script_and_daemonic_worker(simu_dir, tmp_path):
+    """open_simu must work from a script without an ``if __name__`` guard (no recursive
+    spawning) and from inside a daemonic multiprocessing worker (no child processes)."""
+    import multiprocessing as mp
+    import subprocess
+    import sys
+
+    if "fork" not in mp.get_all_start_methods():
+        pytest.skip("needs the fork start method for the daemonic-worker half")
+    script = tmp_path / "unguarded.py"
+    script.write_text(
+        "import multiprocessing as mp, sys\n"
+        "from rfmix_reader import open_simu\n"
+        f"ds = open_simu({str(simu_dir)!r}, verbose=False)\n"
+        "print('RAN', ds.sizes['variant'])\n"
+        "def in_daemon(q):\n"
+        f"    q.put(open_simu({str(simu_dir)!r}, verbose=False).sizes['variant'])\n"
+        # the test's own daemon must use fork: forkserver/spawn would re-import this
+        # unguarded script themselves, which is exactly what the library must not do
+        "ctx = mp.get_context('fork')\n"
+        "q = ctx.Queue(); p = ctx.Process(target=in_daemon, args=(q,), daemon=True); p.start()\n"
+        "print('DAEMON', q.get(timeout=120)); p.join()\n"
+    )
+    proc = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.count("RAN") == 1, proc.stdout          # top-level code ran exactly once
+    assert "DAEMON 3" in proc.stdout and "RAN 3" in proc.stdout
