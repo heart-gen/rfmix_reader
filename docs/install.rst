@@ -2,17 +2,45 @@
 Install
 *******
 
-It can be installed via pip::
+::
 
   pip install rfmix-reader
 
+Python 3.11 or newer.  The core depends on ``numpy``, ``pandas``, ``dask``,
+``xarray``, ``zarr`` and ``cyvcf2`` only.
 
-GPU Acceleration
+Extras
+------
+
+============= ================================================ ==========================================
+Extra         Adds                                             Needed for
+============= ================================================ ==========================================
+``viz``       matplotlib, seaborn, cairosvg                    ``plot_*`` functions, ``ds.la.to_tagore``
+``io``        pyarrow                                          ``ds.la.to_parquet``
+``reference`` bio2zarr                                         ``prepare-reference`` (VCF to VCF-Zarr)
+``gpu``       torch, cupy-cuda12x, cudf-cu12, dask-cudf-cu12   optional CuPy compute backend
+``all``       everything above
+============= ================================================ ==========================================
+
+::
+
+  pip install "rfmix-reader[viz,io]"
+
+GPU acceleration
 ----------------
 
-``rfmix-reader`` leverages GPU acceleration for improved performance. To use this
-functionality, you will need to install the following libraries for your specific
-CUDA version:
+Parsing is CPU-only by design (it is I/O bound).  When CuPy is importable the
+imputation and plotting helpers use it as the array backend; see
+:mod:`rfmix_reader.backends`.  The ``gpu`` extra targets CUDA 12 wheels — pick
+the matching build strings for other CUDA versions.
 
-- ``RAPIDS``: Refer to official installation guide `here <https://docs.rapids.ai/install>`_
-- ``PyTorch``: Installation instructions can be found `here <https://pytorch.org/>`_
+Development
+-----------
+
+::
+
+  git clone https://github.com/heart-gen/rfmix_reader
+  cd rfmix_reader
+  poetry install --with test --extras "viz io"
+  poetry run pytest             # fast suite (seconds)
+  poetry run pytest --run-slow  # also the chr21 tests (needs git-LFS data)

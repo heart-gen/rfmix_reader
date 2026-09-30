@@ -1,13 +1,14 @@
 import pytest
-import numpy as np
-import pandas as pd
-from pathlib import Path
 
+np = pytest.importorskip("numpy")
+pd = pytest.importorskip("pandas")
+
+pytest.importorskip("matplotlib")
 import matplotlib
 matplotlib.use("Agg")  # headless backend
 import matplotlib.pyplot as plt
 
-import rfmix_reader._visualization as viz
+import rfmix_reader.viz.visualization as viz
 
 def make_ganc_df():
     return pd.DataFrame({
@@ -48,32 +49,23 @@ def test_expand_and_annotate_tagore(monkeypatch):
     })
     pops = ["AFR", "EUR"]
 
-    expanded = viz._expand_dataframe(df, ["S1_AFR", "S1_EUR"])
+    expanded = viz._expand_dataframe(df, ["S1_AFR", "S1_EUR"], pops)
     assert "sample_name" in expanded.columns
+    assert expanded["sample_name"].tolist() == ["AFR", "EUR"]
 
-    # Force NumPy backend for chrCopy
-    monkeypatch.setattr(viz, "cp", np)
     ann = viz._annotate_tagore(df, ["S1_AFR", "S1_EUR"], pops)
     assert "#chr" in ann.columns and "chrCopy" in ann.columns
+    assert ann["color"].notna().all()
 
 
-def test_generate_tagore_bed(monkeypatch):
+def test_expand_dataframe_lowercase_and_digit_pops():
+    """Population labels are matched literally, not with [A-Z]+."""
     df = pd.DataFrame({
-        "chromosome": ["1"],
-        "start": [0],
-        "end": [100],
-        "S1_AFR": [1],
+        "chromosome": ["1"], "start": [0], "end": [50],
+        "S_1_pop1": [1], "S_1_Yri2": [1],
     })
-    g_anc = pd.DataFrame({
-        "sample_id": ["S1"], "chrom": ["1"], "AFR": [1.0]
-    })
-    monkeypatch.setattr(viz, "admix_to_bed_individual",
-                        lambda loci, g, a, sn, cs, ms, v: df)
-    # Force NumPy backend
-    monkeypatch.setattr(viz, "cp", np)
-    admix = np.zeros((1,1,1))
-    out = viz.generate_tagore_bed(df, g_anc, admix, 0)
-    assert "#chr" in out.columns
+    expanded = viz._expand_dataframe(df, ["S_1_pop1", "S_1_Yri2"], ["pop1", "Yri2"])
+    assert sorted(expanded["sample_name"]) == ["Yri2", "pop1"]
 
 
 def test_save_multi_format(tmp_path):

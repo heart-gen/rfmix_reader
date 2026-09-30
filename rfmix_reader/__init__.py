@@ -1,3 +1,7 @@
+"""
+rfmix_reader: fast, lazy access to local-ancestry output (RFMix, FLARE,
+haptools) as an xarray Dataset backed by a per-chromosome Zarr cache.
+"""
 from __future__ import annotations
 
 from importlib.metadata import version as _v, PackageNotFoundError
@@ -7,51 +11,69 @@ try:
     __version__ = _v("rfmix-reader")  # distribution name
 except PackageNotFoundError:
     try:
-        from ._version import __version__  # fallback for local builds
+        from ._version import __version__  # type: ignore[import-not-found]  # generated at build time
     except Exception:
         __version__ = "0.0.0"
 
 # Public API
 __all__ = [
-    "Chunk",
-    "read_fb", "read_simu", "read_rfmix", "read_flare",
-    "write_data",
-    "admix_to_bed_individual",
+    # readers / cache
+    "open_rfmix", "open_flare", "open_simu", "open_local_ancestry", "convert",
+    # dataset helpers
+    "build_dataset", "validate", "concat_datasets", "from_legacy", "MISSING",
+    # processing
+    "PhasingConfig", "phase_dataset", "merge_phased_zarrs", "interpolate_array",
     "CHROM_SIZES", "COORDINATES",
-    "BinaryFileNotFoundError",
-    "interpolate_array",
-    "get_pops", "get_prefixes", "create_binaries", "get_sample_names",
-    "set_gpu_environment", "delete_files_or_directories",
-    "save_multi_format", "generate_tagore_bed",
-    "plot_global_ancestry", "plot_ancestry_by_chromosome",
+    # visualisation
+    "save_multi_format", "plot_global_ancestry", "plot_ancestry_by_chromosome",
     "plot_local_ancestry_tagore",
 ]
 
 # Map public names for lazy loading
 _lazy = {
-    "Chunk": ("._chunk", "Chunk"),
-    "read_fb": ("._fb_read", "read_fb"),
-    "read_simu": ("._read_simu", "read_simu"),
-    "read_rfmix": ("._read_rfmix", "read_rfmix"),
-    "read_flare": ("._read_flare", "read_flare"),
-    "write_data": ("._write_data", "write_data"),
-    "admix_to_bed_individual": ("._loci_bed", "admix_to_bed_individual"),
-    "CHROM_SIZES": ("._constants", "CHROM_SIZES"),
-    "COORDINATES": ("._constants", "COORDINATES"),
-    "BinaryFileNotFoundError": ("._errorhandling", "BinaryFileNotFoundError"),
-    "interpolate_array": ("._imputation", "interpolate_array"),
-    "get_pops": ("._utils", "get_pops"),
-    "get_prefixes": ("._utils", "get_prefixes"),
-    "create_binaries": ("._utils", "create_binaries"),
-    "get_sample_names": ("._utils", "get_sample_names"),
-    "set_gpu_environment": ("._utils", "set_gpu_environment"),
-    "delete_files_or_directories": ("._utils", "delete_files_or_directories"),
-    "save_multi_format": ("._visualization", "save_multi_format"),
-    "generate_tagore_bed": ("._visualization", "generate_tagore_bed"),
-    "plot_global_ancestry": ("._visualization", "plot_global_ancestry"),
-    "plot_ancestry_by_chromosome": ("._visualization", "plot_ancestry_by_chromosome"),
-    "plot_local_ancestry_tagore": ("._tagore", "plot_local_ancestry_tagore"),
+    "open_rfmix": (".core.api", "open_rfmix"),
+    "open_flare": (".core.api", "open_flare"),
+    "open_simu": (".core.api", "open_simu"),
+    "open_local_ancestry": (".core.api", "open_local_ancestry"),
+    "convert": (".core.api", "convert"),
+    "build_dataset": (".core.schema", "build_dataset"),
+    "validate": (".core.schema", "validate"),
+    "concat_datasets": (".core.schema", "concat_datasets"),
+    "from_legacy": (".core.legacy", "from_legacy"),
+    "MISSING": (".core.codes", "MISSING"),
+    "PhasingConfig": (".processing.phase", "PhasingConfig"),
+    "phase_dataset": (".processing.phase", "phase_dataset"),
+    "merge_phased_zarrs": (".processing.phase", "merge_phased_zarrs"),
+    "interpolate_array": (".processing.imputation", "interpolate_array"),
+    "CHROM_SIZES": (".processing.constants", "CHROM_SIZES"),
+    "COORDINATES": (".processing.constants", "COORDINATES"),
+    "save_multi_format": (".viz.visualization", "save_multi_format"),
+    "plot_global_ancestry": (".viz.visualization", "plot_global_ancestry"),
+    "plot_ancestry_by_chromosome": (".viz.visualization", "plot_ancestry_by_chromosome"),
+    "plot_local_ancestry_tagore": (".viz.tagore", "plot_local_ancestry_tagore"),
 }
+
+_REMOVED = {
+    "read_rfmix": "open_rfmix(...) and ds.la.to_legacy()",
+    "read_rfmix_fb": 'open_rfmix(..., source="fb", cache_dir=...)',
+    "read_flare": "open_flare(...)",
+    "read_simu": "open_simu(...)",
+    "read_fb": 'open_rfmix(..., source="fb")',
+    "extract_locus_ancestry": "ds.la.at_positions(...)",
+    "write_data": "ds.la.to_parquet(...)",
+    "admix_to_bed_individual": "ds.la.to_bed(...)",
+    "generate_tagore_bed": "ds.la.to_tagore(...)",
+    "create_binaries": 'convert(path, "fb", cache_dir)',
+    "Chunk": "chunk_rows= in open_* / convert",
+    "BinaryFileNotFoundError": "the Zarr cache (no .bin files)",
+    "get_pops": "ds.la.ancestries",
+    "get_sample_names": "ds.la.samples",
+    "get_prefixes": "rfmix_reader.formats.discover",
+    "set_gpu_environment": "rfmix_reader.backends.describe_gpus",
+    "delete_files_or_directories": "shutil",
+    "phase_rfmix_chromosome_to_zarr": "rfmix_reader.processing.phase.phase_rfmix_chromosome_to_zarr",
+}
+
 
 def __getattr__(name: str):
     """Lazy attribute loader to keep import-time light."""
@@ -62,6 +84,11 @@ def __getattr__(name: str):
         obj = getattr(mod, attr_name)
         globals()[name] = obj  # cache for future access
         return obj
+    if name in _REMOVED:
+        raise AttributeError(
+            f"rfmix_reader.{name} was removed in 0.6; use {_REMOVED[name]} "
+            "(see MIGRATION.md)."
+        )
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -69,24 +96,19 @@ def __dir__():
     # help() and tab-complete show public API
     return sorted(list(globals().keys()) + __all__)
 
+
 # Make type checkers happy without importing heavy deps at runtime
 if TYPE_CHECKING:
-    from ._chunk import Chunk
-    from ._fb_read import read_fb
-    from ._read_simu import read_simu
-    from ._read_rfmix import read_rfmix
-    from ._read_flare import read_flare
-    from ._write_data import write_data
-    from ._loci_bed import admix_to_bed_individual
-    from ._constants import CHROM_SIZES, COORDINATES
-    from ._errorhandling import BinaryFileNotFoundError
-    from ._imputation import interpolate_array
-    from ._utils import (
-        get_pops, get_prefixes, create_binaries, get_sample_names,
-        set_gpu_environment, delete_files_or_directories,
+    from .core.api import convert, open_flare, open_local_ancestry, open_rfmix, open_simu
+    from .core.codes import MISSING
+    from .core.legacy import from_legacy
+    from .core.schema import build_dataset, concat_datasets, validate
+    from .processing.constants import CHROM_SIZES, COORDINATES
+    from .processing.imputation import interpolate_array
+    from .processing.phase import PhasingConfig, merge_phased_zarrs, phase_dataset
+    from .viz.tagore import plot_local_ancestry_tagore
+    from .viz.visualization import (
+        plot_ancestry_by_chromosome,
+        plot_global_ancestry,
+        save_multi_format,
     )
-    from ._visualization import (
-        save_multi_format, generate_tagore_bed,
-        plot_global_ancestry, plot_ancestry_by_chromosome,
-    )
-    from ._tagore import plot_local_ancestry_tagore

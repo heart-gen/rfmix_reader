@@ -1,13 +1,16 @@
 import pytest
-import rfmix_reader._constants as consts
+
+pytest.importorskip("zarr")
+
+from rfmix_reader.processing.constants import CHROM_SIZES, COORDINATES
 
 # ---------------------------
 # CONSTANTS TESTS
 # ---------------------------
 
 def test_coordinates_and_sizes():
-    coords = consts.COORDINATES
-    sizes = consts.CHROM_SIZES
+    coords = COORDINATES
+    sizes = CHROM_SIZES
 
     # Coordinates contain chr1 and X
     assert "1" in coords

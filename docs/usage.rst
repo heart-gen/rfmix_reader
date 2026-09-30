@@ -1,336 +1,161 @@
-Haplotypes
-==========
+Usage
+=====
 
-Using ``rfmix-reader`` is as simple as
-`pandas-plink <https://pandas-plink.readthedocs.io/en/latest/usage.html>`__.
+Every reader returns the same lazily-evaluated :class:`xarray.Dataset`
+(see :ref:`the-dataset`); ``ds.la`` provides the views and operations.
 
-We provide example data for two and three population admixtured from
-simulation data created with
-`Haptools <https://haptools.readthedocs.io/en/stable/>`__. You can
-download it from Figshare:
-
-Once downloaded, we are ready to start!
-
-Input
------
-
-First, we need to generate binary files. I suggest using
-``create_binaries``.
+Opening data
+------------
 
 .. code:: python
 
-   from rfmix_reader import create_binaries
+   from rfmix_reader import open_rfmix, open_flare, open_simu, open_local_ancestry, convert
 
-   prefix_path = "../examples/two_populations/out/"
-   create_binaries(prefix_path)
+   ds = open_rfmix("two_pops/out/", cache_dir="la_cache/")            # .msp.tsv (default)
+   ds = open_rfmix("two_pops/out/", source="fb", keep_posteriors=True,
+                   cache_dir="la_cache/")                              # .fb.tsv posteriors
+   ds = open_flare("flare_runs/", cache_dir="la_cache/")
+   ds = open_simu("simulations/", cache_dir="la_cache/")
 
-::
+   ds = open_local_ancestry("la_cache/")                              # instant reopen
+   ds = open_local_ancestry("la_cache/", chrom="21")
+   convert("two_pops/out/", "fb", "la_cache/", keep_posteriors=True)  # cache only
 
-   Created binary files at: ./binary_files
-   Converting fb files to binary!
-     0% 0/3 [00:00<?, ?it/s] 33% 1/3 [05:03<10:07, 303.82s/it]100% 3/3 [05:03<00:00, 101.27s/it]
-   Successfully converted 3 files to binary format.
+``path`` is a directory, a file, or a path prefix; ``chrom=`` restricts to one
+chromosome.  With ``cache_dir`` each chromosome is parsed once in a single
+streaming pass into ``<cache_dir>/<chrom>.zarr`` and reopened lazily
+afterwards.  Without it the Dataset is built in memory (fine for ``.msp.tsv``).
 
-As of **v0.1.20**, this can also be invoked via the command line.
+The same conversion is available on the command line::
 
-.. code:: shell
+   rfmix-reader convert fb two_pops/out/ la_cache/ --keep-posteriors
+   rfmix-reader info la_cache/
 
-   create-binaries -h
+.. _the-dataset:
 
-.. note::
+The Dataset
+-----------
 
-   .. code-block:: text
+.. code:: text
 
-      usage: create-binaries [-h] [--version] [--binary_dir BINARY_DIR] file_prefix
+   dims:   variant, sample, ploidy (=2), ancestry, contig
+   vars:   haplotype_ancestry (variant, sample, ploidy)            int8  code into `ancestry`, -1 missing
+           posterior          (variant, sample, ploidy, ancestry)  float32  optional
+           global_ancestry    (contig, sample, ancestry)           float32
+   coords: chromosome, variant_position, segment_end (variant); sample_id; ancestry; contig
 
-      Create binary files from RFMix *.fb.tsv files.
-
-      positional arguments:
-        file_prefix           The prefix used to identify the relevant FB TSV files.
-
-      options:
-        -h, --help            show this help message and exit
-        --version             Show the version of the program and exit.
-        --binary_dir BINARY_DIR
-                              The directory where the binary files will be stored.
-                              Defaults to './binary_files'.
-
-Once the binary files are created, we can read in the data with the main
-function ``read_rfmix``.
-
-.. code:: python
-
-   from rfmix_reader import read_rfmix
-
-   loci, rf_q, admix = read_rfmix(prefix_path)
-
-::
-
-   GPU 0: NVIDIA TITAN V
-     Total memory: 11.77 GB
-     CUDA capability: 7.0
-   Multiple files read in this order: ['chr20', 'chr21', 'chr22']
-   Mapping loci files:   0% 0/3 [00:00<?, ?it/s]Mapping loci files:  33% 1/3 [00:02<00:05,  2.72s/it]Mapping loci files:  67% 2/3 [00:04<00:01,  1.93s/it]Mapping loci files: 100% 3/3 [00:05<00:00,  1.73s/it]Mapping loci files: 100% 3/3 [00:05<00:00,  1.86s/it]
-   Mapping Q files:   0% 0/3 [00:00<?, ?it/s]Mapping Q files: 100% 3/3 [00:00<00:00, 47.69it/s]
-   Mapping fb files:   0% 0/3 [00:00<?, ?it/s]Mapping fb files:  33% 1/3 [00:00<00:00,  2.66it/s]Mapping fb files:  67% 2/3 [00:00<00:00,  3.46it/s]Mapping fb files: 100% 3/3 [00:00<00:00,  3.75it/s]Mapping fb files: 100% 3/3 [00:00<00:00,  3.55it/s]
-
-With a GPU, three chromosomes can be loaded in to your session in less
-than a minute.
-
-Output
-------
-
-``loci``
-~~~~~~~~
-
-``loci`` are the metadata for the RFMix results.
+* Ancestries are in the tool's own order (RFMix header, FLARE ``##ANCESTRY``);
+  ``global_ancestry`` uses the same order.
+* ``-1`` marks a sample/locus without a call (e.g. an all-zero RFMix
+  posterior); the whole count row of such a locus is ``-1``.
+* Counts are derived lazily from the codes: ``ds.la.counts`` is
+  ``(variant, sample, ancestry)`` int8 with values ``0/1/2``.
 
 .. code:: python
 
-   loci.shape
+   ds.la.counts                 # lazy dask-backed DataArray
+   ds.la.haplotypes             # (variant, sample, ploidy) codes
+   ds.la.posterior              # None unless keep_posteriors=True
+   ds.la.global_ancestry        # DataFrame: sample_id, <ancestries>, chrom
+   ds.la.samples, ds.la.ancestries, ds.la.chromosomes
+   ds.la.sel_chrom("chr21")                                  # contiguous slice, still lazy
+   ds.la.sel_region("chr21", 15_000_000, 20_000_000)
+   ds.la.locus_index("chr21", positions)                     # segment/variant index per position, -1 = none
+   ds.la.counts_at("chr21", positions, method="nearest", tolerance=5_000)
+   loci_df, g_anc, local_array = ds.la.to_legacy()   # the legacy (0.5) triple
 
-::
-
-   (646287, 3)
-
-.. code:: python
-
-   loci
-
-::
-
-          chromosome  physical_position       i
-   0           chr20              60137       0
-   1           chr20              60291       1
-   2           chr20              60340       2
-   3           chr20              60440       3
-   4           chr20              60823       4
-   ...           ...                ...     ...
-   646282      chr22           50790690  646282
-   646283      chr22           50790993  646283
-   646284      chr22           50791163  646284
-   646285      chr22           50791228  646285
-   646286      chr22           50791360  646286
-
-   [646287 rows x 3 columns]
-
-To model it after ``pandas_plink``, there is an index column ``i``. This
-is useful for software developing, but in general only the first two
-columns are needed.
-
-``rf_q``
-~~~~~~~~
-
-``rf_q`` is the global ancestry results per chromosome for each
-individual. This is the ``*.rfmix.Q`` files combined into a single
-``DataFrame``.
+Operations
+----------
 
 .. code:: python
 
-   rf_q.shape
+   import pandas as pd
 
-::
+   loci = pd.DataFrame({"chrom": ["chr21", "chr21"], "pos": [15_000_000, 30_000_000]})
+   ds.la.at_positions(loci)                                  # per-locus haplotype counts / fractions
+   ds.la.at_positions(loci, samples=["NA19700"], aggregate=False)   # per-sample copies
+   ds.la.at_positions(loci, method="nearest")
 
-   (1500, 4)
+   bed = ds.la.to_bed("NA19700", min_segment=3)             # constant-ancestry intervals
+   tag = ds.la.to_tagore("NA19700")                          # TAGORE-annotated BED
 
-.. code:: python
+   ds.la.to_parquet("out/", prefix="la", rows_per_file=100_000)
 
-   rf_q
+   variants = pd.read_parquet("genotypes/variants.parquet")  # chrom, pos
+   dense = ds.la.interpolate(variants, "imputed/", method="stepwise")
 
-::
+``at_positions`` uses the ``[variant_position, segment_end]`` interval of each
+source variant (``stepwise``) or the closest variant (``nearest``).
+``locus_index`` returns the same lookup as plain indices along ``variant``
+(``-1`` when no segment covers the position, or beyond ``tolerance`` bp for
+``nearest``); on ``ds.la.sel_chrom(chrom)`` they index that chromosome's
+array directly, which is the access pattern for per-gene QTL windows: hold one
+chromosome of counts in memory and slice it per gene.
+``to_parquet`` writes ``<prefix>.<chrom>-<k>.parquet`` files with ``chrom``,
+``pos``, ``hap`` and one int8 ``<sample>_<ancestry>`` column per pair
+(sample-major), one dask block at a time.  ``interpolate`` builds a
+per-chromosome variant grid (source variants plus the requested positions),
+writes ``<zarr_outdir>/<chrom>/local-ancestry.zarr`` and returns a lazy
+``(variant, sample, ancestry)`` DataArray; ``linear`` rounds to hard calls,
+``nearest`` copies the closest observed locus, ``stepwise`` forward-fills.
 
-          sample_id      AFR      EUR  chrom
-   0       Sample_1  0.85383  0.14617  chr20
-   1       Sample_2  0.68933  0.31067  chr20
-   2       Sample_3  1.00000  0.00000  chr20
-   3       Sample_4  0.86754  0.13246  chr20
-   4       Sample_5  0.68280  0.31720  chr20
-   ...          ...      ...      ...    ...
-   1495  Sample_496  0.82322  0.17678  chr22
-   1496  Sample_497  0.73456  0.26544  chr22
-   1497  Sample_498  1.00000  0.00000  chr22
-   1498  Sample_499  0.87362  0.12638  chr22
-   1499  Sample_500  0.85129  0.14871  chr22
+Phasing
+-------
 
-   [1500 rows x 4 columns]
+``ds.la.phase()`` corrects switch errors between the two haplotypes per
+sample the way gnomix does, from each sample's own posteriors (or hard calls
+when no posteriors are stored):
 
-Since we have three chromosomes, that means there are 500 samples in
-this example dataset.
-
-.. code:: python
-
-   rf_q.groupby("chrom").size()
-
-::
-
-   chrom
-   chr22    500
-   chr20    500
-   chr21    500
-   dtype: int64
-
-Let's exact the sample names! This is a ``cudf`` DataFrame, so we need
-to extract the data with ``.to_arrow()``. When running on CPU, this will
-be a regular ``pandas`` DataFrame.
-
-.. code:: python
-
-   type(rf_q)
-
-::
-
-   <class 'cudf.core.dataframe.DataFrame'>
+1. heterozygous blocks — runs where the two haplotypes carry different
+   ancestries and the unordered pair is constant, at least
+   ``min_block_len`` loci long;
+2. each window of ``window_size`` loci is scored by
+   ``(p0[a] + p1[b]) - (p0[b] + p1[a])`` against the block-start orientation
+   ``(a, b)``; windows with ``|score| < posterior_margin`` inherit the previous
+   state;
+3. the two haplotypes (codes and posteriors) are exchanged wherever the state
+   is "switched" — equivalent to gnomix's successive tail flips.
 
 .. code:: python
 
-   sample_ids = rf_q.sample_id.unique().to_arrow()
-   len(sample_ids)
+   from rfmix_reader.processing.phase import PhasingConfig, phase_rfmix_chromosome_to_zarr, merge_phased_zarrs
 
-::
+   ds = open_rfmix("two_pops/out/", source="fb", keep_posteriors=True, cache_dir="la_cache/", chrom="21")
+   phased = ds.la.phase(config=PhasingConfig(window_size=50, min_block_len=20, posterior_margin=0.2))
+   phased["phase_swapped"].sum("variant")
 
-   500
+   phase_rfmix_chromosome_to_zarr("two_pops/out/", None, None, "phased_chr21.zarr", chrom="21")
+   merge_phased_zarrs(["phased_chr21.zarr", "phased_chr22.zarr"], "phased_all.zarr")
 
-We'll also get the unique populations.
+Phasing does not change ``ds.la.counts``; it changes which haplotype carries
+which ancestry.  The previous reference-panel matcher is available as
+``method="reference"`` (``ref_zarr_root`` and ``sample_annot_path`` required,
+reference stores from ``prepare-reference``) for comparison only — it compares
+ancestry labels against allele codes and is not a sound test of phase.
 
-.. code:: python
+Haptools simulations
+--------------------
 
-   pops = rf_q.drop(["sample_id", "chrom"], axis=1).columns.values
-   pops
+haptools does not write chromosome lengths into the ``##contig`` header lines
+but the tabix region pulls need them; reheader each VCF with the contig entry
+from the ``contigs.txt`` haptools produces (``bcftools reheader``) and index
+it with ``tabix`` before calling ``open_simu``.
 
-::
-
-   ['AFR' 'EUR']
-
-``admix``
-~~~~~~~~~
-
-``admix`` is the convert RFMix results from the ``*.fb.tsv`` files.
-Here, we add the alleles and re-subset the data so that the first
-population is first (all samples) followed by the next, and the next.
-This means instead of 0 and 1, you can get 0, 1, or 3.
-
-.. code:: python
-
-   admix
-
-::
-
-   dask.array<concatenate, shape=(646287, 1000), dtype=float32, chunksize=(1024, 256), chunktype=numpy.ndarray>
-
-To reduce memory consumption, this large data is held in a dask array,
-exactly like ``pandas_plink`` BED data.
+Visualization
+-------------
 
 .. code:: python
 
-   admix.compute()
+   from rfmix_reader import plot_global_ancestry, plot_ancestry_by_chromosome, plot_local_ancestry_tagore
 
-::
+   g_anc = ds.la.global_ancestry
+   plot_global_ancestry(g_anc, save_path="global")          # global.png + global.pdf
+   plot_ancestry_by_chromosome(g_anc, save_path="by_chrom")
+   plot_local_ancestry_tagore(ds.la.to_tagore("NA19700"), prefix="NA19700", build="hg38", oformat="png")
 
-   [[2 2 2 ... 0 0 0]
-    [2 2 1 ... 0 0 1]
-    [1 2 1 ... 0 0 0]
-    ...
-    [1 1 2 ... 0 0 0]
-    [2 2 2 ... 1 1 1]
-    [2 2 1 ... 1 0 1]]
+Migrating from 0.x
+------------------
 
-.. code:: python
-
-   admix.shape
-
-::
-
-   (646287, 1000)
-
-The rows are the same as the ``loci`` data, in the sample order.
-
-.. code:: python
-
-   loci.shape
-
-::
-
-   (646287, 3)
-
-The rows are the total samples x number of populations. This is in a
-specific order. All samples are grouped by population instead of by the
-sample.
-
-.. code:: python
-
-   col_names = [f"{sample}_{pop}" for pop in pops for sample in sample_ids]
-   len(col_names)
-
-::
-
-   1000
-
-.. code:: python
-
-   col_names[0:4]
-
-::
-
-   ['Sample_1_AFR', 'Sample_2_AFR', 'Sample_3_AFR', 'Sample_4_AFR']
-
-.. code:: python
-
-   col_names[500:504]
-
-::
-
-   ['Sample_1_EUR', 'Sample_2_EUR', 'Sample_3_EUR', 'Sample_4_EUR']
-
-This is the correct order for the admix array data.
-
-Loci Imputation
-================
-
-Imputing local ancestry loci information to genotype variant locations
-improves integration of the local ancestry information with genotype
-data. As such, we also provide the `interpolate_array` function to
-efficiently interpolate missing values when local ancestry loci
-information is converted to more variable genotype variant locations.
-It leverages the power of
-`Zarr <https://zarr.readthedocs.io/en/stable/index.html>`_ arrays,
-making it suitable for handling substantial datasets while managing
-memory usage effectively.
-
-**Note**: Following imputation, `variant_df` will include genomic
-positions for both local ancestry and genotype data.
-
-.. code:: python
-
-   def _load_genotypes(plink_prefix_path):
-       from tensorqtl import pgen
-       pgr = pgen.PgenReader(plink_prefix_path)
-       variant_df = pgr.variant_df
-       variant_df.loc[:, "chrom"] = "chr" + variant_df.chrom
-       return pgr.load_genotypes(), variant_df
-
-   def _load_admix(prefix_path, binary_dir):
-       from rfmix_reader import read_rfmix
-       return read_rfmix(prefix_path, binary_dir=binary_dir)
-
-.. code:: python
-
-   from rfmix_reader import interpolate_array
-   basename = "/projects/b1213/large_projects/brain_coloc_app/input"
-   # Local ancestry
-   prefix_path = f"{basename}/local_ancestry_rfmix/_m/"
-   binary_dir = f"{basename}/local_ancestry_rfmix/_m/binary_files/"
-   loci, _, admix = _load_admix(prefix_path, binary_dir)
-   loci.rename(columns={"chromosome": "chrom",
-                        "physical_position": "pos"},
-               inplace=True)
-   # Variant data
-   plink_prefix = f"{basename}/genotypes/TOPMed_LIBD"
-   _, variant_df = _load_genotypes(plink_prefix)
-   variant_df = variant_df.drop_duplicates(subset=["chrom", "pos"],
-                                           keep='first')
-   # Keep all locations for more accurate imputation
-   variant_loci_df = variant_df.merge(loci.to_pandas(), on=["chrom", "pos"],
-                                      how="outer", indicator=True)\
-                               .loc[:, ["chrom", "pos", "i", "_merge"]]
-   data_path = f"{basename}/local_ancestry_rfmix/_m"
-   z = interpolate_array(variant_loci_df, admix, data_path)
+See ``MIGRATION.md`` in the repository: every legacy (0.5 and earlier) function maps to one
+call on the Dataset, ``ds.la.to_legacy()`` returns the old triple, and
+``rfmix_reader.from_legacy(loci_df, g_anc, admix)`` builds a Dataset from one.

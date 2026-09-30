@@ -1,0 +1,6 @@
+#Subpopulation order/codes: EUR=0	AFR=1
+#chm	spos	epos	sgpos	egpos	n snps	Sample_1.0	Sample_1.1	Sample_2.0	Sample_2.1	Sample_3.0	Sample_3.1
+chr2	20000	59999	0.00	0.10	100	0	0	1	1	1	0
+chr2	60000	99999	0.10	0.20	100	0	0	0	1	1	0
+chr2	100000	139999	0.20	0.30	100	0	0	0	1	1	1
+chr2	140000	179999	0.30	0.40	100	0	0	1	1	1	1
