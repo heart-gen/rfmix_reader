@@ -86,7 +86,11 @@ def _interpolate_1d(
         return col
 
     n = int(col.shape[0])
-    xp = mod.arange(n, dtype=mod.float32) if x is None else mod.asarray(x, dtype=mod.float32)
+    # float64 axis: a bp position above ~16.7 million is not representable in
+    # float32 (the spacing is 4 bp on chr21, 16 bp on chr1), which moves the
+    # interpolation weights and the interpolated counts with them.  The axis is
+    # one value per locus, so the wider dtype costs nothing next to the values.
+    xp = mod.arange(n, dtype=mod.float64) if x is None else mod.asarray(x, dtype=mod.float64)
     valid = ~mask
     if not bool(valid.any()):
         return col # All NaNs, nothing to impute
@@ -99,11 +103,15 @@ def _interpolate_1d(
         xp_nan = xp[mask]
         interp_vals = mod.interp(xp_nan, xp_valid, y_valid)
         out = col.copy()
-        # Round to nearest integer to produce hard ancestry calls (0/1/2).
-        # This preserves RFMix semantics for downstream GWAS but discards
-        # posterior uncertainty. Use method='nearest' or 'stepwise' to
-        # assign observed values directly without rounding.
-        out[mask] = mod.round(interp_vals).astype(mod.float32)
+        # Fractional dosages, not hard calls.  Rounding each ancestry column
+        # to the nearest integer independently breaks the diploid total: two
+        # bracketing rows summing to 2 can interpolate to (0.5, 0.5, 1.0),
+        # which rounds to (0, 0, 1) -- one ancestry copy for a diploid donor.
+        # Linear interpolation preserves the total by construction, so the
+        # values are left as interpolated.  ``method="nearest"`` and
+        # ``method="stepwise"`` assign an observed row verbatim and are the
+        # methods to use for hard calls.
+        out[mask] = interp_vals.astype(mod.float32)
         return out
 
     idx = mod.arange(n, dtype=mod.int64)
@@ -161,13 +169,19 @@ def interpolate_block(
     -----
     Columns with no missing values are skipped entirely before interpolation
     begins, which avoids redundant computation for fully-observed loci.
+
+    A float32 ``block`` is filled **in place** and returned; nothing is copied,
+    because a chunk of the largest supported cell is several GB and a defensive
+    copy would double the peak of every chunk.  Pass a copy if the caller still
+    needs the unfilled array (:func:`interpolate_array` hands over a freshly
+    concatenated chunk).
     """
     mod = _select_array_backend()
     block = mod.asarray(block, dtype=mod.float32)
     loci_dim, sample_dim, ancestry_dim = block.shape
 
     flat = block.reshape(loci_dim, -1)  # (loci, samples*ancestries)
-    x = mod.asarray(pos, dtype=mod.float32) if pos is not None else None
+    x = mod.asarray(pos, dtype=mod.float64) if pos is not None else None
     # Pre-compute NaN mask per column to skip columns that need no interpolation
     has_nan = mod.isnan(flat).any(axis=0)
     for j in range(flat.shape[1]):
@@ -345,7 +359,7 @@ def interpolate_array(
             raise ValueError(
                 "use_bp_positions=True but 'pos' column not found in variant_loci_df."
             )
-        pos = variant_loci_df["pos"].to_numpy(dtype=np.float32)
+        pos = variant_loci_df["pos"].to_numpy(dtype=np.float64)
         if len(pos) > 1 and not (np.diff(pos) >= 0).all():
             raise ValueError(
                 "variant_loci_df must be sorted by 'pos' in ascending order. "

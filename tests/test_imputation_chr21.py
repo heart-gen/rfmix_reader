@@ -95,6 +95,43 @@ def test_stepwise_boundary(method):
     )
 
 
+@pytest.mark.parametrize("method", ["stepwise", "nearest", "linear"])
+def test_interpolation_preserves_the_diploid_total(method):
+    """
+    A filled locus must still carry two ancestry copies per donor.
+
+    Row 0 is (0, 0, 2) and row 2 is (1, 1, 0); row 1 is missing.  Linear
+    interpolation gives (0.5, 0.5, 1.0), which sums to 2 -- rounding each
+    ancestry independently gave (0, 0, 1), one copy for a diploid donor.
+    """
+    block = np.array([[[0.0, 0.0, 2.0]], [[np.nan] * 3], [[1.0, 1.0, 0.0]]],
+                     dtype=np.float32)
+    out = interpolate_block(block, method=method, pos=np.array([0, 1, 2], dtype=np.float32))
+    assert not np.isnan(out).any()
+    np.testing.assert_allclose(out.sum(axis=2), np.full((3, 1), 2.0, dtype=np.float32), atol=1e-6)
+    if method == "linear":
+        np.testing.assert_allclose(out[1, 0], [0.5, 0.5, 1.0], atol=1e-6)
+    else:                                    # an observed row, copied verbatim
+        assert out[1, 0].tolist() in ([0.0, 0.0, 2.0], [1.0, 1.0, 0.0])
+
+
+def test_linear_interpolation_uses_a_full_precision_position_axis():
+    """
+    bp positions must not be rounded into float32.
+
+    At chr21 scale float32 spacing is 4 bp and at chr1 scale 16 bp, which moves
+    the interpolation weights: on a 2 kb marker spacing that is a few parts per
+    thousand of a count, enough to miss a 1e-3 reference tolerance.
+    """
+    a, b = 40_000_001, 40_002_001                  # not representable in float32
+    q = 40_001_001
+    block = np.array([[[0.0, 2.0]], [[np.nan] * 2], [[2.0, 0.0]]], dtype=np.float32)
+    out = interpolate_block(block, method="linear",
+                            pos=np.array([a, q, b], dtype=np.float64))
+    expect = (q - a) / (b - a) * 2.0
+    np.testing.assert_allclose(out[1, 0], [expect, 2.0 - expect], atol=1e-6)
+
+
 def test_expand_array_unsorted_raises(tmp_path):
     """
     _expand_array must raise ValueError when 'i' values are not sorted (Bug 1).

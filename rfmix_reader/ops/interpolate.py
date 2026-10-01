@@ -65,12 +65,32 @@ def interpolate(
     methods); the result is returned as a lazy ``(variant, sample, ancestry)``
     float32 DataArray with ``chromosome`` / ``variant_position`` coordinates.
     Missing calls (``-1``) are treated as gaps and filled.
+
+    The Dataset's own variants are the interpolation anchors, so they are
+    always part of the grid handed to the imputer; ``include_source`` selects
+    only what is *returned* (``False``: one row per requested position;
+    ``True``: the union of requested and source positions).  The Zarr arrays
+    on disk therefore always hold the full interpolation grid, which is a
+    superset of the returned rows when ``include_source=False``; address the
+    result by its ``variant_position`` coordinate rather than by row offset.
     """
     import dask.array as da
     from ..processing.imputation import interpolate_array
 
+    # Interpolation is only defined relative to the observed calls, so the grid
+    # handed to the imputer always carries every source variant as an anchor.
+    # Requesting positions that fall between source variants with
+    # ``include_source=False`` used to drop those anchors, leaving the imputer
+    # to interpolate between whichever requested positions happened to
+    # coincide with a variant.
     grid = build_variant_grid(ds, variants, chrom_col=chrom_col, pos_col=pos_col,
-                              include_source=include_source)
+                              include_source=True)
+    requested: dict[str, np.ndarray] | None = None
+    if not include_source:
+        rows = build_variant_grid(ds, variants, chrom_col=chrom_col, pos_col=pos_col,
+                                  include_source=False)
+        requested = {str(label): sub["pos"].to_numpy(dtype=np.int64)
+                     for label, sub in rows.groupby("chrom", sort=False)}
     zarr_outdir = Path(zarr_outdir)
     counts = ds.la.counts.data
 
@@ -78,6 +98,9 @@ def interpolate(
     chroms: List[np.ndarray] = []
     positions: List[np.ndarray] = []
     for label in dict.fromkeys(grid["chrom"].tolist()):
+        want = None if requested is None else requested.get(str(label), np.empty(0, dtype=np.int64))
+        if want is not None and want.size == 0:
+            continue                        # nothing requested on this chromosome
         g = grid[grid["chrom"] == label].reset_index(drop=True)
         outdir = zarr_outdir / str(label)
         outdir.mkdir(parents=True, exist_ok=True)
@@ -87,9 +110,14 @@ def interpolate(
             g, counts, str(outdir), chunk_size=chunk_size, batch_size=batch_size,
             interpolation=method, use_bp_positions=use_bp_positions,
         )
-        arrays.append(da.from_array(z, chunks=z.chunks))
-        chroms.append(np.array([label] * len(g), dtype=object))
-        positions.append(g["pos"].to_numpy(dtype=np.int32))
+        arr = da.from_array(z, chunks=z.chunks)
+        pos_out = g["pos"].to_numpy(dtype=np.int64)
+        if want is not None:                # return the requested rows only
+            keep = np.flatnonzero(np.isin(pos_out, want))
+            arr, pos_out = arr[keep], pos_out[keep]
+        arrays.append(arr)
+        chroms.append(np.array([label] * len(pos_out), dtype=object))
+        positions.append(pos_out.astype(np.int32))
 
     data = da.concatenate(arrays, axis=0) if len(arrays) > 1 else arrays[0]
     return xr.DataArray(

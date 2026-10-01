@@ -158,6 +158,37 @@ def test_interpolate_stepwise_and_linear(msp_dir, tmp_path):
     assert ds.la.interpolate(variants, tmp_path / "z2", method="linear").sizes["variant"] == 11
 
 
+def test_interpolate_uses_source_variants_as_anchors(msp_dir, tmp_path):
+    """``include_source`` selects the returned rows, never the anchors.
+
+    Requested positions between two source variants must be interpolated from
+    those variants.  Regression: the grid was built without the source rows,
+    so the imputer only saw requested positions that happened to coincide with
+    a variant -- here none of them, which left every value NaN.
+    """
+    ds = open_rfmix(str(msp_dir), verbose=False)
+    variants = pd.DataFrame({"chrom": ["chr1", "chr1"], "pos": [30000, 70000]})
+
+    out = interpolate(ds, variants, tmp_path / "z", method="linear", include_source=False)
+    assert out.sizes["variant"] == 2
+    assert out.variant_position.values.tolist() == [30000, 70000]
+    assert set(out.chromosome.values.tolist()) == {"chr1"}       # chr2 was not asked for
+    assert not np.isnan(out.values).any()
+
+    pos = ds.variant_position.values[:4].astype(float)           # the chr1 anchors
+    counts = ds.la.counts.values[:4]
+    expect = np.empty((2, *counts.shape[1:]), dtype=np.float32)
+    for s in range(counts.shape[1]):
+        for a in range(counts.shape[2]):
+            expect[:, s, a] = np.interp([30000, 70000], pos, counts[:, s, a])
+    np.testing.assert_allclose(out.values, expect, atol=1e-6)
+
+    # identical to asking for the union and selecting the two requested rows
+    full = interpolate(ds, variants, tmp_path / "z2", method="linear", include_source=True)
+    keep = np.isin(full.variant_position.values, [30000, 70000])
+    np.testing.assert_allclose(out.values, full.values[keep], atol=1e-6)
+
+
 # ------------------------------------------------------------------ tagore
 def test_to_tagore(msp_dir):
     pytest.importorskip("matplotlib")
