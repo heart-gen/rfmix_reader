@@ -96,8 +96,13 @@ chromosome of counts in memory and slice it per gene.
 (sample-major), one dask block at a time.  ``interpolate`` builds a
 per-chromosome variant grid (source variants plus the requested positions),
 writes ``<zarr_outdir>/<chrom>/local-ancestry.zarr`` and returns a lazy
-``(variant, sample, ancestry)`` DataArray; ``linear`` rounds to hard calls,
-``nearest`` copies the closest observed locus, ``stepwise`` forward-fills.
+``(variant, sample, ancestry)`` DataArray; ``linear`` returns fractional
+dosages between the bracketing observed loci, ``nearest`` copies the closest
+observed locus, ``stepwise`` forward-fills.  Use ``nearest`` or ``stepwise``
+when hard calls are wanted: rounding ``linear`` per ancestry would break the
+diploid total.  ``include_source`` selects whether the source variants are
+returned alongside the requested positions; they are always used as the
+interpolation anchors.
 
 Phasing
 -------

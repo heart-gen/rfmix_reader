@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.7.1
+
+Three fixes to `interpolate`, each of which changed the values it returned.
+
+- `include_source=False` dropped the source variants from the grid handed to
+  the imputer, so only requested positions that happened to coincide with a
+  variant were available as anchors. A request for positions between variants
+  was interpolated from whatever few anchors survived -- or left NaN when none
+  did. The source variants are now always part of the interpolation grid and
+  `include_source` selects only what is returned, as documented. The Zarr
+  arrays on disk hold the full grid, so address the result by its
+  `variant_position` coordinate rather than by row offset. `include_source`
+  also no longer interpolates a chromosome with no requested positions.
+- `method="linear"` rounded each ancestry column to the nearest integer. That
+  is not linear interpolation and it breaks the diploid total: two bracketing
+  rows summing to 2 interpolate to `(0.5, 0.5, 1.0)`, which rounded to
+  `(0, 0, 1)` -- one ancestry copy for a diploid donor. `linear` now returns
+  the fractional dosages, which preserve the total by construction.
+  `nearest` and `stepwise` assign an observed row verbatim and remain the
+  methods for hard calls.
+- The interpolation position axis was float32, which cannot represent a bp
+  position above ~16.7 million: the spacing is 4 bp at chr21 scale and 16 bp at
+  chr1 scale, so the interpolation weights were off by a few parts per thousand
+  wherever markers are dense. On a simulated chr21 cell at 2 kb marker spacing
+  this moved interpolated counts by up to 0.002. The axis is now float64; it is
+  one value per locus, so the wider dtype costs nothing beside the values.
+
 ## 0.7.0
 - `ds.la.sel_chrom(chrom)`, `ds.la.locus_index(chrom, positions, method,
   tolerance)` and `ds.la.counts_at(...)` (also in `ops.positions`): the
