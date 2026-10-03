@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.7.2
+
+One fix to `interpolate`, which changed its memory profile and not its output:
+a chunk of the cohort was resident two and a half times over, so the peak
+scaled with the sample count rather than with the machine.
+
+- `chunk_size` is a row count, so the bytes one interpolation chunk holds grew
+  with the cohort: 50,000 rows is 60 MB at 100 samples and 5.6 GB at 10,000.
+  `interpolate_array` now takes `max_chunk_bytes` (2 GiB) and caps the
+  effective row count by it; `interpolate` and `ds.la.interpolate` pass it
+  through, and `None` honours `chunk_size` exactly, as before. Peak memory is
+  now a property of the machine rather than of the cohort.
+- `mod.array` -> `mod.asarray` on the chunk: `np.concatenate` already returns a
+  fresh array, so the second copy of the whole chunk was pure overhead.
+- The per-column NaN scan allocated one bool per element of the chunk, a
+  further quarter of it (1.4 GB for the largest supported cell). It now
+  reduces over locus tiles of 64 MB.
+- A `(sample, ancestry)` column with no observed value anywhere cannot be
+  filled by any method. Those columns are now reported once in a warning and
+  kept out of the second interpolation pass, which would otherwise re-read the
+  entire locus axis to return the NaNs it was given.
+
+Profiled on a 10,000-sample chr21 grid (49,976 loci) under a 16 GB cgroup, the
+interpolation phase went from an OOM kill at chunk 0 of 2 to completing in
+36-47 s across runs.
+
+Chunk-size invariance is now covered by a test and holds whenever every source
+row carries a call. It does *not* hold when a source row carries a missing call
+for some column: that column's chunk-local fill then depends on where the
+boundaries fall. That predates this release and is unchanged by it.
+
 ## 0.7.1
 
 Three fixes to `interpolate`, each of which changed the values it returned.
