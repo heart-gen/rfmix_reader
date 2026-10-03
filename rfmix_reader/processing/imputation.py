@@ -21,6 +21,13 @@ if TYPE_CHECKING:
 
 InterpMethod = Literal["linear", "nearest", "stepwise"]
 
+#: Bytes of boolean scratch a NaN scan may hold at once.  The scans below
+#: reduce over locus tiles of this size rather than over a whole chunk.
+_NAN_SCAN_BYTES: int = 64 << 20
+
+#: Default ceiling on the bytes one interpolation chunk may hold.
+_DEFAULT_MAX_CHUNK_BYTES: int = 2 << 30
+
 GPU_ENABLED: bool = _select_array_backend().__name__ == "cupy"
 
 
@@ -182,9 +189,16 @@ def interpolate_block(
 
     flat = block.reshape(loci_dim, -1)  # (loci, samples*ancestries)
     x = mod.asarray(pos, dtype=mod.float64) if pos is not None else None
-    # Pre-compute NaN mask per column to skip columns that need no interpolation
-    has_nan = mod.isnan(flat).any(axis=0)
-    for j in range(flat.shape[1]):
+    # Pre-compute NaN mask per column to skip columns that need no interpolation.
+    # Reduced over locus tiles: ``isnan`` over the whole chunk allocates one bool
+    # per element, a further quarter of the chunk (1.4 GB for the largest
+    # supported cell) on top of the chunk itself.
+    n_cols = flat.shape[1]
+    has_nan = mod.zeros(n_cols, dtype=bool)
+    tile = max(1, _NAN_SCAN_BYTES // max(1, n_cols))
+    for lo in range(0, loci_dim, tile):
+        has_nan |= mod.isnan(flat[lo:lo + tile]).any(axis=0)
+    for j in range(n_cols):
         if not has_nan[j]:
             continue
         flat[:, j] = _interpolate_1d(flat[:, j], x=x, method=method)
@@ -296,6 +310,7 @@ def interpolate_array(
     variant_loci_df: DataFrame, admix: Array, zarr_outdir: str,
     chunk_size: int = 50_000, batch_size: int = 10_000,
     interpolation: InterpMethod | str = "linear", use_bp_positions: bool = False,
+    max_chunk_bytes: Optional[int] = _DEFAULT_MAX_CHUNK_BYTES,
 ) -> zarr.Array:
     """
     Interpolate missing local ancestry entries on the variant grid.
@@ -326,6 +341,14 @@ def interpolate_array(
         equally spaced (index-based), which is inaccurate across regions of
         variable window density such as centromeres and telomeres. Prefer
         ``True`` whenever variant positions span centromeric gaps.
+    max_chunk_bytes : int or None, default 2 GiB
+        Ceiling on the bytes one chunk may hold.  ``chunk_size`` is a row count,
+        so the bytes in a chunk grow with the cohort: 50,000 rows is 60 MB at
+        100 samples but 5.6 GB at 10,000, and the chunk is resident twice while
+        it is interpolated and written back.  The effective row count is the
+        smaller of ``chunk_size`` and this budget, which keeps peak memory a
+        property of the machine rather than of the sample count.  ``None``
+        restores the previous behaviour of honouring ``chunk_size`` exactly.
 
     Returns
     -------
@@ -370,7 +393,17 @@ def interpolate_array(
     z = _expand_array(variant_loci_df, admix, zarr_outdir,
                       batch_size=batch_size)
 
-    total_rows, _, _ = z.shape
+    total_rows, n_samples_z, n_anc_z = z.shape
+    if max_chunk_bytes:
+        row_bytes = int(n_samples_z) * int(n_anc_z) * np.dtype(np.float32).itemsize
+        if row_bytes:
+            budget_rows = max(1, int(max_chunk_bytes) // row_bytes)
+            if budget_rows < chunk_size:
+                _print_logger(
+                    f"Capping chunk_size {chunk_size} -> {budget_rows} rows to stay "
+                    f"within {int(max_chunk_bytes) / 2**30:.2f} GiB per chunk."
+                )
+                chunk_size = budget_rows
     _print_logger(f"Interpolating data using method='{method}'!")
 
     mod = _select_array_backend()
@@ -389,7 +422,9 @@ def interpolate_array(
         lead = 1 if prev_row is not None else 0
         parts = ([z[prev_row:prev_row + 1]] if lead else []) + [z[start:end]] + \
                 ([z[next_row:next_row + 1]] if next_row is not None else [])
-        chunk = mod.array(np.concatenate(parts, axis=0), dtype=mod.float32)
+        # ``np.concatenate`` already returns a fresh array, so ``asarray`` is
+        # enough; ``array`` would copy the whole chunk a second time.
+        chunk = mod.asarray(np.concatenate(parts, axis=0), dtype=mod.float32)
         pos_chunk = None
         if pos is not None:
             pos_parts = ([pos[prev_row:prev_row + 1]] if lead else []) + [pos[start:end]] + \
@@ -406,10 +441,45 @@ def interpolate_array(
     # Gaps longer than a chunk cannot be filled chunk-locally: interpolate the
     # affected (sample, ancestry) columns once more over the full locus axis.
     if remaining.any():
-        _fill_remaining_gaps(z, remaining, method=method, pos=pos)
+        # A column with no observed value anywhere cannot be filled by any
+        # method, so handing it to the second pass re-reads the entire locus
+        # axis to return the same NaNs it was given.  Separate those from the
+        # columns the second pass can genuinely fill (a chunk whose anchors are
+        # missing calls, where the column is observed elsewhere).
+        unfillable = _all_nan_columns(z, observed)
+        skipped = int((remaining & unfillable).sum())
+        if skipped:
+            warnings.warn(
+                f"{skipped} (sample, ancestry) column(s) have no observed value "
+                "and remain NaN after interpolation."
+            )
+        remaining = remaining & ~unfillable
+        if remaining.any():
+            _fill_remaining_gaps(z, remaining, method=method, pos=pos)
 
     _print_logger("Interpolation complete!")
     return z
+
+
+def _all_nan_columns(z, observed: np.ndarray) -> np.ndarray:
+    """
+    ``(samples, ancestries)`` mask of columns holding no observed value at all.
+
+    Only rows carrying source data can hold an observed value, so the scan
+    touches ``observed`` rather than the whole locus axis, in tiles bounded by
+    :data:`_NAN_SCAN_BYTES`.
+    """
+    any_obs = np.zeros((z.shape[1], z.shape[2]), dtype=bool)
+    if observed.size == 0:
+        return ~any_obs
+    row_bytes = max(1, int(z.shape[1]) * int(z.shape[2]) * 4)
+    tile = max(1, _NAN_SCAN_BYTES // row_bytes)
+    for start in range(0, observed.size, tile):
+        rows = observed[start:start + tile]
+        any_obs |= np.isfinite(np.asarray(z.oindex[rows, :, :])).any(axis=0)
+        if any_obs.all():
+            break
+    return ~any_obs
 
 
 def _fill_remaining_gaps(

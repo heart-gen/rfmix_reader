@@ -55,6 +55,7 @@ def interpolate(
     ds: xr.Dataset, variants: pd.DataFrame, zarr_outdir, *, chrom_col: str = "chrom",
     pos_col: str = "pos", method: str = "linear", use_bp_positions: bool = True,
     chunk_size: int = 50_000, batch_size: int = 10_000, include_source: bool = True,
+    max_chunk_bytes: int | None = None,
 ) -> xr.DataArray:
     """
     Interpolate diploid counts onto the positions in ``variants``.
@@ -65,6 +66,10 @@ def interpolate(
     methods); the result is returned as a lazy ``(variant, sample, ancestry)``
     float32 DataArray with ``chromosome`` / ``variant_position`` coordinates.
     Missing calls (``-1``) are treated as gaps and filled.
+
+    ``max_chunk_bytes`` caps the bytes one interpolation chunk may hold; ``None``
+    (the default here) uses the budget of
+    :func:`rfmix_reader.processing.imputation.interpolate_array`.
 
     The Dataset's own variants are the interpolation anchors, so they are
     always part of the grid handed to the imputer; ``include_source`` selects
@@ -106,9 +111,10 @@ def interpolate(
         outdir.mkdir(parents=True, exist_ok=True)
         # the imputer indexes `i` into the array it is given: pass the whole
         # counts array (lazy) so global indices stay valid
+        kw = {} if max_chunk_bytes is None else {"max_chunk_bytes": max_chunk_bytes}
         z = interpolate_array(
             g, counts, str(outdir), chunk_size=chunk_size, batch_size=batch_size,
-            interpolation=method, use_bp_positions=use_bp_positions,
+            interpolation=method, use_bp_positions=use_bp_positions, **kw,
         )
         arr = da.from_array(z, chunks=z.chunks)
         pos_out = g["pos"].to_numpy(dtype=np.int64)

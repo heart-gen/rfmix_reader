@@ -306,3 +306,85 @@ def test_interpolate_array_warns_when_column_has_no_data(tmp_path):
     with pytest.warns(UserWarning, match="remain NaN"):
         z = interpolate_array(variant_loci_df, admix, str(tmp_path), chunk_size=2)
     assert np.isnan(z[:]).all()
+
+
+def test_interpolate_array_caps_chunk_size_by_byte_budget(tmp_path, caplog):
+    """``max_chunk_bytes`` bounds a chunk by bytes, not by the caller's row count."""
+    import logging
+    import dask.array as da
+
+    data = np.zeros((20, 4, 2), dtype=np.int8)
+    data[::4] = 1
+    data[1::4] = -1                       # gaps to interpolate over
+    admix = da.from_array(data, chunks=(10, 4, 2))
+    variant_loci_df = pd.DataFrame({"pos": np.arange(20) * 10, "i": np.arange(20, dtype=float)})
+
+    # one row is 4 samples x 2 ancestries x 4 bytes = 32 B, so 64 B allows 2 rows
+    with caplog.at_level(logging.INFO, logger="rfmix_reader.processing.imputation"):
+        z = interpolate_array(variant_loci_df, admix, str(tmp_path / "budget"),
+                              chunk_size=50_000, max_chunk_bytes=64,
+                              interpolation="linear", use_bp_positions=True)
+    assert "Capping chunk_size 50000 -> 2 rows" in caplog.text
+
+    # and the budget must not change the answer
+    unbudgeted = interpolate_array(variant_loci_df, admix, str(tmp_path / "plain"),
+                                   chunk_size=50_000, max_chunk_bytes=None,
+                                   interpolation="linear", use_bp_positions=True)
+    np.testing.assert_array_equal(z[:], unbudgeted[:])
+
+
+@pytest.mark.parametrize("method", ["linear", "nearest", "stepwise"])
+def test_interpolate_array_chunking_is_invariant_without_missing_calls(tmp_path, method):
+    """With every source row observed, the result does not depend on ``chunk_size``.
+
+    The anchors handed to each chunk are source rows, so this holds only while
+    those rows carry a call for every column; a ``-1`` at an anchor makes the
+    chunk-local fill depend on where the boundaries fall.
+    """
+    import dask.array as da
+
+    rng = np.random.default_rng(11)
+    n_src, n_samp, n_anc = 40, 6, 3
+    counts = rng.integers(0, 3, size=(n_src, n_samp, n_anc)).astype(np.int8)
+    admix = da.from_array(counts, chunks=(13, n_samp, n_anc))
+
+    pos_src = np.arange(n_src) * 1000
+    pos_all = np.union1d(pos_src, np.arange(1, n_src * 1000, 137))
+    i = np.full(pos_all.size, np.nan)
+    i[np.searchsorted(pos_all, pos_src)] = np.arange(n_src, dtype=float)
+    variant_loci_df = pd.DataFrame({"chrom": "chr21", "pos": pos_all, "i": i})
+
+    out = [
+        interpolate_array(variant_loci_df, admix, str(tmp_path / f"cs{cs}"), chunk_size=cs,
+                          max_chunk_bytes=None, interpolation=method,
+                          use_bp_positions=True)[:]
+        for cs in (10**9, 7, 3)
+    ]
+    assert not np.isnan(out[0]).any()
+    np.testing.assert_array_equal(out[0], out[1])
+    np.testing.assert_array_equal(out[0], out[2])
+
+
+def test_unfillable_columns_skip_the_second_pass(tmp_path, monkeypatch):
+    """A column with no observed value is reported, not re-interpolated."""
+    from rfmix_reader.processing import imputation
+    import dask.array as da
+
+    calls = []
+    real = imputation._fill_remaining_gaps
+    monkeypatch.setattr(imputation, "_fill_remaining_gaps",
+                        lambda *a, **k: (calls.append(1), real(*a, **k))[1])
+
+    data = np.zeros((6, 2, 2), dtype=np.int8)
+    data[:, 0, :] = 1
+    data[:, 1, :] = -1                     # sample 1 has no observed value at all
+    admix = da.from_array(data, chunks=(3, 2, 2))
+    variant_loci_df = pd.DataFrame({"pos": np.arange(6) * 10, "i": np.arange(6, dtype=float)})
+
+    with pytest.warns(UserWarning, match="no observed value"):
+        z = imputation.interpolate_array(variant_loci_df, admix, str(tmp_path),
+                                         chunk_size=2, use_bp_positions=True)
+    out = z[:]
+    assert calls == []                      # nothing left for the full-axis pass
+    assert np.isnan(out[:, 1, :]).all()
+    np.testing.assert_array_equal(out[:, 0, :], np.ones((6, 2), dtype=np.float32))
