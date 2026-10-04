@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.3
+
+`dask` was capped below 2026.0 -- a caret requirement (`^2025.1`) against a
+calendar-versioned dependency, so the cap was almost certainly not meant. dask
+releases monthly, which made the cap actively harmful: `pip install -U
+rfmix-reader` on an environment holding dask 2026.8.0 silently downgraded it to
+2025.12.0. Nothing in the package needs the cap -- the test suite passes on dask
+2026.8.0 -- so the requirement is now `>=2025.1`. No code changed, and no
+behaviour changes for an environment that was already within the old range.
+
 ## 0.7.2
 
 One fix to `interpolate`, which changed its memory profile and not its output:
