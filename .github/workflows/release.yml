@@ -27,10 +27,25 @@ jobs:
           v=$(poetry version -s)
           [ "v$v" = "${GITHUB_REF_NAME}" ] || { echo "tag ${GITHUB_REF_NAME} != v$v"; exit 1; }
       - name: Build
+        id: build
         run: poetry build
+      # Trusted publishing, so there is no token to check here: PyPI must list a
+      # publisher for heart-gen/rfmix_reader, workflow release.yml, environment
+      # pypi.  Without a match the OIDC exchange is refused and nothing is
+      # uploaded -- this step failed on every 0.7.x tag, and 0.7.0 and 0.7.1
+      # were uploaded by hand afterwards.
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # a re-run of a tag already uploaded by hand must not fail on the
+          # files being there
+          skip-existing: true
+      # The release names the tag and carries the artifacts, so it does not
+      # depend on the upload having worked: a failed publish must not skip it,
+      # as it did for every 0.7.x tag.  `always()` would also run this step
+      # after a failed build, hence the outcome guard.
       - name: GitHub release
+        if: always() && steps.build.outcome == 'success'
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
