@@ -138,6 +138,73 @@ which ancestry.  The previous reference-panel matcher is available as
 reference stores from ``prepare-reference``) for comparison only — it compares
 ancestry labels against allele codes and is not a sound test of phase.
 
+Ancestry-specific allele frequencies (LoGicAl)
+----------------------------------------------
+
+`LoGicAl <https://github.com/student-jw/LoGicAl>`_ (Wang & Zöllner,
+*Bioinformatics* 2026) estimates ancestry-specific allele frequencies from
+admixed samples while modelling the uncertainty of both the local-ancestry
+call and the genotype call.  Its probability-based variants take, per site and
+individual, the two haplotype posteriors that only ``.fb.tsv`` carries.
+``ds.la.to_logical`` aligns that posterior tensor with the phased VCF the
+caller was run on and writes a per-chromosome **bundle** that the packaged R
+helper turns into ``run_logical()`` calls; the estimation stays in LoGicAl.
+
+.. code:: python
+
+   ds = open_rfmix("rfmix_out/", source="fb", keep_posteriors=True, cache_dir="la_cache/", chrom="21")
+   bundle = ds.la.to_logical("phased/chr21.vcf.gz", "logical/")       # -> logical/chr21/
+
+.. code:: bash
+
+   rfmix-reader export-logical la_cache/ phased/chr21.vcf.gz logical/ --chrom chr21
+   Rscript logical/chr21/logical_run.R --bundle logical/chr21 --method pg --out chr21.pg.tsv
+
+The R side needs ``arrow``, ``jsonlite``, ``SQUAREM`` and LoGicAl
+(``remotes::install_github("student-jw/LoGicAl")``); ``--method phase_ag`` needs
+only ``arrow`` and ``jsonlite`` and is a useful first check.  The helper's
+output has one row per site: ``chrom``, ``pos``, ``id``, ``ref``, ``alt``,
+``window``, ``distance``, ``method``, ``n_used`` (individuals), ``n_dropped``,
+``n_haplotypes``, one ``<ancestry>_freq`` column per ancestry (for the VCF
+**ALT** allele) and ``error``.
+
+What the bundle holds (``manifest.json`` documents every field):
+
+- the posterior tensor on its native grid (one row per RFMix CRF point or
+  ``.msp`` segment, sample and haplotype: ``label`` in ``1..K``, ``0`` when the
+  haplotype has no call, and ``p_<ancestry>`` when posteriors are stored);
+- every biallelic VCF site mapped to one grid row (``window``) with the
+  distance in bp (``nearest``, the default for ``.fb``/FLARE/haptools grids;
+  ``stepwise`` for ``.msp`` segments, where the distance is 0 inside the
+  segment), plus ``max_distance`` to drop sites too far from any CRF point;
+- per site and sample, ``g`` (ALT dosage), ``h1``/``h2`` (ALT allele on each
+  haplotype; ``-1`` for an unphased heterozygote) and, when the VCF has
+  ``PL`` or ``GL``, the 4-column likelihood LoGicAl expects;
+- provenance: versions, source files, the VCF's path/size/mtime, the matched
+  sample set (Dataset order; samples absent from either side are listed), the
+  sites skipped and why (``multiallelic``, ``no_alt``, ``non_snp``,
+  ``no_window``, ``beyond_max_distance``, ``all_missing``) and a distance
+  summary.
+
+Two requirements and one convention:
+
+- **Haplotype order.**  Haplotype 1 of the Dataset must be the first allele
+  of the VCF genotype, which holds when the local ancestry was inferred from
+  that same phased VCF.  A ``phase_swapped`` mask from ``ds.la.phase`` is
+  applied automatically (``apply_phase_swaps=False`` to keep the VCF phase).
+- **Multi-allelic records are skipped**, not split: run ``bcftools norm -m -any``
+  first if they matter.
+- **Missing data.**  LoGicAl has no missing-value handling, so the helper
+  drops, per site, every individual with a missing input for the chosen
+  method; the closed-form ``phase_ag`` is evaluated per haplotype.
+  :func:`rfmix_reader.ops.logical.closed_form_frequencies` computes that same
+  estimator in numpy and is the reference the R helper reproduces exactly.
+
+The helper works around three defects of LoGicAl 0.1.0 (reported upstream):
+``phase_ag`` is computed in the script; ``par0 = rep(1/K, K)`` is always passed
+so the label-based methods see every ancestry; and ``SQUAREM`` is attached
+because LoGicAl's NAMESPACE does not import it.
+
 Haptools simulations
 --------------------
 

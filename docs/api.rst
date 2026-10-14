@@ -44,6 +44,13 @@ Operations
    rfmix_reader.ops.interpolate.interpolate
    rfmix_reader.ops.interpolate.build_variant_grid
    rfmix_reader.ops.tagore.to_tagore
+   rfmix_reader.ops.logical.to_logical
+   rfmix_reader.ops.logical.closed_form_frequencies
+   rfmix_reader.ops.logical.read_manifest
+   rfmix_reader.io.genotypes.iter_genotype_blocks
+   rfmix_reader.io.genotypes.gt_to_calls
+   rfmix_reader.io.genotypes.pl_to_gl4
+   rfmix_reader.io.genotypes.gl_to_gl4
 
 Phasing and imputation
 ----------------------

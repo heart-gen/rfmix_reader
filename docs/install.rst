@@ -16,7 +16,7 @@ Extras
 Extra         Adds                                             Needed for
 ============= ================================================ ==========================================
 ``viz``       matplotlib, seaborn, cairosvg                    ``plot_*`` functions, ``ds.la.to_tagore``
-``io``        pyarrow                                          ``ds.la.to_parquet``
+``io``        pyarrow                                          ``ds.la.to_parquet``, ``ds.la.to_logical``
 ``reference`` bio2zarr                                         ``prepare-reference`` (VCF to VCF-Zarr)
 ``gpu``       torch, cupy-cuda12x, cudf-cu12, dask-cudf-cu12   optional CuPy compute backend
 ``all``       everything above
@@ -25,6 +25,16 @@ Extra         Adds                                             Needed for
 ::
 
   pip install "rfmix-reader[viz,io]"
+
+LoGicAl (R side)
+----------------
+
+The LoGicAl bundle written by ``ds.la.to_logical`` (extra ``io``) is consumed
+in R by the helper it contains.  That side needs R >= 4.1 with ``arrow``,
+``jsonlite``, ``SQUAREM``, ``Rcpp``, ``RcppArmadillo`` and LoGicAl itself::
+
+  install.packages(c("arrow", "jsonlite", "SQUAREM", "Rcpp", "RcppArmadillo", "remotes"))
+  remotes::install_github("student-jw/LoGicAl")
 
 GPU acceleration
 ----------------

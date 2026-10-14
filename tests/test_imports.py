@@ -12,6 +12,8 @@ MODULES = [
     "rfmix_reader.core",
     "rfmix_reader.formats",
     "rfmix_reader.ops",
+    "rfmix_reader.ops.logical",
+    "rfmix_reader.io.genotypes",
     "rfmix_reader.processing.phase",
     "rfmix_reader.cli.main",
 ]

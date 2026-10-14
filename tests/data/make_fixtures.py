@@ -125,6 +125,58 @@ def make_fb() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Phased genotypes matching the .fb fixture: chr1.vcf.gz (+.tbi) with GT:PL,
+# the four fb samples plus Extra_1 (absent from the fb file), and sites that
+# exercise the LoGicAl export: exact CRF point, nearest-window ties, an
+# unphased heterozygote, a multi-allelic record, an indel, a missing call, an
+# all-missing site and one far from any CRF point.
+# ---------------------------------------------------------------------------
+FB_VCF_SAMPLES = FB_SAMPLES + ["Extra_1"]
+FB_VCF_RECORDS = [
+    # pos, id, ref, alt, PL present?, genotypes per sample (S1 S2 S3 S4 Extra_1)
+    (5030578, "rs1", "A", "G", True,  ["0|0", "1|1", "0|1", "1|0", "0|0"]),   # exact CRF point
+    (5031000, "rs2", "C", "T", True,  ["0|1", "0|1", "1|1", "0|0", "1|0"]),   # nearest 5030960 (d=40)
+    (5031340, "rs3", "G", "A", False, ["1|0", "0|0", "0|1", "1|1", "0|1"]),   # nearest 5031455 (d=115 < 140)
+    (5031600, "rs4", "T", "C", True,  ["0/1", "0/0", "1/1", "0/1", "0/1"]),   # unphased
+    (5031800, "rs5", "A", "C,T", True, ["0|1", "0|2", "1|1", "0|0", "2|2"]),  # multi-allelic -> skipped
+    (5031900, "rs6", "AT", "A", True, ["0|1", "0|0", "0|1", "1|1", "0|0"]),   # indel (non_snp with --snps-only)
+    (5032000, "rs7", "G", "T", True,  ["0|1", "./.", "1|1", "1|0", "0|0"]),   # one missing call
+    (5032100, "rs8", "C", "A", True,  ["./.", "./.", "./.", "./.", "./."]),   # all missing -> skipped
+    (5040000, "rs9", "C", "G", True,  ["0|0", "0|1", "1|1", "0|1", "0|1"]),   # d=8000 from 5032000
+]
+
+
+def _pl_for(gt: str, n_alt: int) -> str:
+    """A deterministic PL triple (biallelic) consistent with the call, or '.'."""
+    if "." in gt or n_alt != 1:
+        return "."
+    d = sum(int(x) for x in gt.replace("|", "/").split("/"))
+    return {0: "0,30,60", 1: "40,0,40", 2: "60,30,0"}[d]
+
+
+def make_fb_vcf() -> None:
+    header = (
+        "##fileformat=VCFv4.2\n"
+        '##FILTER=<ID=PASS,Description="All filters passed">\n'
+        "##contig=<ID=chr1,length=248956422>\n"
+        '##FORMAT=<ID=GT,Number=1,Type=String,Description="Genotype">\n'
+        '##FORMAT=<ID=PL,Number=G,Type=Integer,Description="Phred-scaled genotype likelihoods">\n'
+        "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT\t" + "\t".join(FB_VCF_SAMPLES) + "\n"
+    )
+    lines = [header]
+    for pos, vid, ref, alt, has_pl, gts in FB_VCF_RECORDS:
+        n_alt = len(alt.split(","))
+        if has_pl:
+            fields = "\t".join(f"{gt}:{_pl_for(gt, n_alt)}" for gt in gts)
+        else:
+            fields = "\t".join(f"{gt}:." for gt in gts)
+        lines.append(f"chr1\t{pos}\t{vid}\t{ref}\t{alt}\t.\tPASS\t.\tGT:PL\t{fields}\n")
+    vcf = HERE / "fb" / "chr1.vcf"
+    _write(vcf, "".join(lines))
+    _bgzip_index(vcf)
+
+
+# ---------------------------------------------------------------------------
 # FLARE: chr21.anc.vcf.gz (+.tbi) with ##ANCESTRY=<EUR=0,AFR=1>, 2 samples,
 # 4 variants, one missing AN1; chr21.global.anc.gz in header order.
 # ---------------------------------------------------------------------------
@@ -200,6 +252,7 @@ def make_simu() -> None:
 if __name__ == "__main__":
     make_msp()
     make_fb()
+    make_fb_vcf()
     make_flare()
     make_simu()
     print("fixtures written under", HERE)

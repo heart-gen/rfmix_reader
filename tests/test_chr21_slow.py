@@ -83,3 +83,66 @@ def test_chr21_ops_scale(chr21_ds, tmp_path):
     files = ds.la.to_parquet(tmp_path, prefix="la", rows_per_file=50_000)
     assert len(files) == 4
     print(f"chr21 bed/positions/parquet: {time.time() - t0:.1f}s")
+
+
+@pytest.mark.slow
+def test_chr21_logical_export(chr21_ds, chr21_lfs, tmp_path):
+    """
+    Export one megabase against the haptools genotypes and check the
+    assumption the bundle rests on: Dataset haplotype 1 is the first allele of
+    the VCF genotype.  The haptools ``POP`` field carries the simulated truth
+    per haplotype in VCF order, so label agreement must be far higher
+    haplotype-to-haplotype than crosswise.
+    """
+    from cyvcf2 import VCF
+    pq = pytest.importorskip("pyarrow.parquet")
+    from rfmix_reader.ops.logical import closed_form_frequencies, read_manifest, to_logical
+
+    ds, _ = chr21_ds
+    region = (15_000_000, 16_000_000)
+    t0 = time.time()
+    bundle = to_logical(ds, chr21_lfs / "chr21.vcf.gz", tmp_path, region=region, sites_per_file=5_000)
+    print(f"chr21 LoGicAl export of 1 Mb: {time.time() - t0:.1f}s")
+    m = read_manifest(bundle)
+    assert m["samples"]["n_matched"] == 500 and m["K"] == 2 and m["has_posterior"]
+    n_biallelic = sum(1 for r in VCF(str(chr21_lfs / "chr21.vcf.gz"))(f"chr21:{region[0]}-{region[1]}")
+                      if len(r.ALT) == 1)
+    assert m["sites"]["n_exported"] + m["sites"]["skipped"].get("all_missing", 0) == n_biallelic
+    assert m["sites"]["distance"]["p50"] < 2_000
+
+    sites = pd.concat([pq.read_table(bundle / f"sites-{f['k']}.parquet").to_pandas()
+                       for f in m["layout"]["files"]], ignore_index=True)
+    n = 500
+    labels = ds.la.haplotypes.isel(variant=sites["window"].to_numpy()).values   # (sites, 500, 2) 0=AFR 1=EUR
+    truth = np.full(labels.shape, -1, dtype=np.int8)
+    pos_to_row = {p: i for i, p in enumerate(sites["pos"].tolist())}
+    code = {"YRI": 0, "CEU": 1}
+    for rec in VCF(str(chr21_lfs / "chr21.vcf.gz"))(f"chr21:{region[0]}-{region[1]}"):
+        i = pos_to_row.get(rec.POS)
+        if i is None:
+            continue
+        pops = rec.format("POP")
+        for s in range(n):
+            a, b = str(pops[s]).split(",")
+            truth[i, s] = (code[a], code[b])
+    valid = (labels >= 0).all(axis=2) & (truth >= 0).all(axis=2)
+    het = valid & (truth[..., 0] != truth[..., 1])        # a swap is only visible where the two differ
+    same = ((labels[..., 0] == truth[..., 0]) & (labels[..., 1] == truth[..., 1]))[het].mean()
+    cross = ((labels[..., 0] == truth[..., 1]) & (labels[..., 1] == truth[..., 0]))[het].mean()
+    print(f"haplotype-order agreement on {int(het.sum())} ancestry-heterozygous cells: "
+          f"same {same:.3f}, crosswise {cross:.3f}")
+    assert same > 0.9 and cross < 0.1
+
+    cf = closed_form_frequencies(bundle, min_haplotypes=50)
+    geno = pd.concat([pq.read_table(bundle / f"genotypes-{f['k']}.parquet", columns=["h1", "h2"]).to_pandas()
+                      for f in m["layout"]["files"]], ignore_index=True)
+    h = np.stack([geno["h1"].to_numpy().reshape(-1, n), geno["h2"].to_numpy().reshape(-1, n)], axis=-1)
+    for a, anc in enumerate(["AFR", "EUR"]):
+        mask = (truth == a) & (h >= 0)
+        den = mask.sum(axis=(1, 2))
+        with np.errstate(invalid="ignore", divide="ignore"):
+            true_freq = (mask & (h == 1)).sum(axis=(1, 2)) / den
+        ok = (den >= 50) & cf[f"{anc}_freq"].notna().to_numpy()
+        r = np.corrcoef(true_freq[ok], cf.loc[ok, f"{anc}_freq"])[0, 1]
+        print(f"{anc}: r = {r:.4f} over {ok.sum()} sites")
+        assert r > 0.95

@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from .bed import to_bed
 from .interpolate import build_variant_grid, interpolate
+from .logical import to_logical
 from .parquet import to_parquet
 from .positions import at_positions
 from .tagore import to_tagore
 
-__all__ = ["to_bed", "at_positions", "to_parquet", "interpolate", "build_variant_grid", "to_tagore"]
+__all__ = ["to_bed", "at_positions", "to_parquet", "interpolate", "build_variant_grid", "to_tagore",
+           "to_logical"]

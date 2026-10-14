@@ -1,4 +1,4 @@
-"""``rfmix-reader`` command line: convert sources to the Zarr cache, inspect it."""
+"""``rfmix-reader`` command line: convert sources to the Zarr cache, inspect it, export for LoGicAl."""
 from __future__ import annotations
 
 import argparse
@@ -35,6 +35,35 @@ def _cmd_info(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_export_logical(args: argparse.Namespace) -> int:
+    from ..core.api import open_local_ancestry
+    from ..ops.logical import to_logical
+
+    ds = open_local_ancestry(args.cache_dir, chrom=args.chrom)
+    samples = None
+    if args.samples:
+        with open(args.samples) as fh:
+            samples = [line.strip() for line in fh if line.strip()]
+    region = None
+    if args.region:
+        try:
+            lo, hi = args.region.split("-")
+            region = (int(lo), int(hi))
+        except ValueError:
+            raise ValueError("--region must be START-END (1-based, inclusive).")
+    chroms = [args.chrom] if args.chrom else ds.la.chromosomes
+    for c in chroms:
+        path = to_logical(
+            ds, args.vcf, args.outdir, chrom=c, samples=samples, method=args.method,
+            max_distance=args.max_distance, region=region, snps_only=args.snps_only,
+            sites_per_file=args.sites_per_file, windows_per_file=args.windows_per_file,
+            apply_phase_swaps=not args.ignore_phase_swaps, write_r_helper=not args.no_r_helper,
+            verbose=not args.quiet,
+        )
+        print(path)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="rfmix-reader",
@@ -60,6 +89,29 @@ def build_parser() -> argparse.ArgumentParser:
     info.add_argument("cache_dir")
     info.add_argument("--chrom", default=None)
     info.set_defaults(func=_cmd_info)
+
+    exp = sub.add_parser(
+        "export-logical",
+        help="write a LoGicAl input bundle (<outdir>/<chrom>/) from a cache and the phased VCF",
+    )
+    exp.add_argument("cache_dir", help="cache directory (fb with --keep-posteriors for pl/pg/phase_pg)")
+    exp.add_argument("vcf", help="the phased VCF/BCF the local ancestry was inferred from")
+    exp.add_argument("outdir", help="bundle root; one sub-directory per chromosome")
+    exp.add_argument("--chrom", default=None, help="only this chromosome (default: every one in the cache)")
+    exp.add_argument("--samples", default=None, help="file with one sample id per line to keep")
+    exp.add_argument("--method", choices=["nearest", "stepwise"], default=None,
+                     help="site-to-variant mapping (default: nearest for point grids, stepwise for segments)")
+    exp.add_argument("--max-distance", type=int, default=None,
+                     help="nearest only: drop sites farther than this many bp from a variant")
+    exp.add_argument("--region", default=None, help="START-END (1-based, inclusive)")
+    exp.add_argument("--snps-only", action="store_true", help="skip indels and other non-SNP records")
+    exp.add_argument("--sites-per-file", type=int, default=20_000)
+    exp.add_argument("--windows-per-file", type=int, default=None)
+    exp.add_argument("--ignore-phase-swaps", action="store_true",
+                     help="do not apply a phase_swapped mask from ds.la.phase")
+    exp.add_argument("--no-r-helper", action="store_true", help="do not copy logical_run.R into the bundle")
+    exp.add_argument("--quiet", action="store_true")
+    exp.set_defaults(func=_cmd_export_logical)
     return parser
 
 
