@@ -25,7 +25,7 @@ pip install "rfmix-reader[viz,io]"       # + matplotlib/seaborn/cairosvg, pyarro
 | Extra | Adds | Needed for |
 |---|---|---|
 | `viz` | matplotlib, seaborn, cairosvg | `plot_*`, `ds.la.to_tagore` |
-| `io` | pyarrow | `ds.la.to_parquet` |
+| `io` | pyarrow | `ds.la.to_parquet`, `ds.la.to_logical` |
 | `reference` | bio2zarr | `prepare-reference` (VCF to VCF-Zarr for `method="reference"` phasing) |
 | `gpu` | torch, cupy-cuda12x, cudf-cu12, dask-cudf-cu12 | optional CuPy compute backend |
 | `all` | everything above | |
@@ -120,6 +120,7 @@ All operations are lazy or streaming; `sample` is an index or a sample ID.
 | `ds.la.to_parquet(outdir, prefix=..., rows_per_file=...)` | `<prefix>.<chrom>-<k>.parquet` (`chrom`, `pos`, `hap`, then `<sample>_<ancestry>` int8 columns), one dask block at a time |
 | `ds.la.interpolate(variants_df, zarr_outdir, method="linear"\|"nearest"\|"stepwise")` | counts on a denser variant grid, Zarr-backed per chromosome; missing calls are filled |
 | `ds.la.phase(config=PhasingConfig())` | phase-corrected haplotype codes (single chromosome) |
+| `ds.la.to_logical(vcf, outdir, method=..., max_distance=...)` | a [LoGicAl](https://github.com/student-jw/LoGicAl) input bundle: the `.fb` posteriors aligned with the phased VCF, per chromosome (see below) |
 
 ```python
 import pandas as pd
@@ -198,6 +199,28 @@ plot_global_ancestry(g_anc, save_path="global")            # writes global.png a
 plot_ancestry_by_chromosome(g_anc, save_path="by_chrom")
 plot_local_ancestry_tagore(ds.la.to_tagore("NA19700"), prefix="NA19700", build="hg38", oformat="png")
 ```
+
+## Ancestry-specific allele frequencies (LoGicAl)
+
+[LoGicAl](https://github.com/student-jw/LoGicAl) (Wang & Zöllner, *Bioinformatics* 2026) estimates
+ancestry-specific allele frequencies from admixed samples while modelling the uncertainty of the
+local-ancestry and genotype calls; its probability-based variants take the per-haplotype posteriors
+that only `.fb.tsv` carries. `to_logical` aligns that posterior tensor with the phased VCF the
+caller was run on and writes a per-chromosome Parquet bundle; the R helper copied into the bundle
+turns it into `run_logical()` calls. The estimation itself stays in LoGicAl.
+
+```bash
+rfmix-reader convert fb rfmix_out/ la_cache/ --keep-posteriors
+rfmix-reader export-logical la_cache/ phased/chr21.vcf.gz logical/ --chrom chr21
+Rscript logical/chr21/logical_run.R --bundle logical/chr21 --method pg --out chr21.pg.tsv
+```
+
+Frequencies are for the VCF ALT allele. The Dataset's haplotype 1 must be the first allele of the
+VCF genotype (true when the ancestry was inferred from that VCF; a `phase_swapped` mask from
+`ds.la.phase` is applied). Multi-allelic records are skipped (`bcftools norm -m -any` first).
+`rfmix_reader.ops.logical.closed_form_frequencies` is the numpy reference the helper's `phase_ag`
+reproduces exactly. The R side needs `arrow`, `jsonlite`, `SQUAREM` and LoGicAl
+(`remotes::install_github("student-jw/LoGicAl")`); see the documentation for the bundle layout.
 
 ## Migrating from 0.x
 

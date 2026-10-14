@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.8.0
+
+One feature: an exporter for [LoGicAl](https://github.com/student-jw/LoGicAl)
+(Wang & Zöllner, *Bioinformatics* 2026, doi:10.1093/bioinformatics/btag752),
+the ancestry-specific allele-frequency estimator that models the uncertainty
+of the local-ancestry call. Its probability-based variants need, per site and
+individual, the two haplotype posteriors that `.fb.tsv` carries and that this
+package already stores; nothing in the package consumed them downstream
+before. The estimation stays in LoGicAl; the package prepares its inputs.
+
+- `ds.la.to_logical(vcf, outdir, ...)` / `rfmix-reader export-logical` write
+  a per-chromosome Parquet bundle (`io` extra): the posterior tensor on its
+  native grid (CRF points or `.msp` segments; 1-based labels, `0` for a
+  haplotype without a call, `p_<ancestry>` when posteriors are stored), every
+  biallelic VCF site mapped to one grid row (`nearest` for point grids,
+  `stepwise` for segments, with the distance and an optional `max_distance`),
+  per-site genotypes (`g`, phased `h1`/`h2`, and the 4-column likelihood
+  LoGicAl expects when the VCF has `PL`/`GL`), the matched sample set, the
+  skipped sites with reasons, and a `manifest.json` (also stamped into every
+  table's Arrow metadata). Nothing of size sites x samples x 2 x K is ever
+  materialised. A `phase_swapped` mask from `ds.la.phase` is applied.
+- `rfmix_reader/r/logical_run.R`, copied into every bundle, runs any LoGicAl
+  method over a bundle and writes one row per site. `closed_form_frequencies`
+  computes the `phase_ag` estimator in numpy and is the reference the helper
+  reproduces exactly; the slow chr21 test checks the haplotype-order
+  assumption against the haptools `POP` truth.
+- `rfmix_reader.io.genotypes`: a cyvcf2 block reader (`iter_genotype_blocks`,
+  `gt_to_calls`, `pl_to_gl4`, `gl_to_gl4`) that the exporter uses and that is
+  reusable on its own.
+- The helper works around three defects of LoGicAl 0.1.0, reported upstream:
+  `run_logical(method = "phase_ag")` references an undefined `npop` and is
+  computed in the script instead; the label-based methods take K from the
+  labels present at a site when `par0` is NULL, so `par0 = rep(1/K, K)` is
+  always passed; and LoGicAl's NAMESPACE does not import `SQUAREM::squarem`,
+  so the helper attaches SQUAREM.
+
+Follow-ups, not in this release: interpolating posteriors between CRF points
+(the exporter copies the nearest one; `interpolate` handles counts only) and
+FLARE's `ANP1`/`ANP2` probabilities, which the FLARE parser does not keep.
+
 ## 0.7.3
 
 `dask` was capped below 2026.0 -- a caret requirement (`^2025.1`) against a

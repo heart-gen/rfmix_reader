@@ -198,6 +198,15 @@ class LocalAncestryAccessor:
 
         return to_parquet(self._ds, outdir, **kwargs)
 
+    def to_logical(self, vcf_path, outdir, **kwargs):
+        """
+        Write a LoGicAl input bundle for one chromosome from this Dataset and
+        the phased VCF it was inferred from (see :func:`ops.logical.to_logical`).
+        """
+        from ..ops.logical import to_logical
+
+        return to_logical(self._ds, vcf_path, outdir, **kwargs)
+
     def interpolate(self, variants: pd.DataFrame, zarr_outdir, **kwargs) -> xr.DataArray:
         """Interpolate onto a variant grid (see :func:`ops.interpolate.interpolate`)."""
         from ..ops.interpolate import interpolate
