@@ -74,3 +74,34 @@ def test_save_multi_format(tmp_path):
     viz.save_multi_format(str(fn), formats=("png",))
     assert (tmp_path / "fig.png").exists()
 
+
+
+def test_plot_global_ancestry_legend_matches_columns(monkeypatch):
+    """Each legend entry is drawn from the ancestry column of the same name,
+    averaged over chromosomes, regardless of column order (issue #32)."""
+    g_anc = pd.DataFrame({
+        "sample_id": ["S1", "S2", "S1", "S2"],
+        "EUR": [0.1, 0.7, 0.3, 0.9],
+        "AFR": [0.9, 0.3, 0.7, 0.1],
+        "chrom": ["chr1", "chr1", "chr2", "chr2"],
+    })
+    expected = {"EUR": [0.2, 0.8], "AFR": [0.8, 0.2]}
+    captured = {}
+
+    def fake_show():
+        ax = plt.gcf().axes[0]
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        for label, container in zip(labels, ax.containers):
+            captured[label] = [bar.get_height() for bar in container]
+    monkeypatch.setattr(plt, "show", fake_show)
+
+    viz.plot_global_ancestry(g_anc, save_path=None)
+    assert list(captured) == ["EUR", "AFR"]
+    for label, heights in expected.items():
+        np.testing.assert_allclose(captured[label], heights)
+
+    captured.clear()
+    viz.plot_global_ancestry(g_anc[["sample_id", "AFR", "EUR", "chrom"]], save_path=None)
+    assert list(captured) == ["AFR", "EUR"]
+    for label, heights in expected.items():
+        np.testing.assert_allclose(captured[label], heights)

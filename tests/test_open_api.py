@@ -147,3 +147,25 @@ def test_convert_msp_two_chromosomes_then_open(msp_dir, tmp_path):
     # counts are lazy: reading one chunk does not touch the rest
     sub = ds.la.counts[:2].compute()
     np.testing.assert_array_equal(sub[0], [[2, 0], [1, 1], [0, 2]])
+
+
+def test_q_columns_reordered_vs_msp_header(msp_dir, tmp_path):
+    """Global ancestry columns follow the MSP header order and keep their values
+    even when the ``.rfmix.Q`` file lists the ancestries in a different order
+    (issue #32)."""
+    import shutil
+
+    d = tmp_path / "msp"
+    shutil.copytree(msp_dir, d)
+    afr = np.linspace(0.1, 0.9, 3)
+    for c in ("chr1", "chr2"):
+        with open(d / f"{c}.rfmix.Q", "w") as fh:
+            fh.write("#rfmix diploid global ancestry .Q format output\n#sample\tAFR\tEUR\n")
+            for i, a in enumerate(afr, 1):
+                fh.write(f"Sample_{i}\t{a:.5f}\t{1 - a:.5f}\n")
+    ds = open_rfmix(str(d), verbose=False)
+    assert ds.la.ancestries == ["EUR", "AFR"]     # MSP header order EUR=0 AFR=1
+    g = ds.la.global_ancestry
+    assert list(g.columns) == ["sample_id", "EUR", "AFR", "chrom"]
+    np.testing.assert_allclose(g["AFR"].to_numpy(), np.tile(afr, 2), atol=1e-5)
+    np.testing.assert_allclose(g["EUR"].to_numpy(), np.tile(1 - afr, 2), atol=1e-5)
