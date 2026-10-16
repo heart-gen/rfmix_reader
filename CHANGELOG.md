@@ -36,6 +36,17 @@ before. The estimation stays in LoGicAl; the package prepares its inputs.
   always passed; and LoGicAl's NAMESPACE does not import `SQUAREM::squarem`,
   so the helper attaches SQUAREM.
 
+Test data: the bundled chr21 FLARE output (`data/chr21.anc.vcf.gz`, `.tbi`,
+`chr21.global.anc.gz`, `chr21.model`) is regenerated. The old run called
+nearly every haplotype EUR (mean AFR 0.002 against a simulated YRI fraction
+of 0.789): the haptools founders (1kGP CEU and YRI) were also in FLARE's
+reference panel, so every target haplotype was an exact copy of a panel
+haplotype and FLARE's EM converged to `mu` = 100% EUR. The new run drops all
+CEU and YRI individuals from the panel (EM on, `array=false`) and gives mean
+AFR 0.794, r = 0.81 against the truth and 99.6% haplotype-level agreement
+with the haptools `POP` field. A slow test now checks the FLARE fixture
+against the truth, both from `global.anc.gz` and from the decoded calls.
+
 Follow-ups, not in this release: interpolating posteriors between CRF points
 (the exporter copies the nearest one; `interpolate` handles counts only) and
 FLARE's `ANP1`/`ANP2` probabilities, which the FLARE parser does not keep.

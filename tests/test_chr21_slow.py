@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from rfmix_reader import open_local_ancestry, open_rfmix
+from rfmix_reader import open_flare, open_local_ancestry, open_rfmix
 from rfmix_reader.processing.phase import PhasingConfig
 
 
@@ -146,3 +146,37 @@ def test_chr21_logical_export(chr21_ds, chr21_lfs, tmp_path):
         r = np.corrcoef(true_freq[ok], cf.loc[ok, f"{anc}_freq"])[0, 1]
         print(f"{anc}: r = {r:.4f} over {ok.sum()} sites")
         assert r > 0.95
+
+
+@pytest.mark.slow
+def test_chr21_flare_matches_truth(chr21_lfs, tmp_path):
+    """
+    The bundled FLARE run must agree with the haptools truth: FLARE's global AFR
+    tracks the simulated YRI fraction, both as written by FLARE and as rebuilt
+    from the per-haplotype AN1/AN2 calls the reader decodes.  Guards against a
+    FLARE fixture produced with a bad model (an inherited chr1 model with
+    ``em=false`` once put every haplotype in EUR).
+    """
+    from rfmix_reader.formats.global_ancestry import fractions_from_counts, read_flare_global
+
+    truth = pd.read_csv(chr21_lfs / "chr21.global.truth.tsv.gz", sep="\t", index_col="Sample")["YRI"]
+    flare = read_flare_global(str(chr21_lfs / "chr21.global.anc.gz")).set_index("sample_id")["AFR"]
+    common = flare.index.intersection(truth.index)
+    assert len(common) == 500
+    r = np.corrcoef(flare[common], truth[common])[0, 1]
+    gap = flare[common].mean() - truth[common].mean()
+    print(f"\nFLARE global.anc vs truth: r = {r:.3f}, mean AFR {flare[common].mean():.3f} "
+          f"vs YRI {truth[common].mean():.3f}")
+    assert r > 0.75 and abs(gap) < 0.05
+
+    t0 = time.time()
+    ds = open_flare(str(chr21_lfs), cache_dir=tmp_path, verbose=False)
+    counts = ds.la.counts
+    totals = counts.where(counts >= 0, 0).sum("variant").values           # (samples, K)
+    afr = pd.Series(fractions_from_counts(totals)[:, ds.la.ancestries.index("AFR")],
+                    index=ds.la.samples)
+    # FLARE's global.anc comes from ancestry probabilities, the reader's from hard calls
+    np.testing.assert_allclose(afr[common], flare[common], atol=0.05)
+    r_reader = np.corrcoef(afr[common], truth[common])[0, 1]
+    print(f"FLARE via reader ({time.time() - t0:.1f}s): r = {r_reader:.3f}")
+    assert r_reader > 0.75
