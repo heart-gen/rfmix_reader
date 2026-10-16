@@ -41,10 +41,12 @@ Test data: the bundled chr21 FLARE output (`data/chr21.anc.vcf.gz`, `.tbi`,
 nearly every haplotype EUR (mean AFR 0.002 against a simulated YRI fraction
 of 0.789): the haptools founders (1kGP CEU and YRI) were also in FLARE's
 reference panel, so every target haplotype was an exact copy of a panel
-haplotype and FLARE's EM converged to `mu` = 100% EUR. The new run drops all
-CEU and YRI individuals from the panel (EM on, `array=false`) and gives mean
-AFR 0.794, r = 0.81 against the truth and 99.6% haplotype-level agreement
-with the haptools `POP` field. A slow test now checks the FLARE fixture
+haplotype and FLARE's EM converged to `mu` = 100% EUR. The new run drops every
+CEU and YRI individual from the panel by 1kGP pedigree population (which also
+removes the founders' parents and children from the high-coverage expansion)
+and the admixed ACB and ASW samples, leaving 815 reference samples (EM on,
+`array=false`). It gives mean AFR 0.799, r = 0.81 against the truth and
+>99.9% haplotype-level agreement with the haptools `POP` field. A slow test now checks the FLARE fixture
 against the truth, both from `global.anc.gz` and from the decoded calls.
 
 Follow-ups, not in this release: interpolating posteriors between CRF points

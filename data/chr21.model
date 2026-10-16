@@ -5,23 +5,23 @@ EUR	AFR
 EUR	AFR
 
 # T: number of generations since admixture
-4.543752
+5.932361
 
 # mu[i]: proportion of target genotypes with ancestry i
-0.18995793	0.8100421
+0.19213428	0.80786574
 
 
 # p[i][j]: probability that a model state haplotype is in reference panel j
 #          when the model state ancestry is i
-0.94820595	0.051794033
-0.05378084	0.94621915
+0.96983886	0.03016115
+0.04009887	0.95990115
 
 # theta[i][j]: probability that a model state haplotype and the target
 #              haplotype carry different alleles when the model state haplotype
 #              is in reference panel j and the model state ancestry is i
-3.0549832E-5	3.0549832E-5
-3.0549832E-5	3.0549832E-5
+3.8843922E-5	3.8843922E-5
+3.8843922E-5	3.8843922E-5
 
 # rho[i]: rate of the exponential IBD segment cM-length distribution when the
 #         most recent common ancestor precedes admixture and has ancestry i
-419.8817	721.4553
+423.68112	695.77686
